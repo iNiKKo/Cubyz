@@ -23,8 +23,10 @@ uniform float handLightRadius;
 // identical function for the full explanation.
 vec3 handLightContribution(vec3 worldPosRelative) {
 	float dist = length(worldPosRelative - handLightPositionRelative);
-	float atten = clamp(1.0 - dist/handLightRadius, 0.0, 1.0);
-	return handLightColor*sqrt(atten); // gentler than atten*atten — stays bright through most of the radius, only tapers sharply near the edge
+	float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+	float atten = (1.0 - normDist) * (1.0 - normDist);
+	float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+	return handLightColor * atten * peakHighlight;
 }
 
 float lightVariation(vec3 normal) {
@@ -60,9 +62,13 @@ bool passDitherTest(float alpha) {
 void main() {
 	vec3 worldPosRelative = transpose(mat3(viewMatrix))*mvVertexPos;
 	float shadowFactor = sampleSunShadow(worldPosRelative, normal, length(mvVertexPos), false)*sampleCloudShadow(worldPosRelative);
-	// See chunk_fragment.frag's identical line: max lets torchlight fully mask nearby sun-shadow instead
-	// of only partially brightening it.
-	vec3 light = min(max(max(outSunLight*shadowFactor, outBlockLight), handLightContribution(worldPosRelative)), vec3(1));
+	vec3 handLight = handLightContribution(worldPosRelative);
+	float handIntensity = max(handLight.r, max(handLight.g, handLight.b));
+	float effectiveShadow = mix(shadowFactor, 1.0, clamp(handIntensity * 3.0, 0.0, 1.0));
+
+	vec3 directSunAndShadow = outSunLight * effectiveShadow;
+	vec3 selfEmission = (handLightRadius > 0.0) ? handLightColor * 0.7 : vec3(0.0);
+	vec3 light = min(max(directSunAndShadow + handLight + outBlockLight, selfEmission), vec3(1.0));
 	fragColor = texture(textureSampler, outTexCoord)*vec4(light*lightVariation(normal), 1);
 	if(!passDitherTest(fragColor.a)) discard;
 	fragColor.a = 1;

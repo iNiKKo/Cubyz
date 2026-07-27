@@ -54,20 +54,11 @@ bool passDitherTest(float alpha) {
 vec3 handLightContribution() {
 	if (handLightRadius == 0) return vec3(0);
 
-	// Deliberately omnidirectional (no surface-normal/cosine term) — matches entity_fragment.frag's
-	// handLightContribution exactly. A held torch previously used a Lambertian (normal-facing-the-light)
-	// falloff here, which left any surface not roughly facing the torch (a block's top face when the
-	// torch is held at chest height and to the side, a wall behind you, etc.) completely unlit — no
-	// bounce/ambient term existed to fill that in, so it read as patches of pitch black right next to a
-	// lit torch. A *placed* light doesn't have this problem: its blockLight is a single flood-filled
-	// scalar per voxel cell, applied identically to every face of that cell regardless of which way it
-	// points, which is what makes it look like it's softly filling the whole area (closer to bounced
-	// light) rather than only lighting directly-facing surfaces. Dropping the cosine term here can't
-	// replicate real bounce lighting, but it removes the direction-dependent blackout and makes the held
-	// torch read consistently with both the placed-light look and entities' own held-item light.
 	float dist = length(direction - handLightPositionRelative);
-	float atten = clamp(1.0 - dist/handLightRadius, 0.0, 1.0);
-	return handLightColor*sqrt(atten); // gentler than atten*atten — stays bright through most of the radius, only tapers sharply near the edge
+	float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+	float atten = (1.0 - normDist) * (1.0 - normDist); // Quadratic falloff: smooth, long transition where furthest light hit is darkest
+	float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist); // Close-range highlight boost when torch/lamp is right next to a block
+	return handLightColor * atten * peakHighlight;
 }
 
 vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012/02/seamless-cube-map-filtering/
@@ -108,7 +99,12 @@ void main() {
 		effectiveSunLight = outSunLight * (1.0 + sssTranslucency * sssIntensity) * rootAO;
 	}
 
-	vec3 totalLight = min(max(max(effectiveSunLight*shadowFactor, outBlockLight), handLightContribution()), vec3(1));
+	vec3 handLight = handLightContribution();
+	float handIntensity = max(handLight.r, max(handLight.g, handLight.b));
+	float effectiveShadow = mix(shadowFactor, 1.0, clamp(handIntensity * 3.0, 0.0, 1.0));
+
+	vec3 directSunAndShadow = effectiveSunLight * effectiveShadow;
+	vec3 totalLight = min(directSunAndShadow + handLight + outBlockLight, vec3(1.0));
 	vec3 pixelLight = max(totalLight*normalVariation, texture(emissionSampler, textureCoords).r*4);
 	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
 	fragColor.rgb += reflectivity*pixelLight;

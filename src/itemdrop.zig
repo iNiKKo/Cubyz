@@ -482,6 +482,22 @@ pub const ClientItemDropManager = struct { // MARK: ClientItemDropManager
 	}
 };
 
+pub fn getItemEmittedLight(item: main.items.Item) Vec3f {
+	if (item == .baseItem) {
+		if (item.baseItem.block()) |blockType| {
+			const l = (blocks.Block{.typ = blockType, .data = 0}).light();
+			if (l != 0) {
+				return Vec3f{
+					@floatFromInt(l >> 16 & 255),
+					@floatFromInt(l >> 8 & 255),
+					@floatFromInt(l & 255),
+				} / @as(Vec3f, @splat(255.0));
+			}
+		}
+	}
+	return @splat(0);
+}
+
 // Going to handle item animations and other things like - bobbing, interpolation, movement reactions
 pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	pub var showItem: bool = true;
@@ -489,17 +505,9 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	var cameraFollowVel: Vec3f = @splat(0);
 	const damping: Vec3f = @splat(130);
 
-	/// Player-relative world-space position of the currently held item — same convention as
-	/// chunk_fragment.frag's `direction` / entity_fragment.frag's `worldPosRelative`. Kept updated every
-	/// frame regardless of whether the held item actually emits light, so callers only need to check
-	/// handLightColor (zero == no light) rather than tracking a separate "is there a light" flag.
 	pub var handLightPositionRelative: Vec3f = @splat(0);
-	/// Zero when the currently held item doesn't emit light (empty hand, non-block item, or a block
-	/// with no emittedLight) — real-time terrain/entity point light, entirely separate from (and not a
-	/// replacement for) the baked static block-light propagation system, since re-running that flood
-	/// fill every frame to follow the player's hand isn't remotely real-time-capable (see plan doc).
 	pub var handLightColor: Vec3f = @splat(0);
-	pub var handLightRadius: f32 = 16.0;
+	pub var handLightRadius: f32 = 12.0;
 
 	pub fn update(deltaTime: f64) void {
 		if (deltaTime == 0) return;
@@ -508,7 +516,6 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		var playerVel: Vec3f = .{@floatCast((game.Player.super.vel[2]*0.009 + game.Player.eye.vel[2]*0.0075)), 0, 0};
 		playerVel = vec.clampMag(playerVel, 0.32);
 
-		// TODO: add *smooth* item sway
 		const n1: Vec3f = cameraFollowVel - (cameraFollow - playerVel)*damping*damping*@as(Vec3f, @splat(dt));
 		const n2: Vec3f = @as(Vec3f, @splat(1)) + damping*@as(Vec3f, @splat(dt));
 		cameraFollowVel = n1/(n2*n2);
@@ -518,42 +525,79 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		updateHandLight();
 	}
 
-	/// Mirrors the position/rotation math ItemDropRenderer.renderDisplayItems uses to actually place the
-	/// displayed item mesh (same `cameraFollow` rotation, same local offset per item kind) — this only
-	/// needs the resulting anchor *position*, not the full mesh transform, and must run here (called from
-	/// update(), well before renderWorld()) rather than inside renderDisplayItems itself, since opaque
-	/// terrain's draw call reads this uniform earlier in the frame than renderDisplayItems runs.
 	fn updateHandLight() void {
 		handLightColor = @splat(0);
 
+		var heldColor: Vec3f = @splat(0);
+		var heldPos: Vec3f = @splat(0);
+		var heldStrength: f32 = 0.0;
+
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
-		if (item == .null) return;
+		if (item == .baseItem) {
+			const baseItem = item.baseItem;
+			if (baseItem.block()) |blockType| {
+				const light = (blocks.Block{.typ = blockType, .data = 0}).light();
+				if (light != 0) {
+					heldColor = Vec3f{
+						@floatFromInt(light >> 16 & 255),
+						@floatFromInt(light >> 8 & 255),
+						@floatFromInt(light & 255),
+					} / @as(Vec3f, @splat(255.0));
+					const pos = Vec3f{0.4, 0.55, -0.32};
+					const invViewRotation = game.camera.viewMatrix.transpose();
+					heldPos = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
+					heldStrength = @max(@max(heldColor[0], heldColor[1]), heldColor[2]);
+				}
+			}
+		}
 
-		// Deliberately independent of whether this item's *displayed model* is the block's voxel shape
-		// or a flat custom icon (that distinction — see isBlock in renderDisplayItems — only matters for
-		// which mesh to draw). A held torch has a custom item.png icon so it renders via the flat-image
-		// path, not the voxel-block path, but it still represents (and should still light up like) an
-		// actual light-emitting block: whether an item emits light only depends on it wrapping a block
-		// with nonzero emittedLight, not on which of those two render paths draws it.
-		if (item != .baseItem) return;
-		const blockType = item.baseItem.block() orelse return;
-		const light = (blocks.Block{.typ = blockType, .data = 0}).light();
-		if (light == 0) return;
-		handLightColor = Vec3f{
-			@floatFromInt(light >> 16 & 255),
-			@floatFromInt(light >> 8 & 255),
-			@floatFromInt(light & 255),
-		}/@as(Vec3f, @splat(255.0));
+		var dropColor: Vec3f = @splat(0);
+		var dropPos: Vec3f = @splat(0);
+		var dropStrength: f32 = 0.0;
 
-		// NOTE: this deliberately does NOT use `cameraFollow` (that's only a small sway/bob offset —
-		// the displayed item is actually rendered with its own fixed viewMatrix = identity(), a
-		// camera-independent HUD-style view, not the real world camera). To place the light at the
-		// item's true position in player-relative *world* space, the local hand offset needs the real
-		// camera rotation, same inverse-rotation pattern crosshairDirection()/the god-ray mask use
-		// elsewhere (view matrix is a pure rotation, so transpose == inverse).
-		const pos = Vec3f{0.4, 0.55, -0.32};
-		const invViewRotation = game.camera.viewMatrix.transpose();
-		handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
+		if (game.world) |world| {
+			const itemDrops = &world.itemDrops.super;
+			const playerPos = game.Player.getPosBlocking();
+			for (0..itemDrops.size) |i| {
+				const dropStack = itemDrops.list.items(.itemStack)[i];
+				if (dropStack.item == .baseItem) {
+					const baseItem = dropStack.item.baseItem;
+					if (baseItem.block()) |blockType| {
+						const light = (blocks.Block{.typ = blockType, .data = 0}).light();
+						if (light != 0) {
+							const dPos = itemDrops.list.items(.pos)[i];
+							const relPos = Vec3f{
+								@floatCast(dPos[0] - playerPos[0]),
+								@floatCast(dPos[1] - playerPos[1]),
+								@floatCast(dPos[2] - playerPos[2]),
+							};
+							const distToPlayer = vec.length(relPos);
+							if (distToPlayer < 48.0) {
+								const col = Vec3f{
+									@floatFromInt(light >> 16 & 255),
+									@floatFromInt(light >> 8 & 255),
+									@floatFromInt(light & 255),
+								} / @as(Vec3f, @splat(255.0));
+								const str = @max(@max(col[0], col[1]), col[2]) / (1.0 + distToPlayer * 0.05);
+								if (str > dropStrength) {
+									dropStrength = str;
+									dropColor = col;
+									dropPos = relPos;
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if (heldStrength > 0.0) {
+			handLightColor = heldColor;
+			handLightPositionRelative = heldPos;
+		} else if (dropStrength > 0.0) {
+			handLightColor = dropColor;
+			handLightPositionRelative = dropPos;
+		}
 	}
 };
 
@@ -717,10 +761,12 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		c.glUniform2fv(itemUniforms.glDepthRange, 1, &depthRange);
 	}
 
-	fn bindLightUniform(light: [6]u8, ambientLight: Vec3f) void {
+	fn bindLightUniform(light: [6]u8, ambientLight: Vec3f, emittedLight: Vec3f) void {
 		const sunLight: Vec3f = ambientLight*@as(Vec3f, @floatFromInt(Vec3i{light[0], light[1], light[2]}))/@as(Vec3f, @splat(255));
 		const blockLight: Vec3f = @as(Vec3f, @floatFromInt(Vec3i{light[3], light[4], light[5]}))/@as(Vec3f, @splat(255));
-		c.glUniform3fv(itemUniforms.ambientLight, 1, @ptrCast(&@min(@sqrt(sunLight*sunLight + blockLight*blockLight), @as(Vec3f, @splat(1)))));
+		const env = @sqrt(sunLight*sunLight + blockLight*blockLight);
+		const finalLight = @max(env, emittedLight * @as(Vec3f, @splat(0.85)));
+		c.glUniform3fv(itemUniforms.ambientLight, 1, @ptrCast(&@min(finalLight, @as(Vec3f, @splat(1)))));
 	}
 
 	fn bindModelUniforms(modelIndex: u31, blockType: u16) void {
@@ -746,7 +792,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				const rot = itemDrops.list.items(.rot)[i];
 				const blockPos: Vec3i = @floor(pos);
 				const light: [6]u8 = main.renderer.mesh_storage.getLight(blockPos[0], blockPos[1], blockPos[2]) orelse @splat(0);
-				bindLightUniform(light, ambientLight);
+				bindLightUniform(light, ambientLight, getItemEmittedLight(item));
 				pos -= playerPos;
 
 				const model = getModel(item);
@@ -847,7 +893,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				result[i] = @floor(val);
 			}
 
-			bindLightUniform(result, ambientLight);
+			bindLightUniform(result, ambientLight, getItemEmittedLight(item));
 
 			const model = getModel(item);
 			var vertices: u31 = 36;
