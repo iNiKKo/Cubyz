@@ -40,9 +40,23 @@ const UniformStruct = struct {
 	lodDistance: c_int,
 	zNear: c_int,
 	zFar: c_int,
+	shadowsEnabled: c_int,
+	cloudCoverageOrigin: c_int,
+	cloudCoverageWorldSize: c_int,
+	cloudHeightRelative: c_int,
+	sunDirection: c_int,
+	isSunlight: c_int,
+	// CSM uniforms (replacing the old DDA raymarch uniforms):
+	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
+	csmCascadeFar: c_int,       // float[3] at location 47
+	csmTexelSize: c_int,         // float at location 50
+	handLightPositionRelative: c_int,
+	handLightColor: c_int,
+	handLightRadius: c_int,
 };
 pub var uniforms: UniformStruct = undefined;
 pub var transparentUniforms: UniformStruct = undefined;
+
 pub var commandPipeline: graphics.ComputePipeline = undefined;
 pub var commandUniforms: struct {
 	chunkIDIndex: c_int,
@@ -51,11 +65,19 @@ pub var commandUniforms: struct {
 	isTransparent: c_int,
 	onlyDrawPreviouslyInvisible: c_int,
 	lodDistance: c_int,
+	forceAllVisible: c_int,
 } = undefined;
 pub var occlusionTestPipeline: graphics.Pipeline = undefined;
 pub var vao: graphics.VertexArray = undefined;
 pub var faceBuffers: [settings.highestSupportedLod + 1]graphics.LargeBuffer(FaceData) = undefined;
 pub var lightBuffers: [settings.highestSupportedLod + 1]graphics.LargeBuffer(u32) = undefined;
+/// LOD0-only per-chunk voxel occupancy for the sun/moon shadow raymarch (see shadow.glsl). Three
+/// bit-planes back to back per chunk — opaque, leaf, coarse (4x4x4-block "any occupancy" for the
+/// raymarch's mip-accelerated skip-empty-space stepping) — see ChunkMesh.uploadOccupancy for the exact
+/// layout. Consumed by renderer.zig's per-frame chunk-index window (ShadowRaymarch), not by
+/// chunkBuffer/ChunkData — a shadow ray needs to look up occupancy by *world position*, not by the
+/// draw-time chunkID this buffer's siblings are keyed on.
+pub var occupancyBuffer: graphics.LargeBuffer(u32) = undefined;
 pub var chunkBuffer: graphics.LargeBuffer(ChunkData) = undefined;
 pub var commandBuffer: graphics.LargeBuffer(IndirectData) = undefined;
 pub var chunkIDBuffer: graphics.LargeBuffer(u32) = undefined;
@@ -127,6 +149,7 @@ pub fn init() void {
 		faceBuffers[i].init(main.globalAllocator, 1 << 20, 3);
 		lightBuffers[i].init(main.globalAllocator, 1 << 20, 10);
 	}
+	occupancyBuffer.init(main.globalAllocator, 1 << 16, 20); // 20, not 11 — see shadow.glsl's binding comment for why
 	chunkBuffer.init(main.globalAllocator, 1 << 20, 6);
 	commandBuffer.init(main.globalAllocator, 1 << 20, 8);
 	chunkIDBuffer.init(main.globalAllocator, 1 << 20, 9);
@@ -142,6 +165,7 @@ pub fn deinit() void {
 		faceBuffers[i].deinit();
 		lightBuffers[i].deinit();
 	}
+	occupancyBuffer.deinit();
 	chunkBuffer.deinit();
 	commandBuffer.deinit();
 	chunkIDBuffer.deinit();
@@ -152,6 +176,7 @@ pub fn beginRender() void {
 		faceBuffers[i].beginRender();
 		lightBuffers[i].beginRender();
 	}
+	occupancyBuffer.beginRender();
 	chunkBuffer.beginRender();
 	commandBuffer.beginRender();
 	chunkIDBuffer.beginRender();
@@ -162,6 +187,7 @@ pub fn endRender() void {
 		faceBuffers[i].endRender();
 		lightBuffers[i].endRender();
 	}
+	occupancyBuffer.endRender();
 	chunkBuffer.endRender();
 	commandBuffer.endRender();
 	chunkIDBuffer.endRender();
@@ -178,6 +204,37 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 
 	c.glUniform1f(locations.zNear, renderer.zNear);
 	c.glUniform1f(locations.zFar, renderer.zFar);
+
+	c.glUniform1i(locations.shadowsEnabled, @intFromBool(main.settings.shadows));
+
+	const cloudCoverageOrigin = renderer.clouds.coverageOriginRelative;
+	c.glUniform2f(locations.cloudCoverageOrigin, cloudCoverageOrigin[0], cloudCoverageOrigin[1]);
+	c.glUniform1f(locations.cloudCoverageWorldSize, renderer.clouds.coverageWorldSize);
+	c.glUniform1f(locations.cloudHeightRelative, renderer.clouds.cloudHeightRelative);
+	const sunDirection = game.world.?.dayTime.getShadowLightDirection();
+	c.glUniform3fv(locations.sunDirection, 1, @ptrCast(&sunDirection));
+	c.glUniform1i(locations.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
+
+	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
+	if (main.settings.shadows) {
+		const csm = &renderer.CascadedShadowMap;
+		// Upload flat array of 3×16 floats (column-major mat4 order as GL expects)
+		c.glUniformMatrix4fv(locations.csmLightSpaceMatrix, 3, c.GL_FALSE, @ptrCast(&csm.lightSpaceMatricesGL));
+		c.glUniform1fv(locations.csmCascadeFar, 3, @ptrCast(&csm.cascadeFarDistances));
+		c.glUniform1f(locations.csmTexelSize, 1.0 / @as(f32, @floatFromInt(renderer.CascadedShadowMap.shadowMapSize)));
+		// Bind the 3 shadow map textures to bindings 6, 7, 8:
+		c.glActiveTexture(c.GL_TEXTURE6);
+		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[0].depthTexture);
+		c.glActiveTexture(c.GL_TEXTURE7);
+		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[1].depthTexture);
+		c.glActiveTexture(c.GL_TEXTURE8);
+		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[2].depthTexture);
+		c.glActiveTexture(c.GL_TEXTURE0);
+	}
+
+	c.glUniform3fv(locations.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
+	c.glUniform3fv(locations.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
+	c.glUniform1f(locations.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 }
 
 pub fn bindShaderAndUniforms(ambient: Vec3f) void {
@@ -201,7 +258,7 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	vao.bind();
 }
 
-fn bindBuffers(lod: usize) void {
+pub fn bindBuffers(lod: usize) void {
 	faceBuffers[lod].ssbo.bind(faceBuffers[lod].binding);
 	lightBuffers[lod].ssbo.bind(lightBuffers[lod].binding);
 }
@@ -228,6 +285,7 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) voi
 	c.glUniform1ui(commandUniforms.commandIndexStart, allocation.start);
 	c.glUniform1ui(commandUniforms.size, @intCast(chunkIDs.len));
 	c.glUniform1i(commandUniforms.isTransparent, @intFromBool(transparent));
+	c.glUniform1i(commandUniforms.forceAllVisible, 0);
 	if (!transparent) {
 		c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 0);
 		c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1); // TODO: Replace with @divCeil once available
@@ -475,6 +533,10 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 	lightList: []u32 = &.{},
 	lightAllocation: graphics.SubAllocation = .{.start = 0, .len = 0},
 
+	/// Only ever allocated for LOD0 (voxelSize == 1) meshes — stays {0, 0} (a safe no-op to free) for
+	/// every other LOD. See occupancyBuffer's doc comment.
+	occupancyAllocation: graphics.SubAllocation = .{.start = 0, .len = 0},
+
 	blockUpdateQueue: main.utils.CircularBufferQueue(Vec3i) = undefined,
 
 	lastNeighborsSameLod: [6]?*const ChunkMesh = @splat(null),
@@ -527,6 +589,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 
 	fn privateDeinit(self: *ChunkMesh) void {
 		chunkBuffer.free(self.chunkAllocation);
+		occupancyBuffer.free(self.occupancyAllocation);
 		self.opaqueMesh.deinit();
 		self.transparentMesh.deinit();
 		self.chunk.unloadBlockEntities(.client);
@@ -1415,7 +1478,43 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 
 		lightBuffers[std.math.log2_int(u32, self.pos.voxelSize)].uploadData(self.lightList, &self.lightAllocation);
 
+		if (self.pos.voxelSize == 1) {
+			self.uploadOccupancy();
+		}
+
 		self.uploadChunkPosition();
+	}
+
+	/// One bit per voxel, packed x*1024 + y*32 + z (matches chunk.BlockPos.toIndex()'s own order, so
+	/// `chunk.data.getValue(index)` iterated 0..chunkVolume walks in exactly the order needed — no
+	/// reshuffling). Two fine planes back to back — [0, wordsPerFinePlane) opaque (solid blocks),
+	/// [wordsPerFinePlane, 2*wordsPerFinePlane) foliage & leaves (grass/flowers/leaves — `viewThrough` or `leafTag`)
+	/// — followed by one coarse plane: one bit per 4x4x4 voxel group, set if *any* shadow-casting voxel
+	/// exists in that group so the raymarch coarse stepper enters coarse cells with foliage or solid blocks.
+	const wordsPerFinePlane = chunk.chunkVolume/32; // 1024
+	const coarseGroupsPerAxis = chunk.chunkSize/4; // 8
+	const coarseGroupCount = coarseGroupsPerAxis*coarseGroupsPerAxis*coarseGroupsPerAxis; // 512
+	const wordsPerCoarsePlane = coarseGroupCount/32; // 16
+	const occupancyWordsPerChunk = 2*wordsPerFinePlane + wordsPerCoarsePlane;
+
+	fn uploadOccupancy(self: *ChunkMesh) void {
+		var bits: [occupancyWordsPerChunk]u32 = undefined;
+		@memset(&bits, 0);
+		const leafTag = main.Tag.find("leaf");
+		for (0..chunk.chunkVolume) |index| {
+			const block = self.chunk.data.getValue(index);
+			if (block.typ == 0 or block.transparent()) continue;
+			const isFoliage = block.viewThrough() or block.hasTag(leafTag);
+			const plane: usize = if (isFoliage) 1 else 0;
+			bits[plane*wordsPerFinePlane + index/32] |= @as(u32, 1) << @intCast(index%32);
+
+			const x = index >> 10;
+			const y = (index >> 5) & 31;
+			const z = index & 31;
+			const groupIndex = (x/4)*coarseGroupsPerAxis*coarseGroupsPerAxis + (y/4)*coarseGroupsPerAxis + z/4;
+			bits[2*wordsPerFinePlane + groupIndex/32] |= @as(u32, 1) << @intCast(groupIndex%32);
+		}
+		occupancyBuffer.uploadData(&bits, &self.occupancyAllocation);
 	}
 
 	fn uploadChunkPosition(self: *ChunkMesh) void {

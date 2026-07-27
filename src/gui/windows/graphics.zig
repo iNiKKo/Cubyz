@@ -26,6 +26,8 @@ const anisotropy = [_]u8{1, 2, 4, 8, 16};
 
 const resolutions = [_]u16{25, 50, 100};
 
+
+
 const leavesQualities = [_]u8{0, 1, 2, 3, 4};
 
 const fpsPresetsValue = [_]u16{5, 10, 15, 30, 50, 60, 75, 90, 100, 120, 144, 165, 170, 180, 200, 240, 260, 280, 300, 360, 480};
@@ -108,6 +110,67 @@ fn bloomCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn shadowsCallback(newValue: bool) void {
+	settings.shadows = newValue;
+	settings.save();
+}
+
+fn shadowDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffShadow Distance: {d:.0}", .{@round(value)});
+}
+
+fn shadowDistanceCallback(newValue: f32) void {
+	settings.shadowDistance = @round(newValue);
+	settings.save();
+}
+
+fn shadowRayStepsFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffShadow Quality: {d:.0}", .{@round(value)});
+}
+
+fn shadowRayStepsCallback(newValue: f32) void {
+	settings.shadowRaySteps = @intFromFloat(@round(newValue));
+	settings.save();
+}
+
+fn foliageShadowsCallback(newValue: bool) void {
+	settings.foliageShadows = newValue;
+	settings.save();
+}
+
+fn cloudsCallback(newValue: bool) void {
+	settings.clouds = newValue;
+	settings.save();
+}
+
+fn cloudDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffCloud Distance: {d:.0}", .{@round(value)});
+}
+
+fn cloudDistanceCallback(newValue: f32) void {
+	settings.cloudDistance = @round(newValue);
+	settings.save();
+}
+
+fn godRaysCallback(newValue: bool) void {
+	settings.godRays = newValue;
+	settings.save();
+}
+
+fn rainCallback(newValue: bool) void {
+	settings.rain = newValue;
+	settings.save();
+}
+
+fn godRayIntensityFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffGod Ray Intensity: {d:.1}", .{value});
+}
+
+fn godRayIntensityCallback(newValue: f32) void {
+	settings.godRayIntensity = newValue;
+	settings.save();
+}
+
 fn vsyncCallback(newValue: bool) void {
 	settings.vsync = newValue;
 	settings.save();
@@ -141,6 +204,15 @@ pub fn onOpen() void {
 	list.add(ContinuousSlider.init(.{0, 0}, 128, 0.0, 1.0, settings.nightBrightness, &nightBrightnessCallback, &nightBrightnessFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 128, 40.0, 120.0, settings.fov, &fovCallback, &fovFormatter));
 	list.add(CheckBox.init(.{0, 0}, 128, "Bloom", settings.bloom, &bloomCallback));
+	list.add(CheckBox.init(.{0, 0}, 128, "Shadows", settings.shadows, &shadowsCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 128, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
+	list.add(ContinuousSlider.init(.{0, 0}, 128, 32.0, 512.0, @floatFromInt(settings.shadowRaySteps), &shadowRayStepsCallback, &shadowRayStepsFormatter));
+	list.add(CheckBox.init(.{0, 0}, 128, "Grass Shadows", settings.foliageShadows, &foliageShadowsCallback));
+	list.add(CheckBox.init(.{0, 0}, 128, "Clouds", settings.clouds, &cloudsCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 128, 64.0, 2048.0, settings.cloudDistance, &cloudDistanceCallback, &cloudDistanceFormatter));
+	list.add(CheckBox.init(.{0, 0}, 128, "God Rays", settings.godRays, &godRaysCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 128, 0.0, 3.0, settings.godRayIntensity, &godRayIntensityCallback, &godRayIntensityFormatter));
+	list.add(CheckBox.init(.{0, 0}, 128, "Rain", settings.rain, &rainCallback));
 	list.add(CheckBox.init(.{0, 0}, 128, "Vertical Synchronization", settings.vsync, &vsyncCallback));
 	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffAnisotropic Filtering: ", "{}x", &anisotropy, switch (settings.anisotropicFiltering) {
 		1 => 0,

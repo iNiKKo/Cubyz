@@ -39,6 +39,20 @@ pub const client = struct {
 		contrast: c_int,
 		ambientLight: c_int,
 		nodeBufferOffset: c_int,
+		shadowsEnabled: c_int,
+		shadowWindowOrigin: c_int,
+		shadowWindowDim: c_int,
+		shadowMaxDistance: c_int,
+		shadowMaxSteps: c_int,
+		foliageShadowsEnabled: c_int,
+		cloudCoverageOrigin: c_int,
+		cloudCoverageWorldSize: c_int,
+		cloudHeightRelative: c_int,
+		sunDirection: c_int,
+		isSunlight: c_int,
+		handLightPositionRelative: c_int,
+		handLightColor: c_int,
+		handLightRadius: c_int,
 	} = undefined;
 
 	pub fn init() void {
@@ -145,6 +159,23 @@ pub const client = struct {
 
 		c.glUniform3fv(uniforms.ambientLight, 1, @ptrCast(&ambientLight));
 		c.glUniform1f(uniforms.contrast, 0.12);
+		c.glUniform1i(uniforms.shadowsEnabled, @intFromBool(settings.shadows));
+		const shadowWindowOrigin = renderer.ShadowRaymarch.windowOrigin;
+		c.glUniform3i(uniforms.shadowWindowOrigin, shadowWindowOrigin[0], shadowWindowOrigin[1], shadowWindowOrigin[2]);
+		c.glUniform1ui(uniforms.shadowWindowDim, renderer.ShadowRaymarch.windowDim);
+		c.glUniform1f(uniforms.shadowMaxDistance, settings.shadowDistance);
+		c.glUniform1i(uniforms.shadowMaxSteps, settings.shadowRaySteps);
+		c.glUniform1i(uniforms.foliageShadowsEnabled, @intFromBool(settings.foliageShadows));
+		const cloudCoverageOrigin = renderer.clouds.coverageOriginRelative;
+		c.glUniform2f(uniforms.cloudCoverageOrigin, cloudCoverageOrigin[0], cloudCoverageOrigin[1]);
+		c.glUniform1f(uniforms.cloudCoverageWorldSize, renderer.clouds.coverageWorldSize);
+		c.glUniform1f(uniforms.cloudHeightRelative, renderer.clouds.cloudHeightRelative);
+		const sunDirection = game.world.?.dayTime.getShadowLightDirection();
+		c.glUniform3fv(uniforms.sunDirection, 1, @ptrCast(&sunDirection));
+		c.glUniform1i(uniforms.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
+		c.glUniform3fv(uniforms.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
+		c.glUniform3fv(uniforms.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
+		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 
 		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();
 

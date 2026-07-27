@@ -1441,6 +1441,25 @@ pub const VertexArray = struct { // MARK: VertexArray
 	pub fn bind(self: VertexArray) void {
 		c.glBindVertexArray(self.vao);
 	}
+
+	/// Re-uploads vertex (and optionally index) data into the buffers created by init(), reusing the
+	/// already-configured vertex attribute layout. For geometry rebuilt every frame (e.g. clouds)
+	/// rather than the GL_STATIC_DRAW-only data init() takes.
+	pub fn update(self: VertexArray, T: type, data: []const T, indices_: ?[]const u32) void {
+		// GL_ELEMENT_ARRAY_BUFFER's binding is captured per-VAO, unlike GL_ARRAY_BUFFER — without
+		// binding this VAO first, glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ...) below would silently
+		// repoint whichever *other* VAO was last bound (e.g. from the previous draw call) at this
+		// VertexArray's index buffer instead, corrupting that other VAO's geometry.
+		c.glBindVertexArray(self.vao);
+		c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);
+		c.glBufferData(c.GL_ARRAY_BUFFER, @intCast(data.len*@sizeOf(T)), data.ptr, c.GL_DYNAMIC_DRAW);
+		if (indices_) |indices| {
+			std.debug.assert(self.ibo != null);
+			c.glBindBuffer(c.GL_ELEMENT_ARRAY_BUFFER, self.ibo.?);
+			c.glBufferData(c.GL_ELEMENT_ARRAY_BUFFER, @intCast(indices.len*@sizeOf(u32)), indices.ptr, c.GL_DYNAMIC_DRAW);
+		}
+		c.glBindVertexArray(0);
+	}
 };
 
 pub const SSBO = struct { // MARK: SSBO
@@ -1673,6 +1692,7 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	frameBuffer: c_uint,
 	texture: c_uint,
 	hasDepthTexture: bool,
+	hasColorTexture: bool = true,
 	depthTexture: c_uint,
 
 	pub fn init(self: *FrameBuffer, hasDepthTexture: bool, textureFilter: c_int, textureWrap: c_int) void {
@@ -1681,6 +1701,7 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 			.texture = undefined,
 			.depthTexture = undefined,
 			.hasDepthTexture = hasDepthTexture,
+			.hasColorTexture = true,
 		};
 		c.glGenFramebuffers(1, &self.frameBuffer);
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
@@ -1704,12 +1725,43 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 	}
 
+	/// A framebuffer with only a depth attachment (no color texture at all), suitable for shadow maps.
+	/// The depth texture is set up for hardware-filtered PCF via sampler2DShadow (GL_COMPARE_REF_TO_TEXTURE).
+	pub fn initDepthOnly(self: *FrameBuffer, textureFilter: c_int, textureWrap: c_int) void {
+		self.* = FrameBuffer{
+			.frameBuffer = undefined,
+			.texture = 0,
+			.depthTexture = undefined,
+			.hasDepthTexture = true,
+			.hasColorTexture = false,
+		};
+		c.glGenFramebuffers(1, &self.frameBuffer);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
+
+		c.glGenTextures(1, &self.depthTexture);
+		c.glBindTexture(c.GL_TEXTURE_2D, self.depthTexture);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MIN_FILTER, textureFilter);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_MAG_FILTER, textureFilter);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_S, textureWrap);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_WRAP_T, textureWrap);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_COMPARE_MODE, c.GL_COMPARE_REF_TO_TEXTURE);
+		c.glTexParameteri(c.GL_TEXTURE_2D, c.GL_TEXTURE_COMPARE_FUNC, c.GL_LEQUAL);
+		c.glFramebufferTexture2D(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D, self.depthTexture, 0);
+
+		c.glDrawBuffer(c.GL_NONE);
+		c.glReadBuffer(c.GL_NONE);
+
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
+
 	pub fn deinit(self: *FrameBuffer) void {
 		c.glDeleteFramebuffers(1, &self.frameBuffer);
 		if (self.hasDepthTexture) {
-			c.glDeleteRenderbuffers(1, &self.depthTexture);
+			c.glDeleteTextures(1, &self.depthTexture);
 		}
-		c.glDeleteTextures(1, &self.texture);
+		if (self.hasColorTexture) {
+			c.glDeleteTextures(1, &self.texture);
+		}
 	}
 
 	pub fn updateSize(self: *FrameBuffer, _width: u31, _height: u31, internalFormat: c_int) void {
@@ -1721,8 +1773,10 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 			c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_DEPTH_COMPONENT32F, width, height, 0, c.GL_DEPTH_COMPONENT, c.GL_FLOAT, null);
 		}
 
-		c.glBindTexture(c.GL_TEXTURE_2D, self.texture);
-		c.glTexImage2D(c.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, c.GL_RGBA, c.GL_UNSIGNED_BYTE, null);
+		if (self.hasColorTexture) {
+			c.glBindTexture(c.GL_TEXTURE_2D, self.texture);
+			c.glTexImage2D(c.GL_TEXTURE_2D, 0, internalFormat, width, height, 0, c.GL_RGBA, c.GL_UNSIGNED_BYTE, null);
+		}
 	}
 
 	pub fn clear(_: FrameBuffer, clearColor: Vec4f) void {
@@ -1744,6 +1798,7 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	}
 
 	pub fn bindTexture(self: *const FrameBuffer, target: c_uint) void {
+		std.debug.assert(self.hasColorTexture);
 		c.glActiveTexture(target);
 		c.glBindTexture(c.GL_TEXTURE_2D, self.texture);
 	}
@@ -2239,6 +2294,15 @@ pub const frame_uniforms = struct { // MARK: frame_uniforms
 
 		pub fn deinit(self: StaticUbo) void {
 			c.glDeleteBuffers(1, &self.id);
+		}
+
+		/// Respecifies the buffer contents (relies on driver-side buffer orphaning to avoid stalling
+		/// on in-flight draws). Intended for UBOs that change once per frame, e.g. the shadow pass's
+		/// light-space matrices, unlike the one-shot data most StaticUbo users have.
+		pub fn update(self: StaticUbo, data: Data) void {
+			c.glBindBuffer(c.GL_UNIFORM_BUFFER, self.id);
+			c.glBufferData(c.GL_UNIFORM_BUFFER, @sizeOf(Data), &data, c.GL_STREAM_DRAW);
+			c.glBindBuffer(c.GL_UNIFORM_BUFFER, 0);
 		}
 
 		pub fn bind(self: StaticUbo) void {
