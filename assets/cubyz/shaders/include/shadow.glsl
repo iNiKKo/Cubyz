@@ -90,8 +90,10 @@ float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelR
 // Samples one cascade's PCF shadow value for a given world position, including its own normal bias.
 // Returns 1.0 (unshadowed) for fragments that fall outside that cascade's projection — the caller is
 // responsible for only trusting that result when it knows the position should actually be covered.
-float sampleCascade(int cascade, vec3 worldPosRelative, float tanTheta) {
-	vec4 lightSpacePos = csmLightSpaceMatrix[cascade] * vec4(worldPosRelative, 1.0);
+float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTheta, bool isFoliage) {
+	// Normal-offset bias: offsets position outward along face normal to eliminate self-shadowing acne
+	vec3 offsetPos = isFoliage ? worldPosRelative : (worldPosRelative + normal * (0.04 * (1.0 + float(cascade) * 0.5)));
+	vec4 lightSpacePos = csmLightSpaceMatrix[cascade] * vec4(offsetPos, 1.0);
 	vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 	projCoords = projCoords * 0.5 + 0.5; // clip [-1,1] → UV [0,1]
 
@@ -99,8 +101,8 @@ float sampleCascade(int cascade, vec3 worldPosRelative, float tanTheta) {
 		return 1.0; // outside cascade coverage: treat as unshadowed
 	}
 
-	float cascadeBiasScale = 1.0 + float(cascade) * 2.0;
-	float bias = clamp(0.0008 * tanTheta * cascadeBiasScale, 0.0003, 0.006);
+	float cascadeBiasScale = 1.0 + float(cascade) * 1.5;
+	float bias = (cascade == 0) ? clamp(0.0001 * tanTheta, 0.00005, 0.0004) : clamp(0.0003 * tanTheta * cascadeBiasScale, 0.0002, 0.002);
 	projCoords.z -= bias;
 
 	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0);
@@ -117,15 +119,10 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 	vec3 lightDir = normalize(sunDirection);
 	float shadowAmbientFloor = isSunlight ? shadowAmbientFloorDay : shadowAmbientFloorNight;
 
-	// Back-face self-occlusion for solid structures (prevents light leaking into hollow buildings) —
-	// skipped entirely for foliage. Thin grass/plant quads have no "inside" to leak light into, and
-	// chunk_fragment.frag's own SSS/translucency term already models a foliage back face correctly (lit
-	// by light passing through, not by treating it as shadowed). Applying both at once produced a hard,
-	// angle-dependent pop between "this shortcut's flat ambient floor" and "the SSS boost" right at the
-	// -0.15 threshold, which as the sun moved through the day swept across the grass and looked like
-	// blades randomly flipping between correctly lit, too dark, and glowing.
+	// Solid faces pointing away from or parallel to the sun (NdotL <= 0.001) receive ambient shadow floor
+	// immediately without sampling the shadow map, preventing grazing-angle depth bias jitter on side faces:
 	float NdotL = dot(normal, lightDir);
-	if (!isFoliage && NdotL <= -0.15) return shadowAmbientFloor;
+	if (!isFoliage && NdotL <= 0.001) return shadowAmbientFloor;
 
 	// Select cascade by camera view depth:
 	int cascade = 0;
@@ -135,25 +132,25 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 	// Normal bias inputs, shared by every cascade this fragment samples:
 	float absNdotL = max(abs(NdotL), 0.05);
 	float sinTheta = sqrt(1.0 - clamp(absNdotL * absNdotL, 0.0, 1.0));
-	float tanTheta = sinTheta / absNdotL;
+	float tanTheta = clamp(sinTheta / absNdotL, 0.0, 3.0);
 
-	float light = sampleCascade(cascade, worldPosRelative, tanTheta);
+	float light = sampleCascade(cascade, worldPosRelative, normal, tanTheta, isFoliage);
 
-	// Cross-fade into the next cascade over the last stretch of this one's range. Each cascade jumps to
-	// a much coarser texel density than the last (1024..4096 texels spread over 24, then ~96, then up to
-	// shadowDistance blocks), so without this the cascade 0/1 boundary reads as a hard "quality ring"
-	// centred on the player (visible as a sudden sharp-to-blurry edge at high settings, where the
-	// resolution jump is largest) and individual ground blocks near that boundary can visibly pop between
-	// the two resolutions as the player moves. Blending removes both the visible ring and the pop.
+	// Cross-fade into the next cascade over the last stretch of this one's range:
 	if (cascade < 2) {
 		float boundary = csmCascadeFar[cascade];
 		float blendWidth = boundary * 0.15;
 		float blendStart = boundary - blendWidth;
 		if (cameraDepth > blendStart) {
 			float t = clamp((cameraDepth - blendStart)/blendWidth, 0.0, 1.0);
-			float nextLight = sampleCascade(cascade + 1, worldPosRelative, tanTheta);
+			float nextLight = sampleCascade(cascade + 1, worldPosRelative, normal, tanTheta, isFoliage);
 			light = mix(light, nextLight, t);
 		}
+	}
+
+	// Soft, subtle self-shadowing on foliage (blends 60% toward 1.0 unshadowed so plant blades have 3D depth without turning dark):
+	if (isFoliage) {
+		light = mix(light, 1.0, 0.60);
 	}
 
 	// Fade out shadow contrast near horizon so sunset/sunrise transition is silky smooth:

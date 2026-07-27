@@ -102,20 +102,10 @@ void main() {
 	if (isFoliage) {
 		vec3 lightDir = normalize(sunDirection);
 		float NdotL = dot(normal, lightDir);
-		float sssTranslucency = max(0.0, -NdotL); // light penetrating plant tissue from behind
-		float sssForward = max(0.0, dot(normalize(-direction), -lightDir)); // forward scatter toward camera
-		float sss = 0.6 * sssTranslucency + 0.4 * pow(sssForward, 2.0);
-		// Moonlight is far too dim in reality to noticeably transmit through leaf tissue — without this,
-		// the boost below (which scales purely off view/normal geometry, not actual light strength) made
-		// the back face of moonlit grass glow just as strongly as it does in direct sunlight, which read
-		// as an unnatural glow at night rather than correctly-lit moonlit grass.
-		float sssIntensity = isSunlight ? 1.0 : 0.15;
-		// Capped low enough that even a fully-boosted, fully-shadowed blade (shadowFactor as low as
-		// shadowAmbientFloorDay = 0.55, see shadow.glsl) can't come out brighter than a blade in full,
-		// unshadowed sun — (1 + 0.6*1.2)*0.55 ≈ 0.95 < 1. The old 1.2 coefficient allowed up to
-		// (1 + 1.2*1.2)*0.55 ≈ 1.34, i.e. shadowed grass could visibly glow brighter than sunlit grass.
-		vec3 plantColorTint = vec3(1.1, 1.2, 0.8);
-		effectiveSunLight = outSunLight * (1.0 + 0.6 * sss * sssIntensity * plantColorTint);
+		float sssTranslucency = clamp(0.5 - 0.5 * NdotL, 0.0, 0.25);
+		float sssIntensity = isSunlight ? 1.0 : 0.1;
+		float rootAO = mix(0.70, 1.0, smoothstep(0.0, 0.4, min(uv.y, 1.0 - uv.y)));
+		effectiveSunLight = outSunLight * (1.0 + sssTranslucency * sssIntensity) * rootAO;
 	}
 
 	vec3 totalLight = min(max(max(effectiveSunLight*shadowFactor, outBlockLight), handLightContribution()), vec3(1));

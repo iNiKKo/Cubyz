@@ -115,6 +115,35 @@ fn sampleCoverage(worldX: f64, worldY: f64) bool {
 	return value > coverageThreshold;
 }
 
+pub fn isPlayerInsideCloud(playerPos: Vec3d) bool {
+	if (!settings.clouds) return false;
+	const z = playerPos[2];
+	if (z < cloudBaseHeight or z > cloudBaseHeight + cloudThickness) return false;
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	const worldX = playerPos[0] - @as(f64, windOffset[0]);
+	const worldY = playerPos[1] - @as(f64, windOffset[1]);
+	return sampleCoverage(worldX, worldY);
+}
+
+pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
+	if (!settings.clouds) return 1.0;
+	if (dir[2] <= 0.001) return 1.0;
+	const relZ = cloudBaseHeight - playerPos[2];
+	if (relZ <= 0) return 1.0;
+	const t = relZ / dir[2];
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	const hitX = playerPos[0] + @as(f64, dir[0])*@as(f64, t) - @as(f64, windOffset[0]);
+	const hitY = playerPos[1] + @as(f64, dir[1])*@as(f64, t) - @as(f64, windOffset[1]);
+	if (sampleCoverage(hitX, hitY)) {
+		return 0.30;
+	}
+	return 1.0;
+}
+
 fn relCoordAt(gridIndex: i64, gridOrigin: f64, playerCoord: f64, windOffsetComponent: f32) f32 {
 	const worldCoord: f64 = gridOrigin + @as(f64, @floatFromInt(gridIndex))*cellSizeD;
 	const rel: f32 = @floatCast(worldCoord - playerCoord);
@@ -463,9 +492,12 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f) void {
 	c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
 	c.glUniform1f(uniforms.baseAlpha, 0.65);
 
+	c.glEnable(c.GL_POLYGON_OFFSET_FILL);
+	c.glPolygonOffset(-1.0, -2.0);
+
 	c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
 	c.glDepthMask(c.GL_TRUE);
-	c.glDepthFunc(c.GL_LESS);
+	c.glDepthFunc(c.GL_LEQUAL);
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(indexCount), c.GL_UNSIGNED_INT, null);
 
 	c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
@@ -473,5 +505,6 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f) void {
 	c.glDepthFunc(c.GL_EQUAL);
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(indexCount), c.GL_UNSIGNED_INT, null);
 
+	c.glDisable(c.GL_POLYGON_OFFSET_FILL);
 	c.glDepthFunc(c.GL_LESS);
 }

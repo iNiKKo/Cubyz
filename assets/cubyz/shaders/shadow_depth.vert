@@ -27,6 +27,8 @@ layout(std430, binding = 4) buffer _quads
 	QuadInfo quads[];
 };
 
+layout(location = 37) uniform vec3 sunDirection;
+
 layout(location = 0) out vec2 uv;
 layout(location = 1) flat out int textureIndex;
 layout(location = 2) flat out int opaqueInLod;
@@ -50,6 +52,17 @@ void main() {
 	);
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
+
+	if (opaqueInLod == 0) {
+		// Shift foliage shadow position along lightDir to pull the shadow closer to the plant root:
+		vec3 lightDir = sunDirection;
+		float sLen = length(lightDir);
+		if (sLen > 1e-4) {
+			lightDir /= sLen;
+			position += lightDir * 0.25;
+		}
+	}
+
 	position *= voxelSize;
 	position += vec3(chunks[chunkID].position.xyz - playerPositionInteger);
 	position -= playerPositionFraction;

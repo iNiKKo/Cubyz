@@ -245,7 +245,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	const time: u32 = @intCast(main.timestamp().toMilliseconds() & std.math.maxInt(u32));
 
 	gpu_performance_measuring.startQuery(.skybox);
-	Skybox.render();
+	Skybox.render(playerPos);
 	gpu_performance_measuring.stopQuery();
 
 	gpu_performance_measuring.startQuery(.animation);
@@ -384,7 +384,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
 	worldFrameBuffer.unbind();
 	deferredRenderPassPipeline.bind(null);
-	if (!blocks.meshes.hasFog(playerBlock)) {
+	if (clouds.isPlayerInsideCloud(playerPos)) {
+		const cloudFogColor = Vec3f{0.92, 0.95, 1.0} * game.world.?.dayTime.fog.fogColor;
+		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&cloudFogColor));
+		c.glUniform1f(deferredUniforms.@"fog.density", 0.08);
+		c.glUniform1f(deferredUniforms.@"fog.fogLower", -1e5);
+		c.glUniform1f(deferredUniforms.@"fog.fogHigher", 1e5);
+	} else if (!blocks.meshes.hasFog(playerBlock)) {
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&game.world.?.dayTime.fog.fogColor));
 		c.glUniform1f(deferredUniforms.@"fog.density", game.world.?.dayTime.fog.density);
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
@@ -1125,7 +1131,7 @@ pub const Skybox = struct {
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
-	pub fn render() void {
+	pub fn render(playerPos: Vec3d) void {
 		const viewMatrix = game.camera.viewMatrix;
 
 		const starOpacity: f32 = game.world.?.dayTime.getStarOpacity();
@@ -1157,8 +1163,11 @@ pub const Skybox = struct {
 			const sunBasis = celestialBillboardBasis(sunDir);
 			const moonBasis = celestialBillboardBasis(moonDir);
 
-			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 24.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir));
-			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 18.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6);
+			const sunCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, sunDir);
+			const moonCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, moonDir);
+
+			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten);
+			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten);
 		}
 	}
 };
@@ -1446,9 +1455,10 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			lightSpaceMatricesGL[i] = lightSpaceMatrices[i].toGl();
 		}
 
-		// Shadow pass: render all opaque chunk faces into each cascade's depth FBO.
+		const lightDir = game.world.?.dayTime.getShadowLightDirection();
 		shadowPipeline.bind(null);
 		c.glUniform1i(43, @intFromBool(settings.foliageShadows));
+		c.glUniform3fv(37, 1, @ptrCast(&lightDir));
 		c.glActiveTexture(c.GL_TEXTURE0);
 		blocks.meshes.blockTextureArray.bind();
 

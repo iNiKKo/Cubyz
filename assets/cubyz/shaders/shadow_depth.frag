@@ -17,17 +17,17 @@ layout(std430, binding = 1) buffer _animatedTexture
 };
 
 void main() {
-	// Grass blades, flowers, crops, and ground plants (opaqueInLod == 0):
-	// Controlled directly by the "Grass Shadows" setting button (foliageShadowsEnabled):
 	if (opaqueInLod == 0) {
 		if (!foliageShadowsEnabled) discard;
-	}
-
-	float animatedIndex = animatedTexture[textureIndex];
-	float alpha = texture(textureSampler, vec3(uv, animatedIndex)).a;
-
-	// Tree leaves and non-opaque textures (alpha < 0.99):
-	if (alpha < 0.99) {
-		if (alpha < 0.5) discard; // Cutout alpha test: transparent leaf openings discard depth
+		// Ground foliage (grass, flowers, crops): use low alpha threshold (0.1) so plant base/stem depth
+		// is preserved in the shadow map across all 4 arms of the X-mesh, anchoring the shadow to all corners:
+		float animatedIndex = animatedTexture[textureIndex];
+		float alpha = texture(textureSampler, vec3(uv, animatedIndex)).a;
+		if (alpha < 0.1) discard;
+	} else {
+		// Tree leaves and transparent block quads (alpha < 0.5 discard for sunbeam cutouts):
+		float animatedIndex = animatedTexture[textureIndex];
+		float alpha = texture(textureSampler, vec3(uv, animatedIndex)).a;
+		if (alpha < 0.5) discard;
 	}
 }

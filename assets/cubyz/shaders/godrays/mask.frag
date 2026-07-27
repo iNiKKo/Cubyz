@@ -30,8 +30,8 @@ const float cloudOcclusionStrength = 0.85;
 // the whole sky — too large a radius (an earlier version used a broad world-space angular falloff
 // instead of this) lit up a huge swath of sky as "bright," reading as a diffuse halo covering wherever
 // the camera happened to be looking, rather than tight shafts anchored to the sun's actual position.
-const float sunDiscRadius = 0.05;
-const float sunDiscFeather = 0.03;
+const float sunDiscRadius = 0.025;
+const float sunDiscFeather = 0.015;
 
 // Camera-ray/cloud-layer-plane intersection, mirroring shadow.glsl's sampleCloudShadow but for the
 // camera's own view ray (is *this pixel* looking at sky behind a cloud?) rather than a ray toward the
