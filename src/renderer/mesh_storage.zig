@@ -704,6 +704,10 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{node.pos.wx, node.pos.wy, node.pos.wz})) - playerPos);
 			const chunkSizeVector: Vec3f = @splat(@floatFromInt(chunk.chunkSize * node.pos.voxelSize));
 			if (frustum.testAAB(relPosFloat, chunkSizeVector)) {
+				// Sky Islands High-Altitude Culling:
+				// When player is high up at Sky Islands (playerPos[2] > 2000.0), do not render ground-level chunks far below (wz < 2000):
+				if (playerPos[2] > 2000.0 and node.pos.wz < 2000) continue;
+
 				meshList.append(main.globalAllocator, mesh);
 			}
 		}

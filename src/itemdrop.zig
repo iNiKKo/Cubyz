@@ -507,6 +507,8 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 
 	pub var handLightPositionRelative: Vec3f = @splat(0);
 	pub var handLightColor: Vec3f = @splat(0);
+	pub var dropLightPositionRelative: Vec3f = @splat(0);
+	pub var dropLightColor: Vec3f = @splat(0);
 	pub var handLightRadius: f32 = 12.0;
 
 	pub fn update(deltaTime: f64) void {
@@ -527,10 +529,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 
 	fn updateHandLight() void {
 		handLightColor = @splat(0);
-
-		var heldColor: Vec3f = @splat(0);
-		var heldPos: Vec3f = @splat(0);
-		var heldStrength: f32 = 0.0;
+		dropLightColor = @splat(0);
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
 		if (item == .baseItem) {
@@ -538,21 +537,18 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 			if (baseItem.block()) |blockType| {
 				const light = (blocks.Block{.typ = blockType, .data = 0}).light();
 				if (light != 0) {
-					heldColor = Vec3f{
+					handLightColor = Vec3f{
 						@floatFromInt(light >> 16 & 255),
 						@floatFromInt(light >> 8 & 255),
 						@floatFromInt(light & 255),
 					} / @as(Vec3f, @splat(255.0));
 					const pos = Vec3f{0.4, 0.55, -0.32};
 					const invViewRotation = game.camera.viewMatrix.transpose();
-					heldPos = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
-					heldStrength = @max(@max(heldColor[0], heldColor[1]), heldColor[2]);
+					handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
 				}
 			}
 		}
 
-		var dropColor: Vec3f = @splat(0);
-		var dropPos: Vec3f = @splat(0);
 		var dropStrength: f32 = 0.0;
 
 		if (game.world) |world| {
@@ -581,22 +577,14 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 								const str = @max(@max(col[0], col[1]), col[2]) / (1.0 + distToPlayer * 0.05);
 								if (str > dropStrength) {
 									dropStrength = str;
-									dropColor = col;
-									dropPos = relPos;
+									dropLightColor = col;
+									dropLightPositionRelative = relPos;
 								}
 							}
 						}
 					}
 				}
 			}
-		}
-
-		if (heldStrength > 0.0) {
-			handLightColor = heldColor;
-			handLightPositionRelative = heldPos;
-		} else if (dropStrength > 0.0) {
-			handLightColor = dropColor;
-			handLightPositionRelative = dropPos;
 		}
 	}
 };

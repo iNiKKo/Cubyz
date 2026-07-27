@@ -91,8 +91,44 @@ float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelR
 // Returns 1.0 (unshadowed) for fragments that fall outside that cascade's projection — the caller is
 // responsible for only trusting that result when it knows the position should actually be covered.
 float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTheta, bool isFoliage) {
-	// Normal-offset bias: offsets position outward along face normal to eliminate self-shadowing acne
-	vec3 offsetPos = isFoliage ? worldPosRelative : (worldPosRelative + normal * (0.04 * (1.0 + float(cascade) * 0.5)));
+	// Foliage (grass/plants) is a cross of two *vertical* planes spanning its block from z=0 to z=1
+	// (see cross.obj), and it writes into the shadow map itself. That makes any sample point taken
+	// partway up a blade sit *underneath the blade's own geometry*: the ray from there toward the sun
+	// passes straight through the rest of the cross, so the blade shadows itself. That self-occlusion is
+	// what reads as a hard, detached-looking band on the tuft, and because each fragment sampled at its
+	// own height, the band also parallaxed across the blade as the sun moved.
+	//
+	// Sampling at the *top* of the foliage's block instead removes the problem at its source: from there
+	// the entire cross is below the sample point, so nothing of its own can occlude it, while a real
+	// external caster (wall, tree, terrain) one block up still registers essentially identically. Vertical
+	// shading variation across the blade then comes from the root-AO gradient in chunk_fragment.frag,
+	// which is stable, rather than from a self-shadow that swings around with the sun.
+	//
+	// worldPosRelative is relative to the player's continuously-moving position (chunk_vertex.vert:
+	// blockPos - playerPositionInteger - playerPositionFraction), so snapping on it directly would land
+	// on a different plane depending on the player's own sub-block Z offset — flickering while
+	// jumping/moving even though the grass never moves. Adding playerPositionFraction.z back inside
+	// fract() cancels that term, so the snap only depends on the fragment's true world position.
+	//
+	// A floor-level second sample (to catch "grass glowing next to a shadowed block behind it") was tried
+	// and reverted twice (2026-07-27): first using the fragment's own X/Y (panels of one tuft disagreed
+	// with each other), then using the block center (both of cross.obj's diagonal panels pass through
+	// (0.5, 0.5) simultaneously, so the floor test self-occluded against the plant's own geometry almost
+	// always — all grass went dark and flickered). The player asked to revert to this known-good state
+	// rather than keep iterating; if the glow issue is revisited, don't repeat either of those two
+	// approaches — see the item in memory.md for what was tried and ruled out.
+	float blockTopRelativeZ = worldPosRelative.z - fract(worldPosRelative.z + playerPositionFraction.z) + 1.0;
+	vec3 shadowTestPos = isFoliage ? vec3(worldPosRelative.xy, blockTopRelativeZ) : worldPosRelative;
+	// Normal-offset bias: offsets position outward along face normal to eliminate self-shadowing acne.
+	// This applies to every non-foliage surface receiving a shadow, not just ground near grass — it's not
+	// grass-specific, so shrinking it trades less peter-panning gap (previously computed at ~0.2-0.4
+	// blocks at typical sun elevations, dominated by this term) for a higher chance of acne reappearing on
+	// steep/grazing-angle terrain. Halved from 0.04 to 0.02 (2026-07-27) at the player's request after the
+	// gap was still visible even with the depth-bias-in-blocks fix above; if speckled/noisy shadow
+	// artifacts show up on steep hills or slanted terrain, raise this back up first before touching
+	// biasBlocks again.
+	const float normalOffsetBase = 0.02;
+	vec3 offsetPos = isFoliage ? shadowTestPos : (worldPosRelative + normal * (normalOffsetBase * (1.0 + float(cascade) * 0.5)));
 	vec4 lightSpacePos = csmLightSpaceMatrix[cascade] * vec4(offsetPos, 1.0);
 	vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 	projCoords = projCoords * 0.5 + 0.5; // clip [-1,1] → UV [0,1]
@@ -101,11 +137,18 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 		return 1.0; // outside cascade coverage: treat as unshadowed
 	}
 
-	float cascadeBiasScale = 1.0 + float(cascade) * 1.5;
-	float bias = (cascade == 0) ? clamp(0.0001 * tanTheta, 0.00005, 0.0004) : clamp(0.0003 * tanTheta * cascadeBiasScale, 0.0002, 0.002);
-	if (isFoliage) {
-		bias += 0.0008;
-	}
+	// `projCoords.z` is normalized [0,1] across this cascade's *orthographic depth range*, and that range
+	// is very different per cascade: renderer.zig's computeLightSpaceMatrix builds it as
+	// (2*radius + zMargin + 32) with zMargin = 256, giving 336 / 480 / 1312 blocks for cascades 0/1/2.
+	// A single normalized bias constant therefore meant wildly different *world-space* biases —
+	// 0.13 / 0.96 / 2.62 blocks — and world-space depth bias is precisely what detaches a shadow from the
+	// thing casting it: the lit gap it opens on the ground is biasBlocks / tan(sunElevation), so at a low
+	// sun a 0.13-block bias became a ~0.5-block gap (and cascade 2's became several blocks). Specifying
+	// the bias in blocks and converting here makes it mean the same small distance in every cascade.
+	// KEEP IN SYNC with renderer.zig computeLightSpaceMatrix: zMargin (256.0) + far margin (32.0) = 288.0.
+	float cascadeDepthRange = 2.0*csmCascadeFar[cascade] + 288.0;
+	float biasBlocks = mix(0.010, 0.030, clamp(tanTheta/3.0, 0.0, 1.0)); // slope-scaled, in blocks
+	float bias = biasBlocks/max(cascadeDepthRange, 1.0);
 	projCoords.z -= bias;
 
 	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0);

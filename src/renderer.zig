@@ -347,10 +347,10 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	// already correctly is. Drawing clouds last composites them over both opaque and transparent geometry
 	// alike, using the same depth test (against the opaque depth buffer, still the only depth transparent
 	// draws leave behind) that already made clouds correctly occlude opaque blocks.
-	clouds.draw(ambientLight, skyColor);
-	// Thin wispy high-altitude layer, drawn on top of the main clouds per user request — see
-	// thin_clouds.zig; deliberately a separate module/pipeline/shaders from clouds.zig.
-	thin_clouds.draw(ambientLight, skyColor, playerPos);
+	if (playerPos[2] <= 2000.0) {
+		clouds.draw(ambientLight, skyColor);
+		thin_clouds.draw(ambientLight, skyColor, playerPos);
+	}
 	// Same depth-test-against-opaque-and-transparent reasoning as clouds.draw() above — drops behind a
 	// wall should be hidden, and transparent blocks don't write depth so this still needs to run after
 	// them, not before.
@@ -391,8 +391,25 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", -1e5);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", 1e5);
 	} else if (!blocks.meshes.hasFog(playerBlock)) {
-		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&game.world.?.dayTime.fog.fogColor));
-		c.glUniform1f(deferredUniforms.@"fog.density", game.world.?.dayTime.fog.density);
+		const skyColorVal = game.world.?.dayTime.fog.skyColor;
+		var fogColor = game.world.?.dayTime.fog.fogColor;
+		var fogDensity = game.world.?.dayTime.fog.density;
+		const playerZ: f32 = @floatCast(playerPos[2]);
+
+		if (playerZ > 1000.0) {
+			const highAltFactor = std.math.clamp((playerZ - 1000.0) / 1000.0, 0.0, 1.0);
+			fogColor += (skyColorVal - fogColor) * @as(Vec3f, @splat(highAltFactor));
+			fogDensity += (1.0 / 600.0 - fogDensity) * highAltFactor;
+		} else {
+			fogColor = skyColorVal;
+			const renderDist: f32 = @floatFromInt(@as(u32, main.settings.renderDistance) * 32);
+			if (renderDist > 0) {
+				fogDensity = 3.5 / renderDist;
+			}
+		}
+
+		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&fogColor));
+		c.glUniform1f(deferredUniforms.@"fog.density", fogDensity);
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", game.world.?.dayTime.fog.fogHigher);
 	} else {

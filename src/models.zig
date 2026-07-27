@@ -23,6 +23,12 @@ pub const QuadInfo = extern struct {
 	cornerUV: [4][2]f32 align(8),
 	textureSlot: u32,
 	opaqueInLod: u32 = 0,
+	// Distinct from opaqueInLod (which controls LOD dithering / cutout behavior, e.g. for ore veins via
+	// opaqueInLod=2): this controls foliage-specific *shading* (SSS, root-AO, shadow self-occlusion
+	// handling). Both used to be derived from the same `getFaceNeighbor() == null` check in addQuad(),
+	// which meant any non-face-aligned geometry — branches, ore veins — was shaded exactly like grass.
+	// Set explicitly per-model/rotation; defaults to false (regular block shading).
+	isFoliage: u32 = 0,
 
 	pub fn normalVec(self: QuadInfo) Vec3f {
 		return self.normal;
@@ -427,10 +433,11 @@ pub const Model = struct {
 		};
 	}
 
-	pub fn loadModel(data: []const u8, coordinateSystem: vec.CoordinateSystem) ModelIndex {
+	pub fn loadModel(data: []const u8, coordinateSystem: vec.CoordinateSystem, isFoliage: bool) ModelIndex {
 		const quadInfos = loadRawModelDataFromObj(main.stackAllocator, data, coordinateSystem);
 		defer main.stackAllocator.free(quadInfos);
 		for (quadInfos) |*quad| {
+			quad.isFoliage = @intFromBool(isFoliage);
 			var minUv: Vec2f = @splat(std.math.inf(f32));
 			for (0..4) |i| {
 				quad.cornerUV[i] = @as(Vec2f, quad.cornerUV[i])*@as(Vec2f, @splat(4));
@@ -791,7 +798,12 @@ fn addCornerLightSamples(lightSamples: *main.List(LightSample), pos: Vec3i, dire
 
 pub fn registerModel(id: []const u8, data: []const u8, zon: ?main.ZonElement) ModelIndex {
 	const coordinateSystem: vec.CoordinateSystem = if (zon) |z| z.get(vec.CoordinateSystem, "coordinateSystem") orelse .right_handed_z_up else .right_handed_z_up;
-	const model = Model.loadModel(data, coordinateSystem);
+	// Explicit opt-in per model file (assets/cubyz/models/<name>.zig.zon: `.isFoliage = true`), rather than
+	// inferred from geometry: procedurally-built quads (branches, ore veins) also fail the
+	// face-alignment check that used to drive foliage shading, which made them wrongly get grass's
+	// SSS/root-AO/shadow-self-occlusion treatment. Only plant/grass models set this.
+	const isFoliage: bool = if (zon) |z| z.get(bool, "isFoliage") orelse false else false;
+	const model = Model.loadModel(data, coordinateSystem, isFoliage);
 	nameToIndex.put(id, model) catch unreachable;
 	return model;
 }

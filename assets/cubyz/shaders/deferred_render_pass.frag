@@ -52,24 +52,17 @@ float densityIntegral(float dist, float zStart, float zDist, float fogLower, flo
 	return (endLower - beginLower + midIntegral)/zDist*dist;
 }
 
-float calculateFogDistance(float dist, float densityAdjustment, float zStart, float zScale, float fogDensity, float fogLower, float fogHigher) {
-	float distCameraTerrain = densityIntegral(dist*densityAdjustment, zStart, zScale*dist*densityAdjustment, fogLower, fogHigher)*fogDensity;
-	float distFromCamera = 0;
-	float distFromTerrain = distFromCamera - distCameraTerrain;
-	if(distCameraTerrain < 10) { // Resolution range is sufficient.
-		return distFromTerrain;
-	} else {
-		// Here we have a few options to deal with this. We could for example weaken the fog effect to fit the entire range.
-		// I decided to keep the fog strength close to the camera and far away, with a fog-free region in between.
-		// I decided to this because I want far away fog to work (e.g. a distant ocean) as well as close fog(e.g. the top surface of the water when the player is under it)
-		if(distFromTerrain > -5 && dist != 0) {
-			return distFromTerrain;
-		} else if(distFromCamera < 5) {
-			return distFromCamera - 10;
-		} else {
-			return -5;
-		}
-	}
+float calculateFogDistance(float dist, float densityAdjustment, float playerWorldZ, float zScale, float fogDensity, float fogLower, float fogHigher) {
+	float effectiveDist = dist * densityAdjustment;
+
+	// Standard distance fog:
+	float distFog = effectiveDist * fogDensity;
+
+	// Height fog (mist layer near ground):
+	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;
+
+	float totalFog = max(distFog, heightFog);
+	return -totalFog;
 }
 
 vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
@@ -90,10 +83,17 @@ void main() {
 	) + (1 - clampedTexCoords.x)*(
 		clampedTexCoords.y*directions[2] + (1 - clampedTexCoords.y)*directions[3]
 	);
-	float densityAdjustment = sqrt(dot(tanXY*(clampedTexCoords*2 - 1), tanXY*(clampedTexCoords*2 - 1)) + 1);
-	float dist = zFromDepth(texture(depthTexture, texCoords).r);
-	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
-	fragColor.rgb = applyFrontfaceFog(fogDistance, fog.color, fragColor.rgb);
+	float rawDepth = texture(depthTexture, texCoords).r;
+	// Only apply terrain/height fog to actual world geometry (rawDepth < 0.99999).
+	// Open sky background pixels (depth = 1.0) contain the skybox, stars, sun, and moon
+	// which sit in outer space and must never be overwritten by atmospheric fog:
+	if (rawDepth < 0.99999) {
+		float densityAdjustment = sqrt(dot(tanXY*(clampedTexCoords*2 - 1), tanXY*(clampedTexCoords*2 - 1)) + 1);
+		float dist = zFromDepth(rawDepth);
+		float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
+		float fogDistance = calculateFogDistance(dist, densityAdjustment, playerWorldZ, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
+		fragColor.rgb = applyFrontfaceFog(fogDistance, fog.color, fragColor.rgb);
+	}
 	float maxColor = max(1.0, max(fragColor.r, max(fragColor.g, fragColor.b)));
 	fragColor.rgb = fragColor.rgb/maxColor;
 }

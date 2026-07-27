@@ -52,6 +52,8 @@ const UniformStruct = struct {
 	csmTexelSize: c_int,         // float at location 50
 	handLightPositionRelative: c_int,
 	handLightColor: c_int,
+	dropLightPositionRelative: c_int,
+	dropLightColor: c_int,
 	handLightRadius: c_int,
 };
 pub var uniforms: UniformStruct = undefined;
@@ -234,6 +236,8 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 
 	c.glUniform3fv(locations.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
 	c.glUniform3fv(locations.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
+	c.glUniform3fv(locations.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
+	c.glUniform3fv(locations.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
 	c.glUniform1f(locations.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 }
 

@@ -13,6 +13,7 @@ layout(location = 6) flat out int isBackFace;
 layout(location = 7) flat out float distanceForLodCheck;
 layout(location = 8) flat out int opaqueInLod;
 layout(location = 9) out vec3 outBlockLight;
+layout(location = 10) flat out int isFoliage;
 
 layout(location = 0) uniform vec3 ambientLight;
 
@@ -35,6 +36,7 @@ struct QuadInfo {
 	vec2 cornerUV[4];
 	uint textureSlot;
 	int opaqueInLod;
+	int isFoliage;
 };
 
 layout(std430, binding = 4) buffer _quads
@@ -106,4 +108,5 @@ void main() {
 	distanceForLodCheck = length(mvPos.xyz) + voxelSize;
 	uv = quads[quadIndex].cornerUV[vertexID]*voxelSize;
 	opaqueInLod = quads[quadIndex].opaqueInLod;
+	isFoliage = quads[quadIndex].isFoliage;
 }

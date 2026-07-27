@@ -12,6 +12,7 @@ layout(location = 6) flat in int isBackFace;
 layout(location = 7) flat in float distanceForLodCheck;
 layout(location = 8) flat in int opaqueInLod;
 layout(location = 9) in vec3 outBlockLight;
+layout(location = 10) flat in int isFoliage;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -27,6 +28,8 @@ layout(location = 7) uniform float lodDistance;
 
 uniform vec3 handLightPositionRelative;
 uniform vec3 handLightColor;
+uniform vec3 dropLightPositionRelative;
+uniform vec3 dropLightColor;
 uniform float handLightRadius;
 
 layout(std430, binding = 1) buffer _animatedTexture
@@ -52,13 +55,24 @@ bool passDitherTest(float alpha) {
 }
 
 vec3 handLightContribution() {
-	if (handLightRadius == 0) return vec3(0);
+	if (handLightRadius == 0.0) return vec3(0.0);
 
-	float dist = length(direction - handLightPositionRelative);
-	float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
-	float atten = (1.0 - normDist) * (1.0 - normDist); // Quadratic falloff: smooth, long transition where furthest light hit is darkest
-	float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist); // Close-range highlight boost when torch/lamp is right next to a block
-	return handLightColor * atten * peakHighlight;
+	vec3 totalLight = vec3(0.0);
+	if (handLightColor != vec3(0.0)) {
+		float dist = length(direction - handLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += handLightColor * atten * peakHighlight;
+	}
+	if (dropLightColor != vec3(0.0)) {
+		float dist = length(direction - dropLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += dropLightColor * atten * peakHighlight;
+	}
+	return totalLight;
 }
 
 vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012/02/seamless-cube-map-filtering/
@@ -82,20 +96,46 @@ void main() {
 	reflectivity = reflectivity*fixedCubeMapLookup(reflect(direction, normal)).x;
 	reflectivity = reflectivity*(1 - fresnelReflection) + fresnelReflection;
 
-	bool isFoliage = opaqueInLod == 0;
-	float shadowFactor = sampleSunShadow(direction, normal, length(mvVertexPos), isFoliage)*sampleCloudShadow(direction);
+	// isFoliage (the vertex-attribute int) is a real per-model flag set by models.zig from each model's
+	// .zig.zon (`isFoliage = true`), NOT derived from opaqueInLod. opaqueInLod==0 also covers any
+	// non-face-aligned procedural geometry (branches, ore veins), which used to wrongly get grass's
+	// SSS/root-AO/shadow self-occlusion handling below just because it isn't flat on a block boundary.
+	bool shadedAsFoliage = isFoliage != 0;
+	float shadowFactor = sampleSunShadow(direction, normal, length(mvVertexPos), shadedAsFoliage)*sampleCloudShadow(direction);
 
 	vec3 effectiveSunLight = outSunLight;
 	// Subsurface Scattering (SSS) / Translucency for foliage (grass blades, flowers, crops):
 	// Direct sunlight penetrating thin plant tissue causes the back face of grass to glow brightly.
 	// Applied to outSunLight only (not outBlockLight) — this is specifically light passing through leaf
 	// tissue from the sun/moon side, a torch's blockLight doesn't participate.
-	if (isFoliage) {
+	if (shadedAsFoliage) {
 		vec3 lightDir = normalize(sunDirection);
 		float NdotL = dot(normal, lightDir);
-		float sssTranslucency = clamp(0.5 - 0.5 * NdotL, 0.0, 0.25);
+
+		// Grass/plant cross-quads are vertical planes with *horizontal* normals (cross.obj: normals are
+		// (+-0.707, +-0.707, 0), Z being up), so with the sun anywhere near overhead NdotL is ~0 for every
+		// blade regardless of which way it faces. The previous `clamp(0.5 - 0.5*NdotL, 0.0, 0.25)` therefore
+		// sat pinned at its 0.25 maximum from morning to evening: not a translucency term at all in
+		// practice, just a flat +25% brightener that made foliage read as permanently lighter than the very
+		// ground it grows out of (it only fell below max once NdotL > 0.5, i.e. the sun within 60 degrees of
+		// a blade's horizontal normal — sunrise/sunset only).
+		//
+		// Light actually passing *through* a blade requires the sun behind it and low enough to shine
+		// sideways through the plane, so gate the effect on both of those. With the sun overhead this is 0
+		// and foliage matches the surrounding ground exactly; at sunrise/sunset back-lit blades pick up a
+		// gentle rim glow, which is when real grass visibly glows.
+		float backLight = clamp(-NdotL, 0.0, 1.0);
+		float sunLowness = 1.0 - clamp(abs(lightDir.z), 0.0, 1.0);
+		float sssTranslucency = backLight * sunLowness * 0.18;
 		float sssIntensity = isSunlight ? 1.0 : 0.1;
-		float rootAO = mix(0.70, 1.0, smoothstep(0.0, 0.4, min(uv.y, 1.0 - uv.y)));
+
+		// uv.y runs 0 at the blade root to 1 at the tip (cross.obj maps z=0 -> v=0, z=1 -> v=1). The old
+		// `min(uv.y, 1.0 - uv.y)` was symmetric, so it darkened the tip just as much as the root, and at LOD
+		// distance (chunk_vertex.vert scales uv by voxelSize, pushing uv.y above 1) `1.0 - uv.y` went
+		// negative and flat-darkened *all* distant foliage by the full 30%. Only the root — genuinely
+		// occluded by surrounding blades and the ground — should darken.
+		float rootAO = mix(0.70, 1.0, smoothstep(0.0, 0.4, uv.y));
+
 		effectiveSunLight = outSunLight * (1.0 + sssTranslucency * sssIntensity) * rootAO;
 	}
 

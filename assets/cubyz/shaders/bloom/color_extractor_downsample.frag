@@ -47,24 +47,14 @@ float densityIntegral(float dist, float zStart, float zDist, float fogLower, flo
 	return (endLower - beginLower + midIntegral)/zDist*dist;
 }
 
-float calculateFogDistance(float dist, float densityAdjustment, float zStart, float zScale, float fogDensity, float fogLower, float fogHigher) {
-	float distCameraTerrain = densityIntegral(dist*densityAdjustment, zStart, zScale*dist*densityAdjustment, fogLower, fogHigher)*fogDensity;
-	float distFromCamera = 0;
-	float distFromTerrain = distFromCamera - distCameraTerrain;
-	if(distCameraTerrain < 10) { // Resolution range is sufficient.
-		return distFromTerrain;
-	} else {
-		// Here we have a few options to deal with this. We could for example weaken the fog effect to fit the entire range.
-		// I decided to keep the fog strength close to the camera and far away, with a fog-free region in between.
-		// I decided to this because I want far away fog to work (e.g. a distant ocean) as well as close fog(e.g. the top surface of the water when the player is under it)
-		if(distFromTerrain > -5 && dist != 0) {
-			return distFromTerrain;
-		} else if(distFromCamera < 5) {
-			return distFromCamera - 10;
-		} else {
-			return -5;
-		}
-	}
+float calculateFogDistance(float dist, float densityAdjustment, float playerWorldZ, float zScale, float fogDensity, float fogLower, float fogHigher) {
+	float effectiveDist = dist * densityAdjustment;
+
+	float distFog = effectiveDist * fogDensity;
+	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;
+
+	float totalFog = max(distFog, heightFog);
+	return -totalFog;
 }
 
 vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
@@ -78,10 +68,13 @@ vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
 vec3 fetch(ivec2 pos) {
 	vec4 rgba = texelFetch(color, pos, 0);
 	float densityAdjustment = sqrt(dot(tanXY*(normalizedTexCoords*2 - 1), tanXY*(normalizedTexCoords*2 - 1)) + 1);
-	float dist = zFromDepth(texelFetch(depthTexture, pos, 0).r);
-	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
-	vec3 fogColor = fog.color;
-	rgba.rgb = applyFrontfaceFog(fogDistance, fog.color, rgba.rgb);
+	float rawDepth = texelFetch(depthTexture, pos, 0).r;
+	if (rawDepth < 0.99999) {
+		float dist = zFromDepth(rawDepth);
+		float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
+		float fogDistance = calculateFogDistance(dist, densityAdjustment, playerWorldZ, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
+		rgba.rgb = applyFrontfaceFog(fogDistance, fog.color, rgba.rgb);
+	}
 	return rgba.rgb/rgba.a;
 }
 

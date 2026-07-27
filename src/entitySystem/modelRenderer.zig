@@ -52,6 +52,8 @@ pub const client = struct {
 		isSunlight: c_int,
 		handLightPositionRelative: c_int,
 		handLightColor: c_int,
+		dropLightPositionRelative: c_int,
+		dropLightColor: c_int,
 		handLightRadius: c_int,
 	} = undefined;
 
@@ -175,6 +177,8 @@ pub const client = struct {
 		c.glUniform1i(uniforms.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
 		c.glUniform3fv(uniforms.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
 		c.glUniform3fv(uniforms.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
+		c.glUniform3fv(uniforms.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
+		c.glUniform3fv(uniforms.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
 		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 
 		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();

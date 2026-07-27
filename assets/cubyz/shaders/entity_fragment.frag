@@ -16,17 +16,32 @@ layout(binding = 0) uniform sampler2D textureSampler;
 layout(location = 5) uniform float contrast;
 
 uniform vec3 handLightPositionRelative;
-uniform vec3 handLightColor; // zero when nothing light-emitting is currently held
+uniform vec3 handLightColor;
+uniform vec3 dropLightPositionRelative;
+uniform vec3 dropLightColor;
 uniform float handLightRadius;
 
-// Real-time point light following the player's held item (e.g. a torch) — see chunk_fragment.frag's
+// Real-time point light following the player's held item or dropped item — see chunk_fragment.frag's
 // identical function for the full explanation.
 vec3 handLightContribution(vec3 worldPosRelative) {
-	float dist = length(worldPosRelative - handLightPositionRelative);
-	float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
-	float atten = (1.0 - normDist) * (1.0 - normDist);
-	float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
-	return handLightColor * atten * peakHighlight;
+	if (handLightRadius == 0.0) return vec3(0.0);
+
+	vec3 totalLight = vec3(0.0);
+	if (handLightColor != vec3(0.0)) {
+		float dist = length(worldPosRelative - handLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += handLightColor * atten * peakHighlight;
+	}
+	if (dropLightColor != vec3(0.0)) {
+		float dist = length(worldPosRelative - dropLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += dropLightColor * atten * peakHighlight;
+	}
+	return totalLight;
 }
 
 float lightVariation(vec3 normal) {
@@ -67,7 +82,8 @@ void main() {
 	float effectiveShadow = mix(shadowFactor, 1.0, clamp(handIntensity * 3.0, 0.0, 1.0));
 
 	vec3 directSunAndShadow = outSunLight * effectiveShadow;
-	vec3 selfEmission = (handLightRadius > 0.0) ? handLightColor * 0.7 : vec3(0.0);
+	vec3 activeLightColor = max(handLightColor, dropLightColor);
+	vec3 selfEmission = (handLightRadius > 0.0) ? activeLightColor * 0.7 : vec3(0.0);
 	vec3 light = min(max(directSunAndShadow + handLight + outBlockLight, selfEmission), vec3(1.0));
 	fragColor = texture(textureSampler, outTexCoord)*vec4(light*lightVariation(normal), 1);
 	if(!passDitherTest(fragColor.a)) discard;

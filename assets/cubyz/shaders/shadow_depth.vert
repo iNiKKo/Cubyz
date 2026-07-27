@@ -21,6 +21,7 @@ struct QuadInfo {
 	vec2 cornerUV[4];
 	uint textureSlot;
 	int opaqueInLod;
+	int isFoliage;
 };
 layout(std430, binding = 4) buffer _quads
 {
@@ -52,6 +53,25 @@ void main() {
 	);
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
+
+	if (quads[quadIndex].isFoliage != 0) {
+		// Shift foliage's recorded shadow-map position toward the sun before writing depth. This is what
+		// actually closes the gap between a grass blade's base and where its ground shadow starts — every
+		// bias tried on the *sampling* side (shadow.glsl) only adjusts how tolerant the read-back is, it
+		// can never move where the occluder itself was recorded. This shift was present in an earlier
+		// revision (git 71efa93b, "New shadows for grass") gated on the old `opaqueInLod == 0` (which also
+		// wrongly caught branches/ore, see the isFoliage/opaqueInLod fix elsewhere), then deleted entirely
+		// in a later revision (git 4b9bcd0d) — that deletion is why no amount of shadow.glsl bias tuning
+		// after that point ever visibly closed the gap. Restored here gated on the real per-quad isFoliage
+		// flag instead.
+		vec3 lightDir = sunDirection;
+		float sLen = length(lightDir);
+		if (sLen > 1e-4) {
+			lightDir /= sLen;
+			position += lightDir * 0.25;
+		}
+	}
+
 	position *= voxelSize;
 	position += vec3(chunks[chunkID].position.xyz - playerPositionInteger);
 	position -= playerPositionFraction;
