@@ -1,8 +1,12 @@
 #version 460
 
+#include "frame_uniforms.glsl"
+#include "shadow.glsl"
+
 layout(location = 0) in vec2 outTexCoord;
 layout(location = 1) in vec3 mvVertexPos;
-layout(location = 2) in vec3 outLight;
+layout(location = 2) in vec3 outSunLight;
+layout(location = 4) in vec3 outBlockLight;
 layout(location = 3) flat in vec3 normal;
 
 layout(location = 0) out vec4 fragColor;
@@ -11,10 +15,26 @@ layout(binding = 0) uniform sampler2D textureSampler;
 
 layout(location = 5) uniform float contrast;
 
+uniform vec3 handLightPositionRelative;
+uniform vec3 handLightColor; // zero when nothing light-emitting is currently held
+uniform float handLightRadius;
+
+// Real-time point light following the player's held item (e.g. a torch) — see chunk_fragment.frag's
+// identical function for the full explanation.
+vec3 handLightContribution(vec3 worldPosRelative) {
+	float dist = length(worldPosRelative - handLightPositionRelative);
+	float atten = clamp(1.0 - dist/handLightRadius, 0.0, 1.0);
+	return handLightColor*sqrt(atten); // gentler than atten*atten — stays bright through most of the radius, only tapers sharply near the edge
+}
+
 float lightVariation(vec3 normal) {
 	const vec3 directionalPart = vec3(0, contrast/2, contrast);
 	const float baseLighting = 1 - contrast;
 	return baseLighting + dot(normal, directionalPart);
+}
+
+vec3 square(vec3 x) {
+	return x*x;
 }
 
 float ditherThresholds[16] = float[16] (
@@ -38,7 +58,12 @@ bool passDitherTest(float alpha) {
 }
 
 void main() {
-	fragColor = texture(textureSampler, outTexCoord)*vec4(outLight*lightVariation(normal), 1);
+	vec3 worldPosRelative = transpose(mat3(viewMatrix))*mvVertexPos;
+	float shadowFactor = sampleSunShadow(worldPosRelative, normal, length(mvVertexPos), false)*sampleCloudShadow(worldPosRelative);
+	// See chunk_fragment.frag's identical line: max lets torchlight fully mask nearby sun-shadow instead
+	// of only partially brightening it.
+	vec3 light = min(max(max(outSunLight*shadowFactor, outBlockLight), handLightContribution(worldPosRelative)), vec3(1));
+	fragColor = texture(textureSampler, outTexCoord)*vec4(light*lightVariation(normal), 1);
 	if(!passDitherTest(fragColor.a)) discard;
 	fragColor.a = 1;
 }

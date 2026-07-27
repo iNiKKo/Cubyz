@@ -309,6 +309,52 @@ pub const Mat4f = struct { // MARK: Mat4f
 		};
 	} // zig fmt: on
 
+	/// Orthographic projection following the same convention as perspective(): view space is
+	/// X = right, Y = forward/depth, Z = up. Maps view.x in [-width/2, width/2] and view.z in
+	/// [-height/2, height/2] to clip [-1, 1], and view.y in [near, far] to clip depth [-1, 1].
+	pub fn orthographic(width: f32, height: f32, near: f32, far: f32) Mat4f { // zig fmt: off
+		return Mat4f{
+			.rows = [4]Vec4f{
+				Vec4f{2/width, 0,             0,       0},
+				Vec4f{0,       0,             2/height, 0},
+				Vec4f{0,       2/(far - near), 0,       -(far + near)/(far - near)},
+				Vec4f{0,       0,             0,       1},
+			},
+		};
+	} // zig fmt: on
+
+	/// Rotation-only view matrix that looks along `forward` (an arbitrary, non-unit direction is fine).
+	/// Used to build the light-space view matrix for shadow mapping, mirroring how game.camera's view
+	/// matrix is a pure rotation around the player (positions are already player-relative).
+	///
+	/// The perpendicular (right, trueUp) basis is built with the branchless orthonormal-basis
+	/// construction from Duff et al., "Building an Orthonormal Basis, Revisited" (2017), rather than
+	/// the more common `cross(forward, upReference)` with a hard-switched upReference. That older
+	/// approach has a hard discontinuity exactly where `abs(dot(fwd, up)) > 0.999` flips which
+	/// reference vector is used: the whole right/trueUp basis instantly re-orients by ~90 degrees.
+	/// Since the sun direction fed in here sweeps up toward vertical (z -> 1) around midday, that
+	/// discontinuity was hit constantly and showed up as a sudden shadow-map re-orientation — visible
+	/// as tree/block textures looking stretched or "swimming" whenever the sun was high overhead. The
+	/// Duff construction has no reference vector and no branch: it stays smooth all the way to z = 1,
+	/// which is exactly the region the elevation clamp above (min z = 0.18) keeps every light
+	/// direction within (z in [0.18, 1], never crossing the construction's own seam at z = 0).
+	pub fn lookInDirection(forward: Vec3f) Mat4f {
+		const fwd = normalize(forward);
+		const sign: f32 = std.math.copysign(@as(f32, 1.0), fwd[2]);
+		const a = -1.0/(sign + fwd[2]);
+		const b = fwd[0]*fwd[1]*a;
+		const right = Vec3f{1.0 + sign*fwd[0]*fwd[0]*a, sign*b, -sign*fwd[0]};
+		const trueUp = Vec3f{b, sign + fwd[1]*fwd[1]*a, -fwd[1]};
+		return Mat4f{
+			.rows = [4]Vec4f{
+				Vec4f{right[0], right[1], right[2], 0},
+				Vec4f{fwd[0], fwd[1], fwd[2], 0},
+				Vec4f{trueUp[0], trueUp[1], trueUp[2], 0},
+				Vec4f{0, 0, 0, 1},
+			},
+		};
+	}
+
 	pub fn transpose(self: Mat4f) Mat4f {
 		return Mat4f{
 			.rows = [4]Vec4f{

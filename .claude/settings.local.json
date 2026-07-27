@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"gravity\\\\|up\\\\b\\\\|Vec3f{0, 0\" /home/nick/Desktop/Cubyz/src/physics.zig)",
+      "Bash(xargs -I{} echo {})",
+      "Bash(xargs cat)",
+      "Bash(zig version *)",
+      "Bash(find / -maxdepth 4 -iname \"zig\" -type f)",
+      "Read(//home/nick/**)",
+      "Bash(apt list *)",
+      "Bash(find / -xdev -maxdepth 6 -iname \"zig\")",
+      "Read(//usr/local/**)",
+      "Bash(snap list *)",
+      "Bash(flatpak list *)",
+      "Bash(timeout 300 zig build)",
+      "Bash(git -C /home/nick/Desktop/Cubyz diff HEAD -- src/settings.zig)",
+      "Bash(git -C /home/nick/Desktop/Cubyz diff HEAD -- src/renderer.zig)",
+      "Bash(git -C /home/nick/Desktop/Cubyz diff HEAD -- src/gui/windows/graphics.zig)",
+      "Bash(git -C /home/nick/Desktop/Cubyz status --porcelain=v1)",
+      "Bash(git -C /home/nick/Desktop/Cubyz diff --stat HEAD)",
+      "Bash(git -C /home/nick/Desktop/Cubyz diff HEAD -- src/graphics.zig)",
+      "Bash(sort -t= -k2 -n)",
+      "Bash(grep -n \"ShadowMap\\\\b\" /home/nick/Desktop/Cubyz/src/renderer.zig | head -5; sed -n '/pub const ShadowMap/,/^};/p' /home/nick/Desktop/Cubyz/src/renderer.zig | grep -n \"lightViewProjection\\\\s*=\\\\|orthographic\\\\|Mat4f.mul\\\\|lookInDirection\" | head -20)",
+      "Bash(grep -n \"Vec2f{0.5, -0.5}\\\\|0.5, -0.5\" /home/nick/Desktop/Cubyz/src/renderer.zig)",
+      "Bash(git status *)",
+      "Bash(zig build *)",
+      "Bash(find / -maxdepth 3 -iname \"zig\" -type f)",
+      "Bash(git rm *)"
+    ],
+    "additionalDirectories": [
+      "/home/nick/Desktop/Cubyz/src"
+    ]
+  }
+}

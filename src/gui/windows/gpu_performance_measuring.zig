@@ -17,6 +17,7 @@ pub const Samples = enum(u8) {
 	clear,
 	skybox,
 	animation,
+	shadow_rendering,
 	chunk_rendering_preparation,
 	chunk_rendering,
 	entity_rendering,
@@ -27,6 +28,7 @@ pub const Samples = enum(u8) {
 	bloom_extract_downsample,
 	bloom_first_pass,
 	bloom_second_pass,
+	god_rays,
 	final_copy,
 	gui,
 };
@@ -36,6 +38,7 @@ const names = [_][]const u8{
 	"Clear",
 	"Skybox",
 	"Pre-processing Block Animations",
+	"Shadow Map Rendering",
 	"Chunk Rendering Preparation",
 	"Chunk Rendering",
 	"Entity Rendering",
@@ -46,6 +49,7 @@ const names = [_][]const u8{
 	"Bloom - Extract color and downsample",
 	"Bloom - First Pass",
 	"Bloom - Second Pass",
+	"God Rays",
 	"Copy to screen",
 	"GUI Rendering",
 };

@@ -424,9 +424,55 @@ pub const World = struct { // MARK: World
 		fog: Fog = Fog{.skyColor = .{0.8, 0.8, 1}, .fogColor = .{0.8, 0.8, 1}, .density = 1.0/15.0/128.0, .fogLower = 100, .fogHigher = 1000},
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
+		/// How far (0-1) between `dayTime`'s current tick and the next, in real time — `dayTime` itself
+		/// only advances once every 100ms (see World.update()'s tick loop), so anything sampling it
+		/// directly holds a stale value for ~6 frames at 60fps and then jumps. getDayProgress() blends
+		/// this fraction in so the sun sweeps continuously instead.
+		dayTimeFraction: f32 = 0,
 
 		pub fn getDayProgress(self: *DayTime) f32 {
-			return @as(f32, @floatFromInt(self.dayTime))/@as(f32, @floatFromInt(dayCycleLength));
+			return (@as(f32, @floatFromInt(self.dayTime)) + self.dayTimeFraction)/@as(f32, @floatFromInt(dayCycleLength));
+		}
+
+		/// Direction pointing from the world toward the sun. Matches the rotation used by the star field
+		/// in Skybox.render() so the sun/moon stay visually consistent with the sky: zenith (+Z) at noon
+		/// (progress 0), nadir (-Z) at midnight (progress 0.5).
+		pub fn getSunDirection(self: *DayTime) Vec3f {
+			return vec.rotateX(Vec3f{0, 0, 1}, 2*std.math.pi*self.getDayProgress());
+		}
+
+		/// True (unclamped) direction of whichever celestial body is currently above the horizon — same
+		/// body selection as getShadowLightDirection(), but without its elevation clamp. Use this wherever
+		/// something needs to visually track the sun/moon's *real* position (e.g. god rays converging on
+		/// its actual screen position, or fading in lockstep with Skybox's own billboard/horizonFade)
+		/// rather than the shading-stabilized direction — getShadowLightDirection()'s clamp intentionally
+		/// makes shading disagree with the true position near the horizon, which is exactly wrong for
+		/// anything trying to visually follow the sun/moon itself.
+		pub fn getVisibleCelestialDirection(self: *DayTime) Vec3f {
+			const sunDir = self.getSunDirection();
+			return if (sunDir[2] >= 0) sunDir else -sunDir;
+		}
+
+		/// Direction of whichever celestial body (sun or moon) is currently above the horizon, for use
+		/// as the shadow-casting light direction. Falls back to the sun direction when both are below
+		/// the horizon (shouldn't normally happen, but keeps the result well-defined).
+		pub fn getShadowLightDirection(self: *DayTime) Vec3f {
+			var dir = self.getVisibleCelestialDirection();
+			// Clamp light elevation to a minimum of 0.35 (~20.5 degrees) to keep light projections
+			// stable and prevent infinite shadow stretching at sunset/sunrise. This also caps how long a
+			// caster's shadow can get: shadow length is roughly height/tan(elevation), so 0.35 caps that
+			// ratio at ~2.7x the caster's height (0.18, the previous value, allowed ~5.5x — a tall tree
+			// could throw a shadow that stretched for tens of blocks at low sun).
+			dir[2] = @max(dir[2], 0.35);
+			return vec.normalize(dir);
+		}
+
+		/// Whether getShadowLightDirection() is currently returning the sun's direction rather than the
+		/// moon's. Needed anywhere that treats sun-light and moonlight differently (color, intensity) —
+		/// checking getShadowLightDirection()[2] >= 0 does *not* work for this, since both the sun's and
+		/// the moon's direction satisfy that whenever *they* are the one currently active/above horizon.
+		pub fn isSunlight(self: *DayTime) bool {
+			return self.getSunDirection()[2] >= 0;
 		}
 
 		pub fn getStarOpacity(self: *DayTime) f32 {
@@ -457,6 +503,11 @@ pub const World = struct { // MARK: World
 
 		fn updateTimeOfDay(self: *DayTime) void {
 			self.dayTime = @intCast(@mod(world.?.gameTime.load(.monotonic), dayCycleLength));
+			// Real time elapsed since the last 100ms tick boundary World.update() advanced past, as a
+			// 0-1 fraction of the next tick — see dayTimeFraction's doc comment for why this matters.
+			const newTime: i64 = main.timestamp().toMilliseconds();
+			const millisSinceTick: f32 = @floatFromInt(newTime -% world.?.milliTime);
+			self.dayTimeFraction = std.math.clamp(millisSinceTick/100.0, 0.0, 1.0);
 		}
 
 		fn getSkyColorFactor(self: *DayTime) Vec3f {

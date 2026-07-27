@@ -33,6 +33,16 @@ layout(location = 3) uniform bool isTransparent;
 layout(location = 4) uniform bool onlyDrawPreviouslyInvisible;
 
 layout(location = 6) uniform float lodDistance;
+// Set for the sun/moon shadow depth pass: that pass needs every opaque face of every chunk
+// getShadowRenderChunks() gathered (occluders 360 degrees around the player, not just what the main
+// camera can currently see), so it must bypass both the per-face-direction "is this face generally
+// facing the player" cull below and the oldVisibilityState gate (which reflects the main camera's
+// occlusion-query visibility, not whether something should cast a shadow). Without this, a chunk the
+// main camera currently considers invisible/occluded — e.g. behind the player after they turn around —
+// contributed zero draw commands here even though shadow_depth.vert/.frag's own cullMode is already set
+// to "render all faces" for exactly this reason: that setting only helps once a face is actually
+// submitted, and this compute pass is what decides which faces get submitted at all.
+layout(location = 7) uniform bool forceAllVisible;
 
 bool isVisible(int dir, ivec3 playerDist) {
 	switch(dir) {
@@ -79,11 +89,11 @@ void main() {
 		if(playerDist.z > 0) playerDist.z = max(0, playerDist.z - 32*chunks[chunkID].voxelSize);
 		float playerDistSquare = dot(playerDist, playerDist);
 
-		if((onlyDrawPreviouslyInvisible && chunks[chunkID].oldVisibilityState == 0 && chunks[chunkID].visibilityState != 0) || (chunks[chunkID].oldVisibilityState != 0 && !onlyDrawPreviouslyInvisible)) {
+		if(forceAllVisible || (onlyDrawPreviouslyInvisible && chunks[chunkID].oldVisibilityState == 0 && chunks[chunkID].visibilityState != 0) || (chunks[chunkID].oldVisibilityState != 0 && !onlyDrawPreviouslyInvisible)) {
 			for(int i = 0; i < 14; i++) {
 				if(playerDistSquare >= lodDistance*lodDistance && i == 7) break;
 				uint faceCount = chunks[chunkID].faceCountsByNormalOpaque[i];
-				if(isVisible(i%7, playerDist) || faceCount == 0) {
+				if(forceAllVisible || isVisible(i%7, playerDist) || faceCount == 0) {
 					groupFaceCount += faceCount;
 				} else {
 					if(groupFaceCount != 0) {

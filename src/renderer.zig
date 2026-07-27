@@ -29,6 +29,9 @@ const c = @import("c");
 pub const chunk_meshing = @import("renderer/chunk_meshing.zig");
 pub const lighting = @import("renderer/lighting.zig");
 pub const mesh_storage = @import("renderer/mesh_storage.zig");
+pub const clouds = @import("renderer/clouds.zig");
+pub const thin_clouds = @import("renderer/thin_clouds.zig");
+pub const rain = @import("renderer/rain.zig");
 
 /// Time after which no more chunk meshes are created. This allows the game to run smoother on movement.
 const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
@@ -45,6 +48,7 @@ var deferredUniforms: struct {
 	zNear: c_int,
 	zFar: c_int,
 	invViewMatrix: c_int,
+	godRayTint: c_int,
 } = undefined;
 var fakeReflectionPipeline: graphics.Pipeline = undefined;
 var fakeReflectionUniforms: struct {
@@ -86,9 +90,15 @@ pub fn init() void {
 	worldFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
 	worldFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
 	Bloom.init();
+	GodRays.init();
 	MeshSelection.init();
 	MenuBackGround.init();
 	Skybox.init();
+	ShadowRaymarch.init();
+	CascadedShadowMap.init();
+	clouds.init();
+	thin_clouds.init();
+	rain.init();
 	chunk_meshing.init();
 	mesh_storage.init();
 	reflectionCubeMap = .init();
@@ -101,9 +111,15 @@ pub fn deinit() void {
 	fakeReflectionPipeline.deinit();
 	worldFrameBuffer.deinit();
 	Bloom.deinit();
+	GodRays.deinit();
 	MeshSelection.deinit();
 	MenuBackGround.deinit();
 	Skybox.deinit();
+	ShadowRaymarch.deinit();
+	CascadedShadowMap.deinit();
+	clouds.deinit();
+	thin_clouds.deinit();
+	rain.deinit();
 	mesh_storage.deinit();
 	chunk_meshing.deinit();
 	reflectionCubeMap.deinit();
@@ -153,7 +169,16 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	std.debug.assert(game.world != null);
 
 	const nightColor: Vec3f = .{0.3, 0.4, 0.5};
-	const ambient = @max(nightColor*@as(Vec3f, @splat(settings.nightBrightness)), @as(Vec3f, @splat(game.world.?.dayTime.ambientLight)));
+	var ambient = @max(nightColor*@as(Vec3f, @splat(settings.nightBrightness)), @as(Vec3f, @splat(game.world.?.dayTime.ambientLight)));
+	if (settings.shadows) {
+		// Shadows only ever remove light (shadowed ground loses brightness no matter how bright the sky
+		// is), so a scene with shadows on reads as noticeably duller overall than the same scene with
+		// shadows off, even in the fully-lit areas — bump the ambient floor to compensate. Capped well
+		// short of blowing out fully-lit surfaces to white, and shadowed areas still read as darker than
+		// lit ones (this boosts the light shadows are subtracted *from*, not shadowAmbientFloor itself
+		// in shadow.glsl, so shadow contrast is preserved).
+		ambient = @min(ambient*@as(Vec3f, @splat(1.25)), @as(Vec3f, @splat(1.0)));
+	}
 
 	itemdrop.ItemDisplayManager.update(deltaTime);
 	renderWorld(game.world.?, ambient, game.world.?.dayTime.fog.skyColor, playerPosition);
@@ -182,6 +207,21 @@ pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: 
 
 	const adjusted = forwards + horizontal + vertical;
 	return adjusted;
+}
+
+/// Projects a world-space *direction* (e.g. the sun's direction, not a position) into screen-space
+/// texture coordinates ([0,1]x[0,1]). No Y flip: matches this codebase's own fullscreen-quad convention
+/// (`gl_Position = vec4(inTexCoords*2 - 1, 0, 1)` in mask.vert/blur.vert/deferred_render_pass.vert —
+/// inTexCoords and NDC share the same Y direction, unflipped) rather than the more common
+/// texture-sampling Y-down convention, which would otherwise vertically mirror the result relative to
+/// where the sun/moon's own billboard actually renders. Returns null if the direction is behind the
+/// camera (`clip[3] <= 0`), since a screen position isn't meaningful there — callers (god rays) should
+/// fall back to their disabled/faded-out path in that case.
+fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
+	const clip = viewProj.mulVec(Vec4f{dir[0], dir[1], dir[2], 0});
+	if (clip[3] <= 1e-4) return null;
+	const ndc = vec.xy(clip)/@as(Vec2f, @splat(clip[3]));
+	return ndc*@as(Vec2f, @splat(0.5)) + Vec2f{0.5, 0.5};
 }
 
 pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void { // MARK: renderWorld()
@@ -232,6 +272,20 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	chunk_meshing.beginRender();
 
+	if (settings.shadows) {
+		gpu_performance_measuring.stopQuery();
+		gpu_performance_measuring.startQuery(.shadow_rendering);
+		ShadowRaymarch.update(playerPos);
+		CascadedShadowMap.update(playerPos);
+		gpu_performance_measuring.stopQuery();
+		gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
+	}
+
+	// Must run before opaque terrain draws: terrain samples the cloud coverage texture this uploads
+	// for cloud shadows, even though the clouds' own geometry isn't drawn until later (clouds.draw()).
+	clouds.update(playerPos);
+	rain.update(playerPos, game.camera.viewMatrix);
+
 	var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
 	defer for (chunkLists) |list| list.deinit();
 	for (meshes) |mesh| {
@@ -244,6 +298,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	gpu_performance_measuring.startQuery(.entity_rendering);
 	main.entity.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
+	// Entities don't cast shadows: the voxel raymarch (see ShadowRaymarch) only tests against static
+	// terrain occupancy, not entity meshes.
 
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
 	gpu_performance_measuring.stopQuery();
@@ -284,6 +340,22 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
+	// Drawn after transparent blocks (ice, glass, water, ...), not before: those don't write depth (see
+	// transparentPipeline's .depthWrite = false), so a cloud in front of one couldn't otherwise occlude
+	// it — the transparent block would draw right over the cloud regardless of which was actually closer
+	// to the camera, showing through "perfectly clear" instead of being obscured like opaque terrain
+	// already correctly is. Drawing clouds last composites them over both opaque and transparent geometry
+	// alike, using the same depth test (against the opaque depth buffer, still the only depth transparent
+	// draws leave behind) that already made clouds correctly occlude opaque blocks.
+	clouds.draw(ambientLight, skyColor);
+	// Thin wispy high-altitude layer, drawn on top of the main clouds per user request — see
+	// thin_clouds.zig; deliberately a separate module/pipeline/shaders from clouds.zig.
+	thin_clouds.draw(ambientLight, skyColor, playerPos);
+	// Same depth-test-against-opaque-and-transparent reasoning as clouds.draw() above — drops behind a
+	// wall should be hidden, and transparent blocks don't write depth so this still needs to run after
+	// them, not before.
+	rain.draw();
+
 	c.glDepthRange(0, 0.001);
 	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
 	c.glDepthRange(0.001, 1);
@@ -298,6 +370,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		Bloom.render(lastWidth, lastHeight, playerBlock, game.camera.viewMatrix);
 	} else {
 		Bloom.bindReplacementImage();
+	}
+	if (settings.godRays) {
+		gpu_performance_measuring.startQuery(.god_rays);
+		GodRays.render(lastWidth, lastHeight, game.camera.viewMatrix);
+		gpu_performance_measuring.stopQuery();
+	} else {
+		GodRays.bindReplacementImage();
 	}
 	gpu_performance_measuring.startQuery(.final_copy);
 	if (activeFrameBuffer == 0) c.glViewport(0, 0, main.Window.width, main.Window.height);
@@ -321,6 +400,17 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	c.glUniform1f(deferredUniforms.zNear, zNear);
 	c.glUniform1f(deferredUniforms.zFar, zFar);
 	c.glUniform2f(deferredUniforms.tanXY, 1.0/game.projectionMatrix.rows[0][0], 1.0/game.projectionMatrix.rows[1][2]);
+	{
+		// Sun-colored during the day, moon-colored (near-white, not warm yellow) at night — matches
+		// Skybox.drawCelestial's own tints for the two bodies, so the ray color agrees with whichever
+		// billboard is actually visible. Was checking getShadowLightDirection()[2] >= 0, which is true
+		// for *both* bodies whenever each is the one currently active (that's exactly the condition
+		// under which getShadowLightDirection returns them) — always picked the sun's warm tint even at
+		// night. isSunlight() actually distinguishes which body is providing the light.
+		const isSunlight = game.world.?.dayTime.isSunlight();
+		const tint: Vec3f = if (isSunlight) Vec3f{1.0, 0.9, 0.6} else Vec3f{0.9, 0.92, 0.95};
+		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
+	}
 
 	c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
 
@@ -471,6 +561,165 @@ const Bloom = struct { // MARK: Bloom
 
 	fn bindReplacementImage() void {
 		emptyBuffer.bindTo(5);
+	}
+};
+
+/// Screen-space volumetric light shafts ("god rays"), radiating from wherever the sun/moon peeks
+/// through gaps in terrain/foliage. Classic two-pass technique (mask, then radial blur toward the
+/// light's screen position) rather than true 3D ray-marching — cheaper, and needs no new depth-pyramid
+/// infrastructure. Mirrors Bloom's overall shape (quarter-res buffer(s), publish result on a free
+/// texture unit for the final composite to additively sample) but only needs one blur pass, since a
+/// radial blur isn't separable the way Bloom's two-pass Gaussian is.
+const GodRays = struct { // MARK: GodRays
+	var maskBuffer: graphics.FrameBuffer = undefined;
+	var rayBuffer: graphics.FrameBuffer = undefined;
+	var emptyBuffer: graphics.Texture = undefined;
+	var width: u31 = std.math.maxInt(u31);
+	var height: u31 = std.math.maxInt(u31);
+	var maskPipeline: graphics.Pipeline = undefined;
+	var maskUniforms: struct {
+		invViewMatrix: c_int,
+		tanXY: c_int,
+		cloudCoverageOrigin: c_int,
+		cloudCoverageWorldSize: c_int,
+		cloudHeightRelative: c_int,
+		sunDirection: c_int,
+		sunScreenPos: c_int,
+		aspectRatio: c_int,
+	} = undefined;
+	var blurPipeline: graphics.Pipeline = undefined;
+	var blurUniforms: struct {
+		sunScreenPos: c_int,
+		strength: c_int,
+	} = undefined;
+
+	pub fn init() void {
+		maskBuffer.init(false, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+		rayBuffer.init(false, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+		emptyBuffer = .init();
+		emptyBuffer.generate(graphics.Image.emptyImage);
+		maskPipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/godrays/mask.vert",
+			"assets/cubyz/shaders/godrays/mask.frag",
+			"",
+			&maskUniforms,
+			graphics.draw.SimpleVertex2D,
+			&.{},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.noBlending}},
+		);
+		blurPipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/godrays/blur.vert",
+			"assets/cubyz/shaders/godrays/blur.frag",
+			"",
+			&blurUniforms,
+			graphics.draw.SimpleVertex2D,
+			&.{},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.noBlending}},
+		);
+	}
+
+	pub fn deinit() void {
+		maskBuffer.deinit();
+		rayBuffer.deinit();
+		maskPipeline.deinit();
+		blurPipeline.deinit();
+	}
+
+	// Far off-screen sentinel used when the sun/moon is behind the camera: both passes naturally
+	// produce zero contribution (the mask's proximity test never triggers, and blurPass separately
+	// zeroes `strength`) without either shader needing a special "is there even a light source" branch.
+	const offScreenSentinel = Vec2f{-10, -10};
+
+	fn maskPass(viewMatrix: Mat4f, sunDirection: Vec3f, sunScreenPos: Vec2f, aspectRatio: f32) void {
+		maskPipeline.bind(null);
+		worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
+		// Cloud coverage texture (unit 9) was already bound by clouds.update() earlier this frame and
+		// nothing has rebound that unit since — no need to rebind it here.
+		maskBuffer.bind();
+
+		c.glUniformMatrix4fv(maskUniforms.invViewMatrix, 1, c.GL_TRUE, @ptrCast(&viewMatrix.transpose()));
+		c.glUniform2f(maskUniforms.tanXY, 1.0/game.projectionMatrix.rows[0][0], 1.0/game.projectionMatrix.rows[1][2]);
+		c.glUniform2f(maskUniforms.cloudCoverageOrigin, clouds.coverageOriginRelative[0], clouds.coverageOriginRelative[1]);
+		c.glUniform1f(maskUniforms.cloudCoverageWorldSize, clouds.coverageWorldSize);
+		c.glUniform1f(maskUniforms.cloudHeightRelative, clouds.cloudHeightRelative);
+		c.glUniform3fv(maskUniforms.sunDirection, 1, @ptrCast(&sunDirection));
+		c.glUniform2f(maskUniforms.sunScreenPos, sunScreenPos[0], sunScreenPos[1]);
+		c.glUniform1f(maskUniforms.aspectRatio, aspectRatio);
+
+		graphics.draw.rectVao.bind();
+		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+	}
+
+	fn blurPass(sunScreenPos: Vec2f, strength: f32) void {
+		blurPipeline.bind(null);
+		maskBuffer.bindTexture(c.GL_TEXTURE3);
+		rayBuffer.bind();
+
+		c.glUniform2f(blurUniforms.sunScreenPos, sunScreenPos[0], sunScreenPos[1]);
+		c.glUniform1f(blurUniforms.strength, strength);
+
+		graphics.draw.rectVao.bind();
+		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+	}
+
+	fn render(currentWidth: u31, currentHeight: u31, viewMatrix: Mat4f) void {
+		if (width != currentWidth or height != currentHeight) {
+			width = currentWidth;
+			height = currentHeight;
+			maskBuffer.updateSize(width/4, height/4, c.GL_R11F_G11F_B10F);
+			std.debug.assert(maskBuffer.validate());
+			rayBuffer.updateSize(width/4, height/4, c.GL_R11F_G11F_B10F);
+			std.debug.assert(rayBuffer.validate());
+		}
+
+		// The *true* (unclamped) direction — deliberately not getShadowLightDirection(), whose elevation
+		// clamp keeps shading stable near the horizon but means it disagrees with where the sun/moon
+		// actually is. God rays need to visually track the real body: using the clamped direction here
+		// made the glow appear to freeze/float above the sun/moon near dawn/dusk instead of continuing to
+		// follow it down toward the horizon.
+		const lightDir = game.world.?.dayTime.getVisibleCelestialDirection();
+		const viewProj = game.projectionMatrix.mul(viewMatrix);
+		// Computed once and shared by both passes below — the mask's bright spot and the blur's
+		// convergence target must always agree exactly, or the glow visibly drifts from the sun's true
+		// position as the camera moves.
+		const sunScreenPos = projectDirection(viewProj, lightDir) orelse offScreenSentinel;
+		// Reuses Skybox's own horizon-fade curve so god rays fade in/out in lockstep with the sun/moon
+		// billboard itself, rather than having their own independent (and possibly mismatched) cutoff.
+		// Moonlight rays are dimmer than sunlight ones (mirrors Skybox's own moon billboard, drawn at
+		// horizonFade*0.6 — moonlight is just much weaker than direct sun).
+		const moonDimming: f32 = if (game.world.?.dayTime.isSunlight()) 1.0 else 0.5;
+		// Fades the whole god-ray effect in/out based on how close the sun/moon's projected screen
+		// position is to the center of the view, rather than it snapping to full strength the instant
+		// the sun's bright disc first clips into the frame at the edge (which is what the mask's own
+		// proximity test — a small fixed-radius disc around sunScreenPos — controls; that's a separate,
+		// much tighter radius meant to shape the disc itself, not to fade the overall ray strength with
+		// view direction). Not aspect-corrected on purpose: a plain radial distance from screen center
+		// reads fine here since this only needs to be a smooth global multiplier, not a circular disc.
+		const centerDist = vec.length(sunScreenPos - Vec2f{0.5, 0.5});
+		const centerFadeInner: f32 = 0.15;
+		const centerFadeOuter: f32 = 0.9;
+		const centerFadeT = std.math.clamp((centerDist - centerFadeInner)/(centerFadeOuter - centerFadeInner), 0.0, 1.0);
+		const centerFade = 1.0 - centerFadeT*centerFadeT*(3.0 - 2.0*centerFadeT); // smoothstep, inverted
+		const strength = Skybox.horizonFade(lightDir)*settings.godRayIntensity*moonDimming*centerFade;
+		// tanX/tanY (== width/height, per Mat4f.perspective()'s `tanX = aspect*tanY`) — scales the mask's
+		// screen-space proximity test so the sun's glow disc reads as circular on screen instead of
+		// stretched to match whatever the viewport's aspect ratio happens to be.
+		const aspectRatio = (1.0/game.projectionMatrix.rows[0][0])/(1.0/game.projectionMatrix.rows[1][2]);
+
+		c.glViewport(0, 0, width/4, height/4);
+		maskPass(viewMatrix, lightDir, sunScreenPos, aspectRatio);
+		blurPass(sunScreenPos, strength);
+
+		c.glViewport(0, 0, width, height);
+		rayBuffer.bindTexture(c.GL_TEXTURE10);
+	}
+
+	fn bindReplacementImage() void {
+		emptyBuffer.bindTo(10);
 	}
 };
 
@@ -690,6 +939,17 @@ pub const Skybox = struct {
 
 	const numStars = 10000;
 
+	var celestialPipeline: graphics.Pipeline = undefined;
+	var celestialUniforms: struct {
+		worldCenter: c_int,
+		billboardRight: c_int,
+		billboardUp: c_int,
+		billboardSize: c_int,
+		color: c_int,
+		opacity: c_int,
+	} = undefined;
+	var celestialVao: graphics.VertexArray = undefined;
+
 	fn getStarPos(seed: *u64) Vec3f {
 		const x: f32 = @floatCast(main.random.nextFloatGauss(seed));
 		const y: f32 = @floatCast(main.random.nextFloatGauss(seed));
@@ -799,12 +1059,70 @@ pub const Skybox = struct {
 		starSsbo = graphics.SSBO.initStatic(f32, &starData);
 
 		starVao = .init(graphics.VertexArray.EmptyVertex, &.{}, null);
+
+		celestialPipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/skybox/celestial.vert",
+			"assets/cubyz/shaders/skybox/celestial.frag",
+			"",
+			&celestialUniforms,
+			graphics.draw.SimpleVertex2D,
+			&.{},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.{
+				.srcColorBlendFactor = .one,
+				.dstColorBlendFactor = .one,
+				.colorBlendOp = .add,
+				.srcAlphaBlendFactor = .one,
+				.dstAlphaBlendFactor = .one,
+				.alphaBlendOp = .add,
+			}}},
+		);
+		const quadData = [_]graphics.draw.SimpleVertex2D{
+			.{.pos = .{-1, -1}},
+			.{.pos = .{-1, 1}},
+			.{.pos = .{1, -1}},
+			.{.pos = .{1, 1}},
+		};
+		celestialVao = .init(graphics.draw.SimpleVertex2D, &quadData, null);
 	}
 
 	pub fn deinit() void {
 		starPipeline.deinit();
 		starSsbo.deinit();
 		starVao.deinit();
+		celestialPipeline.deinit();
+		celestialVao.deinit();
+	}
+
+	/// Fades a celestial body in/out right around the horizon instead of switching abruptly.
+	fn horizonFade(direction: Vec3f) f32 {
+		const halfWindow = 0.05;
+		return std.math.clamp((direction[2] + halfWindow)/(2*halfWindow), 0.0, 1.0);
+	}
+
+	/// World-fixed billboard basis for a celestial body, perpendicular to its direction — deliberately
+	/// *not* derived from the camera's view matrix, so the sun/moon disc doesn't rotate or distort as
+	/// the player looks around; it only changes as `direction` itself sweeps through the day/night
+	/// cycle. Uses the world X axis as a stable reference, matching the rotation axis
+	/// getSunDirection()/the star field's own rotation already sweep around (direction's X component
+	/// is always 0), so `cross(worldXAxis, direction)` is already unit-length — no normalize needed.
+	fn celestialBillboardBasis(direction: Vec3f) struct {right: Vec3f, up: Vec3f} {
+		const worldXAxis = Vec3f{1, 0, 0};
+		const right = vec.cross(worldXAxis, direction);
+		const up = vec.cross(direction, right);
+		return .{.right = right, .up = up};
+	}
+
+	fn drawCelestial(worldCenter: Vec3f, billboardRight: Vec3f, billboardUp: Vec3f, size: f32, color: Vec3f, opacity: f32) void {
+		if (opacity <= 0) return;
+		c.glUniform3fv(celestialUniforms.worldCenter, 1, @ptrCast(&worldCenter));
+		c.glUniform3fv(celestialUniforms.billboardRight, 1, @ptrCast(&billboardRight));
+		c.glUniform3fv(celestialUniforms.billboardUp, 1, @ptrCast(&billboardUp));
+		c.glUniform1f(celestialUniforms.billboardSize, size);
+		c.glUniform3fv(celestialUniforms.color, 1, @ptrCast(&color));
+		c.glUniform1f(celestialUniforms.opacity, opacity);
+		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
 	pub fn render() void {
@@ -826,6 +1144,21 @@ pub const Skybox = struct {
 			c.glDrawArrays(c.GL_TRIANGLES, 0, numStars*3);
 
 			c.glBindBuffer(c.GL_SHADER_STORAGE_BUFFER, 0);
+		}
+
+		{
+			celestialPipeline.bind(null);
+			celestialVao.bind();
+
+			const sunDir = game.world.?.dayTime.getSunDirection();
+			const moonDir = -sunDir;
+			const celestialDist: f32 = 300.0;
+
+			const sunBasis = celestialBillboardBasis(sunDir);
+			const moonBasis = celestialBillboardBasis(moonDir);
+
+			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 24.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir));
+			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 18.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6);
 		}
 	}
 };
@@ -862,6 +1195,329 @@ pub const Frustum = struct { // MARK: Frustum
 			if (dist < 0) return false;
 		}
 		return true;
+	}
+};
+
+/// Per-frame chunk-position -> occupancy-offset lookup window for the sun/moon shadow raymarch (see
+/// shadow.glsl's sampleSunShadow). A small, fully-rebuilt-each-frame grid of chunk-sized cells centered
+/// on the player, world-chunk-aligned — mirrors clouds.zig's coverage-grid pattern (a fixed small
+/// window, snapped to world-aligned cell boundaries, reuploaded whole every frame) rather than a GPU
+/// hash table: same shape of problem (world position -> sparse per-chunk data), same solution already
+/// proven stable in this codebase.
+///
+/// Each cell holds either `emptySentinel` (no LOD0 chunk loaded there => treat as passable, matching how
+/// an unloaded chunk never cast a shadow under the old cascade system either) or that chunk's starting
+/// word offset into chunk_meshing.occupancyBuffer.
+pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
+	const emptySentinel: u32 = 0xFFFFFFFF;
+	/// Backing array capacity — mirrors clouds.zig's maxGridDim, sized generously for the shadowDistance
+	/// slider's max (512 blocks radius -> ~18 chunks radius -> up to ~38^3 cells, comfortably under this).
+	const maxWindowDim: u32 = 48;
+
+	var indexSSBO: graphics.SSBO = undefined;
+	var indexData: [maxWindowDim*maxWindowDim*maxWindowDim]u32 = undefined;
+
+	/// World-block coordinates (absolute, not player-relative) of the window's corner cell — shader
+	/// side reconstructs an absolute voxel coordinate from worldPosRelative + playerPositionInteger/
+	/// Fraction and subtracts this to index into indexData. Public for chunk_meshing.zig/
+	/// modelRenderer.zig's bindCommonUniforms.
+	pub var windowOrigin: Vec3i = .{0, 0, 0};
+	/// Cells per axis actually populated this frame (<= maxWindowDim).
+	pub var windowDim: u32 = 0;
+
+	fn init() void {
+		indexSSBO = .init();
+		indexSSBO.bind(21); // 21, not 12 — collides with Skybox's starSsbo, see shadow.glsl's binding comment
+	}
+
+	fn deinit() void {
+		indexSSBO.deinit();
+	}
+
+	fn update(playerPos: Vec3d) void {
+		const size = chunk.chunkSize;
+		const desiredDim: u32 = @as(u32, @intFromFloat(@ceil(2*settings.shadowDistance/@as(f32, @floatFromInt(size))))) + 2;
+		const dim = std.math.clamp(desiredDim, 2, maxWindowDim);
+		windowDim = dim;
+
+		const playerBlock: Vec3i = @as(Vec3i, @floor(playerPos));
+		const halfSpan: i32 = @as(i32, @intCast(dim/2))*size;
+		// Chunk-aligned window origin (world block coords) — cells only ever pop in/out at the window's
+		// outer edge as the player moves, never swim or reindex underfoot.
+		const origin = Vec3i{
+			(playerBlock[0] & ~@as(i32, size - 1)) -% halfSpan,
+			(playerBlock[1] & ~@as(i32, size - 1)) -% halfSpan,
+			(playerBlock[2] & ~@as(i32, size - 1)) -% halfSpan,
+		};
+		windowOrigin = origin;
+
+		var index: usize = 0;
+		var cz: u32 = 0;
+		while (cz < dim) : (cz += 1) {
+			var cy: u32 = 0;
+			while (cy < dim) : (cy += 1) {
+				var cx: u32 = 0;
+				while (cx < dim) : (cx += 1) {
+					const wx = origin[0] +% @as(i32, @intCast(cx))*size;
+					const wy = origin[1] +% @as(i32, @intCast(cy))*size;
+					const wz = origin[2] +% @as(i32, @intCast(cz))*size;
+					const mesh = mesh_storage.getMesh(.{.wx = wx, .wy = wy, .wz = wz, .voxelSize = 1});
+					if (mesh == null or mesh.?.occupancyAllocation.len == 0) {
+						indexData[index] = emptySentinel;
+					} else {
+						indexData[index] = mesh.?.occupancyAllocation.start;
+					}
+					index += 1;
+				}
+			}
+		}
+
+		indexSSBO.bufferData(u32, indexData[0 .. dim*dim*dim]);
+	}
+};
+
+/// Cascaded Shadow Maps (CSM) — replaces the old DDA voxel raymarch with a projection-based approach
+/// that produces smooth, properly filtered penumbras.  Three cascades cover progressively wider
+/// depth ranges so near objects get sharp, high-res shadows and distant ones get wide, soft ones.
+///
+/// Algorithm:
+///   1. For each cascade, compute a stable orthographic light-space frustum: a player-centered sphere
+///      of that cascade's far distance (not fit to the camera's current view frustum — see
+///      computeLightSpaceMatrix for why coverage deliberately doesn't depend on view direction).
+///      "Stable" means we snap the frustum centre to the nearest shadow-map texel, eliminating the
+///      sub-pixel shimmer the previous CSM removal notice cited as its reason for removal.
+///   2. Render all opaque LOD-0 chunk faces into a depth-only FBO from the light's point of view.
+///   3. Store the resulting light-space VP matrices; chunk_meshing.zig's bindCommonUniforms() uploads
+///      them plus the depth textures to the terrain fragment shader every frame.
+pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
+	pub const numCascades = 3;
+	pub var shadowMapSize: u31 = 2048;
+
+	/// Cascade far distances (blocks from the player); each cascade covers a player-centered sphere of
+	/// this radius, not a near/far depth slice — see computeLightSpaceMatrix.
+	pub var cascadeFarDistances: [numCascades]f32 = .{ 24.0, 96.0, 512.0 };
+
+	/// One depth-only FBO per cascade. Initialised with GL_COMPARE_REF_TO_TEXTURE so sampling returns
+	/// hardware-filtered 0..1 PCF values directly from the fragment shader's sampler2DShadow.
+	pub var shadowFBs: [numCascades]graphics.FrameBuffer = undefined;
+
+	/// Shadow-depth-only pipeline: shadow_depth.vert + shadow_depth.frag. Uses depth bias to prevent
+	/// self-shadowing acne on steep faces without discarding entire blocks.
+	var shadowPipeline: graphics.Pipeline = undefined;
+	var shadowPipelineUniforms: struct {
+		lightSpaceMatrix: c_int,
+	} = undefined;
+
+	/// Light-space VP matrices in the Zig row-major format — used by the cascade frustum computation.
+	var lightSpaceMatrices: [numCascades]Mat4f = undefined;
+	/// The same matrices flattened into OpenGL column-major layout for glUniformMatrix4fv.
+	/// Computed each frame alongside lightSpaceMatrices.
+	pub var lightSpaceMatricesGL: [numCascades][4][4]f32 = undefined;
+
+	fn init() void {
+		for (0..numCascades) |i| {
+			shadowFBs[i].initDepthOnly(c.GL_LINEAR, c.GL_CLAMP_TO_BORDER);
+			// For out-of-frustum samples (UV outside [0,1]): treat as fully lit (1.0) so the
+			// terrain beyond a cascade's coverage doesn't go dark.
+			const border = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
+			c.glBindTexture(c.GL_TEXTURE_2D, shadowFBs[i].depthTexture);
+			c.glTexParameterfv(c.GL_TEXTURE_2D, c.GL_TEXTURE_BORDER_COLOR, &border);
+			// Allocate the depth texture at the initial shadow map resolution.
+			shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+		}
+		shadowPipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/shadow_depth.vert",
+			"assets/cubyz/shaders/shadow_depth.frag",
+			"",
+			&shadowPipelineUniforms,
+			graphics.VertexArray.EmptyVertex,
+			&.{},
+			.{
+				.cullMode = .none, // Render all faces during shadow pass to avoid missing shadows on single-sided geometry
+				.depthBias = .{ .constantFactor = 2.0, .clamp = 0.0, .slopeFactor = 4.0 },
+			},
+			.{ .depthTest = true, .depthWrite = true },
+			.{ .attachments = &.{.{ .enabled = false, .srcColorBlendFactor = .zero, .dstColorBlendFactor = .zero, .colorBlendOp = .add, .srcAlphaBlendFactor = .zero, .dstAlphaBlendFactor = .zero, .alphaBlendOp = .add, .colorWriteMask = .none }} },
+		);
+	}
+
+	fn deinit() void {
+		for (0..numCascades) |i| {
+			shadowFBs[i].deinit();
+		}
+		shadowPipeline.deinit();
+	}
+
+	/// Compute the rotation-invariant, texel-snapped light-space orthographic frustum for one cascade,
+	/// covering a player-centered sphere of radius `cascadeFarDepth` (not a sphere fit to the camera's
+	/// current view frustum slice and shifted forward along view direction, which an earlier version
+	/// used). That forward-shifted version saved shadow-map resolution by not covering ground outside
+	/// the camera's current FOV, but it meant the world-space area a cascade actually covered swept
+	/// around with the camera's rotation even while the player stood still — so turning to look away
+	/// from a nearby tree (or anything else) could shift the covered disc enough that the very shadow
+	/// the player was standing in fell outside it and disappeared, even looking straight at the ground
+	/// underneath them. A player-centered sphere matches shadow.glsl's cascade selection (which is
+	/// purely distance-based, `cameraDepth` vs `csmCascadeFar`, with no view-direction term) and
+	/// getShadowRenderChunks' 360-degree occluder gathering, so coverage no longer depends on which way
+	/// the camera happens to be facing — at the cost of some shadow-map resolution being spent on
+	/// terrain outside the current view that a frustum-fitted cascade would have skipped.
+	fn computeLightSpaceMatrix(cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d) Mat4f {
+		const radius = cascadeFarDepth;
+
+		// Add player's fractional offset in light space so snapping is relative to absolute world origin:
+		const playerFrac = Vec3f{
+			@floatCast(@mod(playerPos[0], 1.0)),
+			@floatCast(@mod(playerPos[1], 1.0)),
+			@floatCast(@mod(playerPos[2], 1.0)),
+		};
+		const playerLightVec4 = lightView.mulVec(Vec4f{ playerFrac[0], playerFrac[1], playerFrac[2], 0 });
+
+		const absX = playerLightVec4[0];
+		const absY = playerLightVec4[1];
+		const absZ = playerLightVec4[2];
+
+		const diameter = 2.0 * radius;
+		const texelSize = diameter / @as(f32, @floatFromInt(shadowMapSize));
+
+		// Snap absolute world coordinates to exact texel multiples:
+		const snappedAbsX = @floor(absX / texelSize) * texelSize;
+		const snappedAbsZ = @floor(absZ / texelSize) * texelSize;
+
+		const zMargin: f32 = 256.0;
+		const minL_y = absY - radius - zMargin;
+		const snappedAbsMinL_y = @floor(minL_y / texelSize) * texelSize;
+		const maxL_y = absY + radius + 32.0;
+		const depth = maxL_y - snappedAbsMinL_y;
+
+		// Shift back to player-relative coordinates for the translation matrix:
+		const relSnappedX = snappedAbsX - playerLightVec4[0];
+		const relSnappedMinL_y = snappedAbsMinL_y - playerLightVec4[1];
+		const relSnappedZ = snappedAbsZ - playerLightVec4[2];
+
+		// Orthographic projection matrix:
+		const lightProj = Mat4f.orthographic(diameter, diameter, 0.0, depth);
+		const lightTranslation = Mat4f{
+			.rows = [4]Vec4f{
+				Vec4f{ 1, 0, 0, -relSnappedX },
+				Vec4f{ 0, 1, 0, -relSnappedMinL_y },
+				Vec4f{ 0, 0, 1, -relSnappedZ },
+				Vec4f{ 0, 0, 0, 1 },
+			},
+		};
+		return lightProj.mul(lightTranslation.mul(lightView));
+	}
+
+	fn update(playerPos: Vec3d) void {
+		if (!settings.shadows) return;
+
+		// Dynamically scale shadow map resolution according to settings.shadowRaySteps slider (Shadow Quality):
+		const desiredSize: u31 = if (settings.shadowRaySteps <= 96)
+			1024
+		else if (settings.shadowRaySteps <= 256)
+			2048
+		else
+			4096;
+
+		if (shadowMapSize != desiredSize) {
+			shadowMapSize = desiredSize;
+			for (0..numCascades) |i| {
+				shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+			}
+		}
+
+		// Keep Cascade 0 locked to 24 blocks so nearby tree shadows and leaf texture cutouts stay sharp
+		// regardless of max shadow distance setting, while mid/far cascades expand with settings.shadowDistance:
+		const maxDist = @max(settings.shadowDistance, 24.0);
+		cascadeFarDistances[0] = 24.0;
+		cascadeFarDistances[1] = @min(96.0, maxDist);
+		cascadeFarDistances[2] = maxDist;
+
+		const sunDir = game.world.?.dayTime.getShadowLightDirection();
+		// Light travels from sky to world along -sunDir (opposite to vector pointing from world to sun).
+		const lightView = Mat4f.lookInDirection(-sunDir);
+
+		// Render each cascade:
+		for (0..numCascades) |i| {
+			lightSpaceMatrices[i] = computeLightSpaceMatrix(
+				cascadeFarDistances[i],
+				lightView,
+				playerPos,
+			);
+			lightSpaceMatricesGL[i] = lightSpaceMatrices[i].toGl();
+		}
+
+		// Shadow pass: render all opaque chunk faces into each cascade's depth FBO.
+		shadowPipeline.bind(null);
+		c.glUniform1i(43, @intFromBool(settings.foliageShadows));
+		c.glActiveTexture(c.GL_TEXTURE0);
+		blocks.meshes.blockTextureArray.bind();
+
+		c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
+		c.glViewport(0, 0, shadowMapSize, shadowMapSize);
+
+		for (0..numCascades) |i| {
+			shadowFBs[i].bind();
+			c.glClear(c.GL_DEPTH_BUFFER_BIT);
+			c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatricesGL[i]));
+
+			// Gathered per-cascade (using this cascade's own, much smaller far distance) rather than once
+			// for all three using cascadeFarDistances[2] (the largest). An earlier version shared one
+			// chunk list — gathered at the *largest* cascade's radius — across all three cascades, so
+			// cascade 0 (meant to cover only 24 blocks, kept deliberately small so nearby tree shadows stay
+			// sharp and cheap) was redundantly re-uploading and re-drawing every chunk out to
+			// cascadeFarDistances[2] (potentially hundreds of blocks) three times over. That went
+			// unnoticed for a while because the main camera's oldVisibilityState gate (see forceAllVisible
+			// above) was accidentally culling most of that excess away — once that gate was correctly
+			// bypassed for the shadow pass, this redundant over-scoping became a real, measurable cost.
+			const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i]);
+			var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
+			defer for (chunkLists) |list| list.deinit();
+			for (meshes) |mesh| {
+				mesh.prepareRendering(&chunkLists);
+			}
+
+			chunk_meshing.vao.bind();
+			for (0..1) |lod| {
+				const chunkIDs = chunkLists[lod].items;
+				if (chunkIDs.len == 0) continue;
+				chunk_meshing.bindBuffers(lod);
+				const drawCallsEstimate: u31 = @intCast(chunkIDs.len * 8);
+				var chunkIDAllocation: main.graphics.SubAllocation = .{ .start = 0, .len = 0 };
+				chunk_meshing.chunkIDBuffer.uploadData(chunkIDs, &chunkIDAllocation);
+				defer chunk_meshing.chunkIDBuffer.free(chunkIDAllocation);
+				const allocation = chunk_meshing.commandBuffer.rawAlloc(drawCallsEstimate);
+				defer chunk_meshing.commandBuffer.free(allocation);
+				chunk_meshing.commandPipeline.bind();
+				c.glUniform1f(chunk_meshing.commandUniforms.lodDistance, main.settings.@"lod0.5Distance");
+				c.glUniform1ui(chunk_meshing.commandUniforms.chunkIDIndex, chunkIDAllocation.start);
+				c.glUniform1ui(chunk_meshing.commandUniforms.commandIndexStart, allocation.start);
+				c.glUniform1ui(chunk_meshing.commandUniforms.size, @intCast(chunkIDs.len));
+				c.glUniform1i(chunk_meshing.commandUniforms.isTransparent, 0);
+				c.glUniform1i(chunk_meshing.commandUniforms.onlyDrawPreviouslyInvisible, 0);
+				// The main camera's oldVisibilityState/per-direction visibility culling is irrelevant here
+				// (and actively wrong): a chunk the main camera currently considers invisible — e.g. behind
+				// the player after they turn around — must still contribute every opaque face to the
+				// shadow depth map, since getShadowRenderChunks already gathered it as a 360-degree occluder.
+				// Without this, that chunk silently contributed zero draw commands and its shadow vanished
+				// the moment the player looked away from it.
+				c.glUniform1i(chunk_meshing.commandUniforms.forceAllVisible, 1);
+				c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
+				c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
+
+				// Re-bind shadow pipeline after compute (compute unbinds it)
+				shadowPipeline.bind(null);
+				c.glUniform1i(43, @intFromBool(settings.foliageShadows));
+				c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatricesGL[i]));
+				chunk_meshing.vao.bind();
+				c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);
+				c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
+			}
+		}
+
+		// Restore normal rendering state:
+		c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
+		worldFrameBuffer.bind();
+		c.glViewport(0, 0, lastWidth, lastHeight);
 	}
 };
 

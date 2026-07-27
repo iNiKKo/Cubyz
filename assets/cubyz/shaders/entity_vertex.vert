@@ -9,7 +9,8 @@ layout (location = 3) in uint inNodeId;
 
 layout(location = 0) out vec2 outTexCoord;
 layout(location = 1) out vec3 mvVertexPos;
-layout(location = 2) out vec3 outLight;
+layout(location = 2) out vec3 outSunLight;
+layout(location = 4) out vec3 outBlockLight;
 layout(location = 3) flat out vec3 normal;
 
 layout(location = 1) uniform mat4 modelViewMatrix;
@@ -26,7 +27,7 @@ vec3 square(vec3 x) {
 	return x*x;
 }
 
-vec3 calcLight(uint fullLight) {
+void unpackLight(uint fullLight) {
 	vec3 sunLight = vec3(
 		fullLight >> 25 & 31u,
 		fullLight >> 20 & 31u,
@@ -37,7 +38,8 @@ vec3 calcLight(uint fullLight) {
 		fullLight >> 5 & 31u,
 		fullLight >> 0 & 31u
 	);
-	return min(sqrt(square(sunLight*ambientLight) + square(blockLight)), vec3(31))/31;
+	outSunLight = sunLight*ambientLight/31;
+	outBlockLight = blockLight/31;
 }
 
 void main() {
@@ -47,5 +49,5 @@ void main() {
 	gl_Position = projectionMatrix*mvPos;
 	mvVertexPos = mvPos.xyz;
 	outTexCoord = inUV;
-	outLight = calcLight(light);
+	unpackLight(light);
 }

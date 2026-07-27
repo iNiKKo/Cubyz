@@ -5,13 +5,14 @@
 
 layout(location = 0) out vec3 mvVertexPos;
 layout(location = 1) out vec3 direction;
-layout(location = 2) out vec3 light;
+layout(location = 2) out vec3 outSunLight;
 layout(location = 3) out vec2 uv;
 layout(location = 4) flat out vec3 normal;
 layout(location = 5) flat out int textureIndex;
 layout(location = 6) flat out int isBackFace;
 layout(location = 7) flat out float distanceForLodCheck;
 layout(location = 8) flat out int opaqueInLod;
+layout(location = 9) out vec3 outBlockLight;
 
 layout(location = 0) uniform vec3 ambientLight;
 
@@ -69,7 +70,12 @@ void main() {
 		fullLight >> 5 & 31u,
 		fullLight >> 0 & 31u
 	);
-	light = min(sqrt(square(sunLight*ambientLight) + square(blockLight)), vec3(31))/31;
+	// Kept separate (rather than combined into one clamped magnitude like the old `light` did) so
+	// chunk_fragment.frag can apply the real-time sun-shadow factor to only the sun component — a torch's
+	// baked blockLight is a completely independent local light source and must never be dimmed by the
+	// sun/moon being blocked. Mirrors entity_vertex.vert's outSunLight/outBlockLight split.
+	outSunLight = sunLight*ambientLight/31;
+	outBlockLight = blockLight/31;
 	isBackFace = encodedPositionAndLightIndex>>15 & 1;
 
 	textureIndex = textureAndQuad & 65535;

@@ -13,9 +13,12 @@ layout(binding = 4) uniform sampler2D depthTexture;
 
 layout(binding = 5) uniform sampler2D bloomColor;
 
+layout(binding = 10) uniform sampler2D godRayColor;
+
 layout(location = 1) uniform vec2 tanXY;
 layout(location = 2) uniform float zNear;
 layout(location = 3) uniform float zFar;
+uniform vec3 godRayTint;
 
 struct Fog {
 	vec3 color;
@@ -80,6 +83,7 @@ vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
 void main() {
 	fragColor = texture(color, texCoords);
 	fragColor += texture(bloomColor, texCoords);
+	fragColor.rgb += texture(godRayColor, texCoords).r*godRayTint;
 	vec2 clampedTexCoords = (floor(texCoords*vec2(textureSize(color, 0))) + 0.5)/vec2(textureSize(color, 0));
 	vec3 direction = clampedTexCoords.x*(
 		clampedTexCoords.y*directions[0] + (1 - clampedTexCoords.y)*directions[1]

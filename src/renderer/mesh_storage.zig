@@ -108,6 +108,7 @@ pub fn deinit() void {
 	mapUpdatableList.deinit();
 	priorityMeshUpdateList.deinit();
 	meshList.clearAndFree(main.globalAllocator);
+	shadowMeshList.clearAndFree(main.globalAllocator);
 	main.heap.GarbageCollection.waitForFreeCompletion();
 }
 
@@ -624,7 +625,7 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 				const node2 = getNodePointer(neighborPos);
 				if (!node2.active and node2.finishedMeshing) {
 					const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{pos.wx, pos.wy, pos.wz})) - playerPos);
-					if (!frustum.testAAB(relPosFloat + @as(Vec3f, @floatFromInt(neighbor.relPos()*chunkSizeVector)), @floatFromInt(chunkSizeVector))) continue;
+					if (pos.voxelSize != 1 and !frustum.testAAB(relPosFloat + @as(Vec3f, @floatFromInt(neighbor.relPos()*chunkSizeVector)), @floatFromInt(chunkSizeVector))) continue;
 					node2.active = true;
 					node2.rendered = true;
 					searchList.pushBack(node2);
@@ -650,7 +651,7 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 						if (dz == 1) nextPos.wz ^= lowerLodBit;
 						const node2 = getNodePointer(nextPos);
 						const relNextPos: Vec3d = @as(Vec3d, @floatFromInt(Vec3i{nextPos.wx, nextPos.wy, nextPos.wz})) - playerPos;
-						if (!frustum.testAAB(@floatCast(relNextPos), @floatFromInt(chunkSizeVector))) continue;
+						if (nextPos.voxelSize != 1 and !frustum.testAAB(@floatCast(relNextPos), @floatFromInt(chunkSizeVector))) continue;
 						std.debug.assert(node2.finishedMeshing);
 						node2.active = true;
 						node2.rendered = true;
@@ -700,11 +701,49 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 		}
 		// Remove empty meshes.
 		if (!mesh.isEmpty()) {
-			meshList.append(main.globalAllocator, mesh);
+			const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{node.pos.wx, node.pos.wy, node.pos.wz})) - playerPos);
+			const chunkSizeVector: Vec3f = @splat(@floatFromInt(chunk.chunkSize * node.pos.voxelSize));
+			if (frustum.testAAB(relPosFloat, chunkSizeVector)) {
+				meshList.append(main.globalAllocator, mesh);
+			}
 		}
 	}
 
 	return meshList.items;
+}
+
+/// Returns the visible-chunk list from the most recent updateAndGetRenderChunks() call.
+/// Used by CascadedShadowMap so it can iterate the same set of chunks for the shadow pass
+/// without repeating the frustum cull.
+pub fn getLastRenderChunks() []*chunk_meshing.ChunkMesh {
+	return meshList.items;
+}
+
+var shadowMeshList: main.List(*chunk_meshing.ChunkMesh) = .empty;
+
+/// Returns all loaded LOD0 chunk meshes within shadow distance regardless of camera frustum culling.
+/// Used by CascadedShadowMap so occluders outside or behind the player's FOV (trees, buildings, mountains)
+/// continue to render into shadow depth maps when the player turns their head away.
+pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32) []*chunk_meshing.ChunkMesh {
+	shadowMeshList.clearRetainingCapacity();
+	const radiusBlocks: i32 = @intFromFloat(@ceil(shadowDist));
+	const totalRadius: i32 = radiusBlocks + chunk.chunkSize;
+
+	const storage = storageLists[0];
+	for (storage) |*node| {
+		if (!node.finishedMeshing) continue;
+		const mesh = node.mesh.load(.acquire) orelse continue;
+		if (mesh.isEmpty()) continue;
+
+		// Distance check: only include chunks within shadow distance of player:
+		const playerPosInt: Vec3i = @floor(playerPos);
+		const chunkCenter = Vec3i{ node.pos.wx + chunk.chunkSize / 2, node.pos.wy + chunk.chunkSize / 2, node.pos.wz + chunk.chunkSize / 2 };
+		const diff = chunkCenter - playerPosInt;
+		if (@abs(diff[0]) > totalRadius or @abs(diff[1]) > totalRadius or @abs(diff[2]) > totalRadius) continue;
+
+		shadowMeshList.append(main.globalAllocator, mesh);
+	}
+	return shadowMeshList.items;
 }
 
 pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()

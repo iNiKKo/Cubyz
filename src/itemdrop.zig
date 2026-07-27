@@ -20,6 +20,7 @@ const Mat4f = vec.Mat4f;
 const Vec3d = vec.Vec3d;
 const Vec3f = vec.Vec3f;
 const Vec3i = vec.Vec3i;
+const Vec4f = vec.Vec4f;
 const BinaryReader = main.utils.BinaryReader;
 const BinaryWriter = main.utils.BinaryWriter;
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
@@ -488,6 +489,18 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	var cameraFollowVel: Vec3f = @splat(0);
 	const damping: Vec3f = @splat(130);
 
+	/// Player-relative world-space position of the currently held item — same convention as
+	/// chunk_fragment.frag's `direction` / entity_fragment.frag's `worldPosRelative`. Kept updated every
+	/// frame regardless of whether the held item actually emits light, so callers only need to check
+	/// handLightColor (zero == no light) rather than tracking a separate "is there a light" flag.
+	pub var handLightPositionRelative: Vec3f = @splat(0);
+	/// Zero when the currently held item doesn't emit light (empty hand, non-block item, or a block
+	/// with no emittedLight) — real-time terrain/entity point light, entirely separate from (and not a
+	/// replacement for) the baked static block-light propagation system, since re-running that flood
+	/// fill every frame to follow the player's hand isn't remotely real-time-capable (see plan doc).
+	pub var handLightColor: Vec3f = @splat(0);
+	pub var handLightRadius: f32 = 16.0;
+
 	pub fn update(deltaTime: f64) void {
 		if (deltaTime == 0) return;
 		const dt: f32 = @floatCast(deltaTime);
@@ -501,6 +514,46 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		cameraFollowVel = n1/(n2*n2);
 
 		cameraFollow += cameraFollowVel*@as(Vec3f, @splat(dt));
+
+		updateHandLight();
+	}
+
+	/// Mirrors the position/rotation math ItemDropRenderer.renderDisplayItems uses to actually place the
+	/// displayed item mesh (same `cameraFollow` rotation, same local offset per item kind) — this only
+	/// needs the resulting anchor *position*, not the full mesh transform, and must run here (called from
+	/// update(), well before renderWorld()) rather than inside renderDisplayItems itself, since opaque
+	/// terrain's draw call reads this uniform earlier in the frame than renderDisplayItems runs.
+	fn updateHandLight() void {
+		handLightColor = @splat(0);
+
+		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
+		if (item == .null) return;
+
+		// Deliberately independent of whether this item's *displayed model* is the block's voxel shape
+		// or a flat custom icon (that distinction — see isBlock in renderDisplayItems — only matters for
+		// which mesh to draw). A held torch has a custom item.png icon so it renders via the flat-image
+		// path, not the voxel-block path, but it still represents (and should still light up like) an
+		// actual light-emitting block: whether an item emits light only depends on it wrapping a block
+		// with nonzero emittedLight, not on which of those two render paths draws it.
+		if (item != .baseItem) return;
+		const blockType = item.baseItem.block() orelse return;
+		const light = (blocks.Block{.typ = blockType, .data = 0}).light();
+		if (light == 0) return;
+		handLightColor = Vec3f{
+			@floatFromInt(light >> 16 & 255),
+			@floatFromInt(light >> 8 & 255),
+			@floatFromInt(light & 255),
+		}/@as(Vec3f, @splat(255.0));
+
+		// NOTE: this deliberately does NOT use `cameraFollow` (that's only a small sway/bob offset —
+		// the displayed item is actually rendered with its own fixed viewMatrix = identity(), a
+		// camera-independent HUD-style view, not the real world camera). To place the light at the
+		// item's true position in player-relative *world* space, the local hand offset needs the real
+		// camera rotation, same inverse-rotation pattern crosshairDirection()/the god-ray mask use
+		// elsewhere (view matrix is a pure rotation, so transpose == inverse).
+		const pos = Vec3f{0.4, 0.55, -0.32};
+		const invViewRotation = game.camera.viewMatrix.transpose();
+		handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
 	}
 };
 
@@ -735,6 +788,19 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 	pub fn renderDisplayItems(ambientLight: Vec3f, playerPos: Vec3d) void {
 		if (!ItemDisplayManager.showItem) return;
 
+		// Refreshed every frame rather than left at its init()-time value: displayItemUbo's projection
+		// matrix depends on main.renderer.lastWidth/lastHeight for its aspect ratio, but those are still
+		// their zero-initialized default at the point ItemDropRenderer.init() runs (it happens before
+		// the window's real framebuffer size callback fires) — baking the matrix once at init time froze
+		// in an aspect ratio of 0/0 = NaN, silently sending every held-item vertex to NaN clip space
+		// forever after (invisible, no error). Recomputing per frame is cheap (one small UBO update) and
+		// also keeps it correct across window resizes, which the old one-time bake never handled either.
+		displayItemUbo.update(.{
+			.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(65), @as(f32, @floatFromInt(main.renderer.lastWidth))/@as(f32, @floatFromInt(main.renderer.lastHeight)), 0.01, 3).toGl(),
+			.viewMatrix = Mat4f.identity().toGl(),
+			.playerPositionInteger = @splat(0),
+			.playerPositionFraction = @splat(0),
+		});
 		displayItemUbo.bind();
 		defer displayItemUbo.unbind();
 		bindCommonUniforms(ambientLight);
