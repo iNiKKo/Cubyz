@@ -52,17 +52,6 @@ void main() {
 	);
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
-
-	if (opaqueInLod == 0) {
-		// Shift foliage shadow position along lightDir to pull the shadow closer to the plant root:
-		vec3 lightDir = sunDirection;
-		float sLen = length(lightDir);
-		if (sLen > 1e-4) {
-			lightDir /= sLen;
-			position += lightDir * 0.25;
-		}
-	}
-
 	position *= voxelSize;
 	position += vec3(chunks[chunkID].position.xyz - playerPositionInteger);
 	position -= playerPositionFraction;

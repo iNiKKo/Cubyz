@@ -103,6 +103,9 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 
 	float cascadeBiasScale = 1.0 + float(cascade) * 1.5;
 	float bias = (cascade == 0) ? clamp(0.0001 * tanTheta, 0.00005, 0.0004) : clamp(0.0003 * tanTheta * cascadeBiasScale, 0.0002, 0.002);
+	if (isFoliage) {
+		bias += 0.0008;
+	}
 	projCoords.z -= bias;
 
 	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0);
@@ -146,11 +149,6 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 			float nextLight = sampleCascade(cascade + 1, worldPosRelative, normal, tanTheta, isFoliage);
 			light = mix(light, nextLight, t);
 		}
-	}
-
-	// Soft, subtle self-shadowing on foliage (blends 60% toward 1.0 unshadowed so plant blades have 3D depth without turning dark):
-	if (isFoliage) {
-		light = mix(light, 1.0, 0.60);
 	}
 
 	// Fade out shadow contrast near horizon so sunset/sunrise transition is silky smooth:
