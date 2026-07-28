@@ -1,0 +1,95 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D InputTexture;
+layout(binding = 1, rgba16f) uniform writeonly image2D OutputTexture;
+
+layout(location = 0) uniform vec4 con0; // Input viewport dimensions & rcp
+layout(location = 1) uniform vec4 con1; // Input image dimensions & rcp
+layout(location = 2) uniform vec4 con2; // Output viewport dimensions & rcp
+layout(location = 3) uniform vec4 con3;
+
+vec4 FsrEasuRF(vec2 p) { return textureLod(InputTexture, p, 0.0); }
+
+void FsrEasuTap(
+	inout vec3 accumColor,
+	inout float accumWeight,
+	vec2 off,
+	vec2 dir,
+	vec2 len,
+	float lobe,
+	float clp
+) {
+	vec2 v = off * dir;
+	float d2 = v.x * v.x + v.y * v.y;
+	d2 = min(d2, clp);
+	float wB = 2.0 * d2 - 1.0;
+	float wA = lobe * d2 - 1.0;
+	wB *= wB;
+	wA *= wA;
+	wB = 1.0 - wB;
+	wA = 1.0 - wA;
+	wB *= wA;
+	vec3 c = FsrEasuRF(off).rgb;
+	accumColor += c * wB;
+	accumWeight += wB;
+}
+
+void main() {
+	ivec2 gxy = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 outSize = imageSize(OutputTexture);
+	if (gxy.x >= outSize.x || gxy.y >= outSize.y) return;
+
+	// Output texel position normalized
+	vec2 pp = (vec2(gxy) + vec2(0.5)) * con2.zw; // con2.zw = rcp(outSize)
+	vec2 pos = pp * con0.xy + con0.zw; // Map to input viewport space
+
+	// Sample 4 nearest texels for edge detection
+	vec2 tc = floor(pos - vec2(0.5)) + vec2(0.5);
+	vec2 f = pos - tc;
+	vec2 p0 = tc * con1.zw;
+	vec2 p1 = (tc + vec2(1.0, 1.0)) * con1.zw;
+
+	vec3 c00 = FsrEasuRF(vec2(p0.x, p0.y)).rgb;
+	vec3 c10 = FsrEasuRF(vec2(p1.x, p0.y)).rgb;
+	vec3 c01 = FsrEasuRF(vec2(p0.x, p1.y)).rgb;
+	vec3 c11 = FsrEasuRF(vec2(p1.x, p1.y)).rgb;
+
+	// Luma calculation
+	float l00 = dot(c00, vec3(0.299, 0.587, 0.114));
+	float l10 = dot(c10, vec3(0.299, 0.587, 0.114));
+	float l01 = dot(c01, vec3(0.299, 0.587, 0.114));
+	float l11 = dot(c11, vec3(0.299, 0.587, 0.114));
+
+	// Bilinear interpolation base
+	vec3 color = mix(mix(c00, c10, f.x), mix(c01, c11, f.x), f.y);
+
+	// Edge direction analysis
+	float lx = (l10 - l00) + (l11 - l01);
+	float ly = (l01 - l00) + (l11 - l10);
+	float dirLen = sqrt(lx * lx + ly * ly);
+
+	if (dirLen > 0.001) {
+		vec2 dir = vec2(lx, ly) / dirLen;
+		// 12-tap Lanczos-like directional reconstruction
+		vec3 accumColor = vec3(0.0);
+		float accumWeight = 0.0;
+		float lobe = 0.5;
+		float clp = 1.0;
+
+		vec2 offX = vec2(con1.z, 0.0);
+		vec2 offY = vec2(0.0, con1.w);
+
+		FsrEasuTap(accumColor, accumWeight, p0 - offX, dir, vec2(dirLen), lobe, clp);
+		FsrEasuTap(accumColor, accumWeight, p0 + offX, dir, vec2(dirLen), lobe, clp);
+		FsrEasuTap(accumColor, accumWeight, p1 - offY, dir, vec2(dirLen), lobe, clp);
+		FsrEasuTap(accumColor, accumWeight, p1 + offY, dir, vec2(dirLen), lobe, clp);
+
+		if (accumWeight > 0.001) {
+			color = mix(color, accumColor / accumWeight, min(dirLen * 2.0, 1.0));
+		}
+	}
+
+	imageStore(OutputTexture, gxy, vec4(color, 1.0));
+}

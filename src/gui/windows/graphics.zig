@@ -24,7 +24,21 @@ const lodValues = [_][]const u8{"0.5", "1", "2", "3", "4", "5"};
 
 const anisotropy = [_]u8{1, 2, 4, 8, 16};
 
-const resolutions = [_]u16{25, 50, 100};
+const resolutions = [_]u16{50, 59, 67, 77, 100};
+const resScales = [_]f32{0.50, 0.59, 0.67, 0.77, 1.0};
+
+fn getResolutionScaleIndex(currentScale: f32) u16 {
+	var bestIndex: u16 = 4;
+	var minDiff: f32 = 1e9;
+	for (resScales, 0..) |s, i| {
+		const diff = @abs(s - currentScale);
+		if (diff < minDiff) {
+			minDiff = diff;
+			bestIndex = @intCast(i);
+		}
+	}
+	return bestIndex;
+}
 
 
 
@@ -120,9 +134,27 @@ fn anisotropicFilteringCallback(newValue: u16) void {
 }
 
 fn resolutionScaleCallback(newValue: u16) void {
-	settings.resolutionScale = std.math.pow(f32, 2.0, @as(f32, @floatFromInt(newValue)) - 2.0);
+	if (newValue < resScales.len) {
+		settings.resolutionScale = resScales[newValue];
+		settings.save();
+		main.Window.GLFWCallbacks.framebufferSize(null, main.Window.width, main.Window.height);
+	}
+}
+
+fn fsrSharpnessCallback(newValue: f32) void {
+	settings.fsrSharpness = newValue;
 	settings.save();
-	main.Window.GLFWCallbacks.framebufferSize(null, main.Window.width, main.Window.height);
+}
+
+fn fsrSharpnessFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("FSR Sharpening: {d:.0}%", .{value * 100.0});
+}
+
+const upscalerModes = [_][]const u8{"FSR 1.0 (Spatial)", "FSR 2.2 (Temporal)"};
+
+fn upscalerModeCallback(newValue: u16) void {
+	settings.upscalerMode = if (newValue == 0) .fsr1 else .fsr2;
+	settings.save();
 }
 
 pub fn onOpen() void {
@@ -146,7 +178,9 @@ pub fn onOpen() void {
 		16 => 4,
 		else => 2,
 	}, &anisotropicFilteringCallback));
-	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffResolution Scale: ", "{}%", &resolutions, @as(u16, @trunc(@log2(settings.resolutionScale) + 2.0)), &resolutionScaleCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffUpscaler Mode: ", "{s}", &upscalerModes, if (settings.upscalerMode == .fsr1) 0 else 1, &upscalerModeCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffRender Scale: ", "{}%", &resolutions, getResolutionScaleIndex(settings.resolutionScale), &resolutionScaleCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.fsrSharpness, &fsrSharpnessCallback, &fsrSharpnessFormatter));
 	list.add(Button.initText(.{0, 0}, 200, "Graphics+ Settings...", .{.onAction = gui.openWindowCallback("graphics_plus")}));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();

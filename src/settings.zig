@@ -35,7 +35,11 @@ pub var renderDistance: u16 = 12;
 
 pub var highestLod: u3 = highestSupportedLod;
 
-pub var resolutionScale: f32 = 1;
+pub var resolutionScale: f32 = 1.0;
+pub var fsrSharpness: f32 = 0.5;
+
+pub const UpscalerMode = enum(u8) { off, fsr1, fsr2 };
+pub var upscalerMode: UpscalerMode = .fsr1;
 
 pub const AntiAliasingMode = enum(u8) { off, fxaa, msaa, taa };
 pub var antiAliasingMode: AntiAliasingMode = .fxaa;
@@ -149,7 +153,8 @@ pub fn init() void {
 		}
 	}
 
-	if (resolutionScale != 1 and resolutionScale != 0.5 and resolutionScale != 0.25) resolutionScale = 1;
+	if (resolutionScale < 0.25 or resolutionScale > 1.0) resolutionScale = 1.0;
+	if (fsrSharpness < 0.0 or fsrSharpness > 1.0) fsrSharpness = 0.2;
 
 	// keyboard settings:
 	const keyboard = zon.getChild("keyboard");

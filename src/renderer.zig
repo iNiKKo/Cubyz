@@ -32,6 +32,8 @@ pub const mesh_storage = @import("renderer/mesh_storage.zig");
 pub const clouds = @import("renderer/clouds.zig");
 pub const thin_clouds = @import("renderer/thin_clouds.zig");
 pub const rain = @import("renderer/rain.zig");
+pub const fsr = @import("renderer/fsr.zig");
+pub const fsr2 = @import("renderer/fsr2.zig");
 
 /// Time after which no more chunk meshes are created. This allows the game to run smoother on movement.
 const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
@@ -102,6 +104,8 @@ pub fn init() void {
 	clouds.init();
 	thin_clouds.init();
 	rain.init();
+	fsr.init();
+	fsr2.init();
 	chunk_meshing.init();
 	mesh_storage.init();
 	reflectionCubeMap = .init();
@@ -126,6 +130,8 @@ pub fn deinit() void {
 	clouds.deinit();
 	thin_clouds.deinit();
 	rain.deinit();
+	fsr.deinit();
+	fsr2.deinit();
 	mesh_storage.deinit();
 	chunk_meshing.deinit();
 	reflectionCubeMap.deinit();
@@ -175,7 +181,7 @@ var taaJitterIndex: usize = 0;
 /// the same for clip.z/up — adding jx/jy there shifts NDC.xy by exactly (jx, jy) independent of depth,
 /// with zero effect on tanXY-style FOV terms at rows[0][0]/rows[1][2] or on clip.w/depth).
 fn jitteredProjectionMatrix(base: Mat4f, pixelWidth: u31, pixelHeight: u31) Mat4f {
-	if (settings.antiAliasingMode != .taa) return base;
+	if (settings.antiAliasingMode != .taa and settings.upscalerMode != .fsr2) return base;
 	const jitter = haltonJitterSequence[taaJitterIndex % haltonJitterSequence.len];
 	var result = base;
 	result.rows[0][1] += jitter[0]*2.0/@as(f32, @floatFromInt(pixelWidth));
@@ -198,6 +204,8 @@ pub fn updateViewport(width: u31, height: u31) void {
 	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
 	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
 	worldFrameBuffer.unbind();
+	fsr.updateSize(lastWidth, lastHeight, width, height);
+	CascadedShadowMap.updateMapSize(main.settings.resolutionScale);
 }
 
 pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
@@ -439,7 +447,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		GodRays.bindReplacementImage();
 	}
 	gpu_performance_measuring.startQuery(.final_copy);
-	if (activeFrameBuffer == 0) c.glViewport(0, 0, main.Window.width, main.Window.height);
+	c.glViewport(0, 0, lastWidth, lastHeight);
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
 	worldFrameBuffer.unbind();
@@ -498,10 +506,12 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
 	}
 
+	const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+
 	switch (settings.antiAliasingMode) {
 		.fxaa => FXAA.preDraw(lastWidth, lastHeight),
 		.taa => TAA.preDraw(lastWidth, lastHeight),
-		.off, .msaa => c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer),
+		.off, .msaa => c.glBindFramebuffer(c.GL_FRAMEBUFFER, targetFBO),
 	}
 
 	graphics.draw.rectVao.bind();
@@ -523,7 +533,18 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		.off, .msaa => {},
 	}
 
-	c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	if (main.settings.resolutionScale < 1.0) {
+		c.glViewport(0, 0, main.Window.width, main.Window.height);
+		if (main.settings.upscalerMode == .fsr2) {
+			const jitter = haltonJitterSequence[taaJitterIndex % haltonJitterSequence.len];
+			fsr2.render(fsr.inputFrameBuffer.texture, worldFrameBuffer.depthTexture, lastWidth, lastHeight, main.Window.width, main.Window.height, jitter, activeFrameBuffer);
+			taaJitterIndex +%= 1;
+		} else {
+			fsr.render(lastWidth, lastHeight, main.Window.width, main.Window.height, activeFrameBuffer);
+		}
+	} else {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
 
 	if (!main.gui.hideGui) main.entity.client.renderHud(ambientLight, playerPos);
 	gpu_performance_measuring.stopQuery();
@@ -618,7 +639,8 @@ const FXAA = struct { // MARK: FXAA
 	fn render(currentWidth: u31, currentHeight: u31) void {
 		pipeline.bind(null);
 		buffer.bindTexture(c.GL_TEXTURE3);
-		c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
+		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, targetFBO);
 		c.glUniform2f(uniforms.inverseScreenSize, 1.0/@as(f32, @floatFromInt(currentWidth)), 1.0/@as(f32, @floatFromInt(currentHeight)));
 		graphics.draw.rectVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
@@ -740,7 +762,8 @@ const TAA = struct { // MARK: TAA
 
 		// Present this frame's resolved result (just-written buffer) to the real target.
 		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, resolveBuffers[writeIndex].frameBuffer);
-		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, activeFrameBuffer);
+		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, targetFBO);
 		c.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, c.GL_COLOR_BUFFER_BIT, c.GL_NEAREST);
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 	}
@@ -1624,7 +1647,18 @@ pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
 ///      them plus the depth textures to the terrain fragment shader every frame.
 pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	pub const numCascades = 3;
+	pub var baseShadowMapSize: u31 = 2048;
 	pub var shadowMapSize: u31 = 2048;
+
+	pub fn updateMapSize(scale: f32) void {
+		const newSize: u31 = @intFromFloat(@max(512.0, @trunc(@as(f32, @floatFromInt(baseShadowMapSize)) * scale)));
+		if (shadowMapSize != newSize) {
+			shadowMapSize = newSize;
+			for (0..numCascades) |i| {
+				shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+			}
+		}
+	}
 
 	/// Cascade far distances (blocks from the player); each cascade covers a player-centered sphere of
 	/// this radius, not a near/far depth slice — see computeLightSpaceMatrix.
@@ -1646,8 +1680,12 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	/// The same matrices flattened into OpenGL column-major layout for glUniformMatrix4fv.
 	/// Computed each frame alongside lightSpaceMatrices.
 	pub var lightSpaceMatricesGL: [numCascades][4][4]f32 = undefined;
+	var baseLightSpaceMatrices: [numCascades]Mat4f = undefined;
+	var renderedPlayerPos: [numCascades]Vec3d = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } };
+	var lastRenderedFrame: [numCascades]u32 = .{ 0, 0, 0 };
 	pub var shadowFrameCounter: u32 = 0;
 	var lastShadowPlayerPos: Vec3d = .{ 0, 0, 0 };
+	var lastSunDir: Vec3f = .{ 0, 0, 0 };
 
 	fn init() void {
 		for (0..numCascades) |i| {
@@ -1766,25 +1804,17 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		cascadeFarDistances[1] = @min(96.0, maxDist);
 		cascadeFarDistances[2] = maxDist;
 
-		const sunDir = game.world.?.dayTime.getShadowLightDirection();
-		// Light travels from sky to world along -sunDir (opposite to vector pointing from world to sun).
-		const lightView = Mat4f.lookInDirection(-sunDir);
+		const lightDir = game.world.?.dayTime.getShadowLightDirection();
+		const lightView = Mat4f.lookInDirection(-lightDir);
 
 		const zMargins = [numCascades]f32{ 96.0, 256.0, 1024.0 };
 		const occluderSunDists = [numCascades]f32{ 96.0, 256.0, 1024.0 };
 
-		// Render each cascade:
-		for (0..numCascades) |i| {
-			lightSpaceMatrices[i] = computeLightSpaceMatrix(
-				cascadeFarDistances[i],
-				lightView,
-				playerPos,
-				zMargins[i],
-			);
-			lightSpaceMatricesGL[i] = lightSpaceMatrices[i].toGl();
-		}
+		const dirDiff = lightDir - lastSunDir;
+		const sunDistSq = dirDiff[0] * dirDiff[0] + dirDiff[1] * dirDiff[1] + dirDiff[2] * dirDiff[2];
+		const sunMoved = sunDistSq > 0.00001;
+		lastSunDir = lightDir;
 
-		const lightDir = game.world.?.dayTime.getShadowLightDirection();
 		shadowPipeline.bind(null);
 		c.glUniform1i(43, @intFromBool(settings.foliageShadows));
 		c.glUniform3fv(37, 1, @ptrCast(&lightDir));
@@ -1794,13 +1824,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
 		c.glViewport(0, 0, shadowMapSize, shadowMapSize);
 
-		const diffX = playerPos[0] - lastShadowPlayerPos[0];
-		const diffY = playerPos[1] - lastShadowPlayerPos[1];
-		const diffZ = playerPos[2] - lastShadowPlayerPos[2];
-		const moveDistSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
-		const isFastMovement = moveDistSq > 1.0; // If moving > 1 block per frame (flying/falling/sprinting fast), update immediately
-		lastShadowPlayerPos = playerPos;
-
 		const activeCascades: usize = if (settings.shadowDistance <= 24.0)
 			1
 		else if (settings.shadowDistance <= 96.0)
@@ -1808,57 +1831,86 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		else
 			3;
 
+		const maxDistances = [numCascades]f32{ 2.0, 8.0, 32.0 };
+		const maxFrameAge = [numCascades]u32{ 15, 30, 60 }; // Refresh stationary shadows every 15, 30, 60 frames for continuous sun movement
+
 		for (0..activeCascades) |i| {
-			// Stagger distant cascade (Cascade 2) updates every 3rd frame ONLY when moving slowly or stationary:
-			if (i == 2 and !isFastMovement and shadowFrameCounter % 3 != 0) continue;
+			const diffX = playerPos[0] - renderedPlayerPos[i][0];
+			const diffY = playerPos[1] - renderedPlayerPos[i][1];
+			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
+			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
+			const maxDistSq = maxDistances[i] * maxDistances[i];
+			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
 
-			shadowFBs[i].bind();
-			c.glClear(c.GL_DEPTH_BUFFER_BIT);
-			c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatricesGL[i]));
+			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= maxFrameAge[i] or shadowFrameCounter <= 2;
 
-			const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i], lightDir, occluderSunDists[i]);
-			var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
-			defer for (chunkLists) |list| list.deinit();
-			for (meshes) |mesh| {
-				mesh.prepareRendering(&chunkLists);
-			}
+			if (needsReRender) {
+				lastRenderedFrame[i] = shadowFrameCounter;
+				renderedPlayerPos[i] = playerPos;
+				baseLightSpaceMatrices[i] = computeLightSpaceMatrix(
+					cascadeFarDistances[i],
+					lightView,
+					playerPos,
+					zMargins[i],
+				);
 
-			chunk_meshing.vao.bind();
-			for (0..1) |lod| {
-				const chunkIDs = chunkLists[lod].items;
-				if (chunkIDs.len == 0) continue;
-				chunk_meshing.bindBuffers(lod);
-				const drawCallsEstimate: u31 = @intCast(chunkIDs.len * 8);
-				var chunkIDAllocation: main.graphics.SubAllocation = .{ .start = 0, .len = 0 };
-				chunk_meshing.chunkIDBuffer.uploadData(chunkIDs, &chunkIDAllocation);
-				defer chunk_meshing.chunkIDBuffer.free(chunkIDAllocation);
-				const allocation = chunk_meshing.commandBuffer.rawAlloc(drawCallsEstimate);
-				defer chunk_meshing.commandBuffer.free(allocation);
-				chunk_meshing.commandPipeline.bind();
-				c.glUniform1f(chunk_meshing.commandUniforms.lodDistance, main.settings.@"lod0.5Distance");
-				c.glUniform1ui(chunk_meshing.commandUniforms.chunkIDIndex, chunkIDAllocation.start);
-				c.glUniform1ui(chunk_meshing.commandUniforms.commandIndexStart, allocation.start);
-				c.glUniform1ui(chunk_meshing.commandUniforms.size, @intCast(chunkIDs.len));
-				c.glUniform1i(chunk_meshing.commandUniforms.isTransparent, 0);
-				c.glUniform1i(chunk_meshing.commandUniforms.onlyDrawPreviouslyInvisible, 0);
-				// The main camera's oldVisibilityState/per-direction visibility culling is irrelevant here
-				// (and actively wrong): a chunk the main camera currently considers invisible — e.g. behind
-				// the player after they turn around — must still contribute every opaque face to the
-				// shadow depth map, since getShadowRenderChunks already gathered it as a 360-degree occluder.
-				// Without this, that chunk silently contributed zero draw commands and its shadow vanished
-				// the moment the player looked away from it.
-				c.glUniform1i(chunk_meshing.commandUniforms.forceAllVisible, 1);
-				c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
-				c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
+				shadowFBs[i].bind();
+				c.glClear(c.GL_DEPTH_BUFFER_BIT);
+				c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&baseLightSpaceMatrices[i].toGl()));
 
-				// Re-bind shadow pipeline after compute (compute unbinds it)
-				shadowPipeline.bind(null);
-				c.glUniform1i(43, @intFromBool(settings.foliageShadows));
-				c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatricesGL[i]));
+				const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i], lightDir, occluderSunDists[i]);
+				var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
+				defer for (chunkLists) |list| list.deinit();
+				for (meshes) |mesh| {
+					mesh.prepareRendering(&chunkLists);
+				}
+
 				chunk_meshing.vao.bind();
-				c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);
-				c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
+				for (0..1) |lod| {
+					const chunkIDs = chunkLists[lod].items;
+					if (chunkIDs.len == 0) continue;
+					chunk_meshing.bindBuffers(lod);
+					const drawCallsEstimate: u31 = @intCast(chunkIDs.len * 8);
+					var chunkIDAllocation: main.graphics.SubAllocation = .{ .start = 0, .len = 0 };
+					chunk_meshing.chunkIDBuffer.uploadData(chunkIDs, &chunkIDAllocation);
+					defer chunk_meshing.chunkIDBuffer.free(chunkIDAllocation);
+					const allocation = chunk_meshing.commandBuffer.rawAlloc(drawCallsEstimate);
+					defer chunk_meshing.commandBuffer.free(allocation);
+					chunk_meshing.commandPipeline.bind();
+					c.glUniform1f(chunk_meshing.commandUniforms.lodDistance, main.settings.@"lod0.5Distance");
+					c.glUniform1ui(chunk_meshing.commandUniforms.chunkIDIndex, chunkIDAllocation.start);
+					c.glUniform1ui(chunk_meshing.commandUniforms.commandIndexStart, allocation.start);
+					c.glUniform1ui(chunk_meshing.commandUniforms.size, @intCast(chunkIDs.len));
+					c.glUniform1i(chunk_meshing.commandUniforms.isTransparent, 0);
+					c.glUniform1i(chunk_meshing.commandUniforms.onlyDrawPreviouslyInvisible, 0);
+					c.glUniform1i(chunk_meshing.commandUniforms.forceAllVisible, 1);
+					c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
+					c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
+
+					shadowPipeline.bind(null);
+					c.glUniform1i(43, @intFromBool(settings.foliageShadows));
+					c.glUniform3fv(37, 1, @ptrCast(&lightDir));
+					c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&baseLightSpaceMatrices[i].toGl()));
+					chunk_meshing.vao.bind();
+					c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);
+					c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
+				}
 			}
+
+			// Compensate for player movement delta dynamically in lightSpaceMatricesGL[i]:
+			const deltaX: f32 = @floatCast(playerPos[0] - renderedPlayerPos[i][0]);
+			const deltaY: f32 = @floatCast(playerPos[1] - renderedPlayerPos[i][1]);
+			const deltaZ: f32 = @floatCast(playerPos[2] - renderedPlayerPos[i][2]);
+			const translation = Mat4f{
+				.rows = [4]Vec4f{
+					Vec4f{ 1, 0, 0, deltaX },
+					Vec4f{ 0, 1, 0, deltaY },
+					Vec4f{ 0, 0, 1, deltaZ },
+					Vec4f{ 0, 0, 0, 1 },
+				},
+			};
+			const correctedMatrix = baseLightSpaceMatrices[i].mul(translation);
+			lightSpaceMatricesGL[i] = correctedMatrix.toGl();
 		}
 
 		// Restore normal rendering state. Must rebind whichever buffer renderWorld's opaque pass is

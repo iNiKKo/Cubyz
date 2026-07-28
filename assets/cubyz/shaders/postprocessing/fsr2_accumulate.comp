@@ -1,0 +1,77 @@
+#version 460
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+layout(binding = 0) uniform sampler2D ColorTexture;
+layout(binding = 1) uniform sampler2D DepthTexture;
+layout(binding = 2) uniform sampler2D HistoryTexture;
+layout(binding = 3, rgba16f) uniform writeonly image2D OutputTexture;
+layout(binding = 4, rgba16f) uniform writeonly image2D NewHistoryTexture;
+
+layout(location = 0) uniform vec4 renderSize;   // renderWidth, renderHeight, 1/renderWidth, 1/renderHeight
+layout(location = 1) uniform vec4 displaySize;  // displayWidth, displayHeight, 1/displayWidth, 1/displayHeight
+layout(location = 2) uniform vec2 jitterOffset; // sub-pixel camera jitter offset
+layout(location = 3) uniform float resetHistory; // 1.0 when camera teleported/reset, else 0.0
+
+// Convert RGB to YCoCg color space for perceptual history color bounding box clamping
+vec3 RGB2YCoCg(vec3 c) {
+	return vec3(
+		 0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
+		 0.50 * c.r - 0.5 * c.b,
+		-0.25 * c.r + 0.5 * c.g - 0.25 * c.b
+	);
+}
+
+vec3 YCoCg2RGB(vec3 ycc) {
+	return vec3(
+		ycc.x + ycc.y - ycc.z,
+		ycc.x + ycc.z,
+		ycc.x - ycc.y - ycc.z
+	);
+}
+
+void main() {
+	ivec2 outPos = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 outSize = imageSize(OutputTexture);
+	if (outPos.x >= outSize.x || outPos.y >= outSize.y) return;
+
+	// Map output pixel to low-res render UV space
+	vec2 displayUV = (vec2(outPos) + vec2(0.5)) * displaySize.zw;
+	vec2 renderUV = displayUV - jitterOffset * renderSize.zw;
+
+	// Sample center color and 3x3 neighborhood for YCoCg clamping
+	vec3 colorCenter = textureLod(ColorTexture, renderUV, 0.0).rgb;
+
+	vec3 m1 = vec3(0.0);
+	vec3 m2 = vec3(0.0);
+
+	for (int x = -1; x <= 1; ++x) {
+		for (int y = -1; y <= 1; ++y) {
+			vec2 offUV = renderUV + vec2(x, y) * renderSize.zw;
+			vec3 c = RGB2YCoCg(textureLod(ColorTexture, offUV, 0.0).rgb);
+			m1 += c;
+			m2 += c * c;
+		}
+	}
+
+	m1 /= 9.0;
+	m2 /= 9.0;
+	vec3 sigma = sqrt(max(vec3(0.0), m2 - m1 * m1));
+
+	// Color bounding box bounds
+	float gamma = 1.25;
+	vec3 minColor = m1 - gamma * sigma;
+	vec3 maxColor = m1 + gamma * sigma;
+
+	// Sample historical reprojected frame
+	vec3 historyColor = textureLod(HistoryTexture, displayUV, 0.0).rgb;
+	vec3 historyYCoCg = clamp(RGB2YCoCg(historyColor), minColor, maxColor);
+	historyColor = YCoCg2RGB(historyYCoCg);
+
+	// Temporal accumulation blend weight
+	float blendWeight = (resetHistory > 0.5) ? 1.0 : 0.12;
+	vec3 finalColor = mix(historyColor, colorCenter, blendWeight);
+
+	imageStore(OutputTexture, outPos, vec4(finalColor, 1.0));
+	imageStore(NewHistoryTexture, outPos, vec4(finalColor, 1.0));
+}
