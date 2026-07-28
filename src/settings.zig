@@ -48,6 +48,9 @@ pub var bloom: bool = true;
 
 pub var shadows: bool = true;
 
+/// Controls how dark terrain shadows are (0.0 = no shadows/fully lit, 0.50 = normal default shadows, 1.0 = extra dark shadows).
+pub var shadowDarkness: f32 = 0.50;
+
 /// Max sun/moon shadow ray length, in blocks (see shadow.glsl's sampleSunShadow) — a raymarch distance
 /// cap, not a shadow-map coverage radius.
 pub var shadowDistance: f32 = 128.0;

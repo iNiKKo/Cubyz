@@ -216,12 +216,6 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	const nightColor: Vec3f = .{0.3, 0.4, 0.5};
 	var ambient = @max(nightColor*@as(Vec3f, @splat(settings.nightBrightness)), @as(Vec3f, @splat(game.world.?.dayTime.ambientLight)));
 	if (settings.shadows) {
-		// Shadows only ever remove light (shadowed ground loses brightness no matter how bright the sky
-		// is), so a scene with shadows on reads as noticeably duller overall than the same scene with
-		// shadows off, even in the fully-lit areas — bump the ambient floor to compensate. Capped well
-		// short of blowing out fully-lit surfaces to white, and shadowed areas still read as darker than
-		// lit ones (this boosts the light shadows are subtracted *from*, not shadowAmbientFloor itself
-		// in shadow.glsl, so shadow contrast is preserved).
 		ambient = @min(ambient*@as(Vec3f, @splat(1.25)), @as(Vec3f, @splat(1.0)));
 	}
 
@@ -274,7 +268,10 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	if (msaaActive) {
 		MSAA.updateSize(lastWidth, lastHeight);
 		MSAA.frameBuffer.bind();
+		c.glEnable(c.GL_MULTISAMPLE);
 	} else {
+		c.glDisable(c.GL_MULTISAMPLE);
+		c.glDisable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 		worldFrameBuffer.bind();
 	}
 	c.glViewport(0, 0, lastWidth, lastHeight);
@@ -348,9 +345,15 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		mesh.prepareRendering(&chunkLists);
 	}
 	gpu_performance_measuring.stopQuery();
+	if (msaaActive) {
+		c.glEnable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
+	}
 	gpu_performance_measuring.startQuery(.chunk_rendering);
 	chunk_meshing.drawChunksIndirect(&chunkLists, ambientLight, false);
 	gpu_performance_measuring.stopQuery();
+	if (msaaActive) {
+		c.glDisable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
+	}
 
 	gpu_performance_measuring.startQuery(.entity_rendering);
 	main.entity.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
@@ -376,6 +379,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	if (msaaActive) {
 		gpu_performance_measuring.startQuery(.msaa_resolve);
 		MSAA.frameBuffer.resolveTo(&worldFrameBuffer, lastWidth, lastHeight);
+		c.glDisable(c.GL_MULTISAMPLE);
+		c.glDisable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 		worldFrameBuffer.bind();
 		gpu_performance_measuring.stopQuery();
 	}
@@ -460,9 +465,14 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", 1e5);
 	} else if (!blocks.meshes.hasFog(playerBlock)) {
 		const skyColorVal = game.world.?.dayTime.fog.skyColor;
-		var fogColor = game.world.?.dayTime.fog.fogColor;
+		const baseFogColor = game.world.?.dayTime.fog.fogColor;
+		var fogColor = skyColorVal;
 		var fogDensity = game.world.?.dayTime.fog.density;
 		const playerZ: f32 = @floatCast(playerPos[2]);
+
+		// Calculate smooth cloud altitude factor (1.0 near cloud layer Z=268..318, 0.0 at ground level):
+		const cloudAltDist = @abs(playerZ - 295.5);
+		const cloudAltFactor = 1.0 - std.math.clamp((cloudAltDist - 10.0) / 40.0, 0.0, 1.0);
 
 		// Calculate total maximum distance of all loaded LOD chunks combined (HQ LOD0 + low-res LODs):
 		const lodScale: f32 = @floatFromInt(@as(u32, 1) << main.settings.highestLod);
@@ -473,7 +483,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 			fogColor += (skyColorVal - fogColor) * @as(Vec3f, @splat(highAltFactor));
 			fogDensity += ((1.0 / @max(1.0, totalMaxLodDist)) - fogDensity) * highAltFactor;
 		} else {
-			fogColor = skyColorVal;
+			// Near cloud altitude (Z ~ 288), smoothly blend fogColor away from sky blue toward soft cloud fog color:
+			fogColor = skyColorVal + (baseFogColor - skyColorVal) * @as(Vec3f, @splat(cloudAltFactor));
 			if (totalMaxLodDist > 0) {
 				fogDensity = 1.0 / totalMaxLodDist;
 			}
@@ -1831,19 +1842,18 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		else
 			3;
 
-		const maxDistances = [numCascades]f32{ 2.0, 8.0, 32.0 };
-		const maxFrameAge = [numCascades]u32{ 15, 30, 60 }; // Refresh stationary shadows every 15, 30, 60 frames for continuous sun movement
+		const maxDistSq: f64 = 2.0 * 2.0; // 2 blocks of player movement
+		const maxFrameAge: u32 = 20; // Refresh all cascades in unison every 20 frames (~0.33s) when standing still
+
+		const diffX = playerPos[0] - renderedPlayerPos[0][0];
+		const diffY = playerPos[1] - renderedPlayerPos[0][1];
+		const diffZ = playerPos[2] - renderedPlayerPos[0][2];
+		const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
+		const frameAge = shadowFrameCounter -% lastRenderedFrame[0];
+
+		const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= maxFrameAge or shadowFrameCounter <= 2;
 
 		for (0..activeCascades) |i| {
-			const diffX = playerPos[0] - renderedPlayerPos[i][0];
-			const diffY = playerPos[1] - renderedPlayerPos[i][1];
-			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
-			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
-			const maxDistSq = maxDistances[i] * maxDistances[i];
-			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
-
-			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= maxFrameAge[i] or shadowFrameCounter <= 2;
-
 			if (needsReRender) {
 				lastRenderedFrame[i] = shadowFrameCounter;
 				renderedPlayerPos[i] = playerPos;

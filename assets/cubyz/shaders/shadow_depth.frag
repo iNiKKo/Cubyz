@@ -22,7 +22,7 @@ void main() {
 	if (opaqueInLod == 0) {
 		if (!foliageShadowsEnabled) discard;
 		float alpha = texture(textureSampler, vec3(uv, animatedIndex)).a;
-		if (alpha < 0.1) discard;
+		if (alpha < 0.35) discard;
 	} else {
 		float alpha = texture(textureSampler, vec3(uv, animatedIndex)).a;
 		if (alpha < 0.5) discard;

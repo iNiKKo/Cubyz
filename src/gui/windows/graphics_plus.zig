@@ -93,11 +93,21 @@ fn rainCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn shadowDarknessFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffShadow Darkness: {d:.0}%", .{value * 100.0});
+}
+
+fn shadowDarknessCallback(newValue: f32) void {
+	settings.shadowDarkness = newValue;
+	settings.save();
+}
+
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.shadowDarkness, &shadowDarknessCallback, &shadowDarknessFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, @floatFromInt(settings.shadowRaySteps), &shadowRayStepsCallback, &shadowRayStepsFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Grass Shadows", settings.foliageShadows, &foliageShadowsCallback));

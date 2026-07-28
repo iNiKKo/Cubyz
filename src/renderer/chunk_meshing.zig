@@ -46,6 +46,7 @@ const UniformStruct = struct {
 	cloudHeightRelative: c_int,
 	sunDirection: c_int,
 	isSunlight: c_int,
+	shadowDarkness: c_int,
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
@@ -216,6 +217,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	const sunDirection = game.world.?.dayTime.getShadowLightDirection();
 	c.glUniform3fv(locations.sunDirection, 1, @ptrCast(&sunDirection));
 	c.glUniform1i(locations.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
+	c.glUniform1f(locations.shadowDarkness, main.settings.shadowDarkness);
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
 	if (main.settings.shadows) {

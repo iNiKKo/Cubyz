@@ -200,6 +200,10 @@ fn sampleCoverage(worldX: f64, worldY: f64) bool {
 	return sampleCoverageWithSeeds(worldX, worldY, cloudSeed, detailSeed, coverageThreshold);
 }
 
+var lastOriginCellX: i64 = 0;
+var lastOriginCellY: i64 = 0;
+var lastGridDim: u32 = 0;
+
 pub fn isPlayerInsideCloud(playerPos: Vec3d) bool {
 	if (!settings.clouds) return false;
 	const z = playerPos[2];
@@ -207,9 +211,20 @@ pub fn isPlayerInsideCloud(playerPos: Vec3d) bool {
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
-	const worldX = playerPos[0] - @as(f64, windOffset[0]);
-	const worldY = playerPos[1] - @as(f64, windOffset[1]);
-	return sampleCoverage(worldX, worldY);
+	const effectivePosX: f64 = playerPos[0] - @as(f64, windOffset[0]);
+	const effectivePosY: f64 = playerPos[1] - @as(f64, windOffset[1]);
+
+	const playerCellX: i64 = @intFromFloat(@floor(effectivePosX / cellSizeD));
+	const playerCellY: i64 = @intFromFloat(@floor(effectivePosY / cellSizeD));
+
+	const localX = playerCellX - lastOriginCellX;
+	const localY = playerCellY - lastOriginCellY;
+
+	if (localX >= 0 and localY >= 0 and localX < lastGridDim and localY < lastGridDim) {
+		const idx: usize = @intCast(localY * @as(i64, @intCast(lastGridDim)) + localX);
+		return coverage[idx] > 0;
+	}
+	return false;
 }
 
 
@@ -627,6 +642,10 @@ pub fn update(playerPos: Vec3d) void {
 
 	const originCellX: i64 = @intFromFloat(@floor(effectivePosX/cellSizeD) - gridDimD/2);
 	const originCellY: i64 = @intFromFloat(@floor(effectivePosY/cellSizeD) - gridDimD/2);
+
+	lastOriginCellX = originCellX;
+	lastOriginCellY = originCellY;
+	lastGridDim = gridDim;
 
 	const cloudMidHeightD: f64 = @as(f64, cloudBaseHeight) + @as(f64, cloudThickness)/2;
 

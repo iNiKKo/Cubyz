@@ -87,7 +87,28 @@ vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012
 void main() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	float normalVariation = (opaqueInLod == 0) ? 1.0 : lightVariation(normal);
-	vec3 textureCoords = vec3(uv, animatedTextureIndex);
+	vec2 clampedUv = uv;
+	if (isFoliage != 0) {
+		vec2 tile = clamp(floor((uv - vec2(0.0005)) * 4.0), vec2(0.0), vec2(3.0));
+		vec2 minUv = tile * 0.25 + vec2(0.0005);
+		vec2 maxUv = (tile + vec2(1.0)) * 0.25 - vec2(0.0005);
+		clampedUv = clamp(uv, minUv, maxUv);
+	}
+	vec3 textureCoords = vec3(clampedUv, animatedTextureIndex);
+	float texAlpha = texture(textureSampler, textureCoords).a;
+
+	// For foliage/cutout geometry under MSAA: use fwidth-based alpha rescaling (Ben Golus technique)
+	// so GL_SAMPLE_ALPHA_TO_COVERAGE generates smooth sub-pixel coverage masks at texture edges,
+	// eliminating the visible wireframe "string" along polygon borders of cross.obj quads.
+	// fwidth(texAlpha) measures how fast alpha changes across this pixel; dividing by it normalizes
+	// the alpha transition to exactly 1 pixel width, giving A2C hardware a clean gradient to work with.
+	if (isFoliage != 0 || opaqueInLod == 0) {
+		float cutoff = 0.5;
+		float alphaDerivative = fwidth(texAlpha);
+		texAlpha = (texAlpha - cutoff) / max(alphaDerivative, 0.0001) + 0.5;
+		texAlpha = clamp(texAlpha, 0.0, 1.0);
+		if (texAlpha < 0.001) discard;
+	}
 
 	float reflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
 	float fresnelReflection = (1 + dot(normalize(direction), normal));
@@ -150,5 +171,9 @@ void main() {
 	fragColor.rgb += reflectivity*pixelLight;
 
 	if(!passDitherTest(fragColor.a)) discard;
-	fragColor.a = 1;
+	if (isFoliage != 0 || opaqueInLod == 0) {
+		fragColor.a = texAlpha;
+	} else {
+		fragColor.a = 1;
+	}
 }

@@ -25,6 +25,7 @@ layout(location = 50) uniform float csmTexelSize;       // 1.0 / shadowMapSize
 layout(location = 33) uniform bool shadowsEnabled;
 layout(location = 38) uniform bool isSunlight; // false when moonlight is casting the shadow
 layout(location = 37) uniform vec3 sunDirection; // direction *toward* the sun/moon
+layout(location = 39) uniform float shadowDarkness; // [0.0, 1.0] shadow darkness factor
 // These cloud uniforms kept at same locations as before to avoid having to change bindCommonUniforms:
 layout(location = 34) uniform vec2 cloudCoverageOrigin;
 layout(location = 35) uniform float cloudCoverageWorldSize;
@@ -179,7 +180,10 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 	if (!shadowsEnabled) return 1.0;
 
 	vec3 lightDir = normalize(sunDirection);
-	float shadowAmbientFloor = isSunlight ? shadowAmbientFloorDay : shadowAmbientFloorNight;
+	float baseAmbientFloor = isSunlight ? shadowAmbientFloorDay : shadowAmbientFloorNight;
+	float shadowAmbientFloor = (shadowDarkness <= 0.5)
+		? mix(1.0, baseAmbientFloor, shadowDarkness * 2.0)
+		: mix(baseAmbientFloor, baseAmbientFloor * 0.2, (shadowDarkness - 0.5) * 2.0);
 
 	// Solid faces pointing away from or parallel to the sun (NdotL <= 0.001) receive ambient shadow floor
 	// immediately without sampling the shadow map, preventing grazing-angle depth bias jitter on side faces:
