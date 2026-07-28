@@ -46,6 +46,8 @@ pub var antiAliasingMode: AntiAliasingMode = .fxaa;
 
 pub var bloom: bool = true;
 
+pub var reflections: bool = true;
+
 pub var shadows: bool = true;
 
 /// Controls how dark terrain shadows are (0.0 = no shadows/fully lit, 0.50 = normal default shadows, 1.0 = extra dark shadows).

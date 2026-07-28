@@ -77,16 +77,21 @@ void mainBlockDrop() {
 	float normalVariation = lightVariation(faceNormal);
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 
-	float reflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
-	float fresnelReflection = (1 + dot(normalize(direction), faceNormal));
-	fresnelReflection *= fresnelReflection;
-	fresnelReflection *= min(1, 2*reflectivity); // Limit it to 2*reflectivity to avoid making every block reflective.
-	reflectivity = reflectivity*fixedCubeMapLookup(reflect(direction, faceNormal)).x;
-	reflectivity = reflectivity*(1 - fresnelReflection) + fresnelReflection;
+	float rawReflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
+	vec3 reflectionColor = vec3(0.0);
+	float specularSheen = 0.0;
+	if (rawReflectivity > 0.01) {
+		vec3 reflDir = reflect(normalize(direction), faceNormal);
+		reflectionColor = fixedCubeMapLookup(reflDir).rgb;
+		float fresnel = clamp(pow(1.0 + dot(normalize(direction), faceNormal), 2.0), 0.0, 1.0);
+		specularSheen = rawReflectivity * (0.35 + 0.65 * fresnel);
+	}
 
 	vec3 pixelLight = ambientLight*max(vec3(normalVariation), texture(emissionSampler, textureCoords).r*4);
 	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
-	fragColor.rgb += reflectivity*pixelLight;
+	if (rawReflectivity > 0.01) {
+		fragColor.rgb += reflectionColor * pixelLight * specularSheen * 0.40;
+	}
 
 	if(!passDitherTest(fragColor.a)) discard;
 	fragColor.a = 1;

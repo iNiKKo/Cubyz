@@ -31,6 +31,7 @@ uniform vec3 handLightColor;
 uniform vec3 dropLightPositionRelative;
 uniform vec3 dropLightColor;
 uniform float handLightRadius;
+uniform bool reflectionsEnabled;
 
 layout(std430, binding = 1) buffer _animatedTexture
 {
@@ -110,12 +111,15 @@ void main() {
 		if (texAlpha < 0.001) discard;
 	}
 
-	float reflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
-	float fresnelReflection = (1 + dot(normalize(direction), normal));
-	fresnelReflection *= fresnelReflection;
-	fresnelReflection *= min(1, 2*reflectivity); // Limit it to 2*reflectivity to avoid making every block reflective.
-	reflectivity = reflectivity*fixedCubeMapLookup(reflect(direction, normal)).x;
-	reflectivity = reflectivity*(1 - fresnelReflection) + fresnelReflection;
+	float rawReflectivity = reflectionsEnabled ? texture(reflectivityAndAbsorptionSampler, textureCoords).a : 0.0;
+	vec3 reflectionColor = vec3(0.0);
+	float specularSheen = 0.0;
+	if (rawReflectivity > 0.01) {
+		vec3 reflDir = reflect(normalize(direction), normal);
+		reflectionColor = fixedCubeMapLookup(reflDir).rgb;
+		float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
+		specularSheen = rawReflectivity * (0.35 + 0.65 * fresnel);
+	}
 
 	// isFoliage (the vertex-attribute int) is a real per-model flag set by models.zig from each model's
 	// .zig.zon (`isFoliage = true`), NOT derived from opaqueInLod. opaqueInLod==0 also covers any
@@ -168,7 +172,9 @@ void main() {
 	vec3 totalLight = min(directSunAndShadow + handLight + outBlockLight, vec3(1.0));
 	vec3 pixelLight = max(totalLight*normalVariation, texture(emissionSampler, textureCoords).r*4);
 	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
-	fragColor.rgb += reflectivity*pixelLight;
+	if (rawReflectivity > 0.01) {
+		fragColor.rgb += reflectionColor * pixelLight * specularSheen * 0.40;
+	}
 
 	if(!passDitherTest(fragColor.a)) discard;
 	if (isFoliage != 0 || opaqueInLod == 0) {

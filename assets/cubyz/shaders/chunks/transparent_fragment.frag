@@ -18,6 +18,7 @@ layout(location = 0, index = 1) out vec4 blendColor;
 layout(binding = 0) uniform sampler2DArray textureSampler;
 layout(binding = 1) uniform sampler2DArray emissionSampler;
 layout(binding = 2) uniform sampler2DArray reflectivityAndAbsorptionSampler;
+layout(binding = 3) uniform sampler2D worldColorSampler;
 layout(binding = 4) uniform samplerCube reflectionMap;
 layout(binding = 5) uniform sampler2D depthTexture;
 
@@ -26,6 +27,8 @@ layout(location = 6) uniform float contrast;
 
 layout(location = 8) uniform float zNear;
 layout(location = 9) uniform float zFar;
+
+uniform bool reflectionsEnabled;
 
 struct Fog {
 	vec3 color;
@@ -95,9 +98,6 @@ float calculateFogDistance(float dist, float densityAdjustment, float zStart, fl
 	if(distCameraTerrain < 10) { // Resolution range is sufficient.
 		return distFromTerrain;
 	} else {
-		// Here we have a few options to deal with this. We could for example weaken the fog effect to fit the entire range.
-		// I decided to keep the fog strength close to the camera and far away, with a fog-free region in between.
-		// I decided to this because I want far away fog to work (e.g. a distant ocean) as well as close fog(e.g. the top surface of the water when the player is under it)
 		if(distFromTerrain > -5) {
 			return distFromTerrain;
 		} else if(distFromCamera < 5) {
@@ -129,6 +129,42 @@ vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012
 	return texture(reflectionMap, v);
 }
 
+// Screen-Space Reflections (SSR) for water and transparent surfaces
+vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
+	if (!reflectionsEnabled) return fallbackColor;
+
+	vec3 stepDir = normalize(reflDir) * 0.35;
+	float stepSize = 1.0;
+	vec3 currentPos = viewPos;
+
+	for (int i = 0; i < 20; i++) {
+		currentPos += stepDir * stepSize;
+		stepSize *= 1.12;
+
+		vec4 clipPos = projectionMatrix * vec4(currentPos, 1.0);
+		if (clipPos.w <= 0.001) continue;
+		vec3 ndc = clipPos.xyz / clipPos.w;
+		vec2 screenUv = ndc.xy * 0.5 + 0.5;
+
+		if (screenUv.x < 0.01 || screenUv.x > 0.99 || screenUv.y < 0.01 || screenUv.y > 0.99) {
+			break;
+		}
+
+		float sceneDepth = zFromDepth(texture(depthTexture, screenUv).r);
+		float rayDepth = -currentPos.z;
+
+		float depthDiff = rayDepth - sceneDepth;
+		if (depthDiff > 0.0 && depthDiff < (1.0 + float(i) * 0.25)) {
+			vec3 hitColor = texture(worldColorSampler, screenUv).rgb;
+			vec2 edgeFade = smoothstep(vec2(0.0), vec2(0.08), screenUv) * smoothstep(vec2(1.0), vec2(0.92), screenUv);
+			float fade = edgeFade.x * edgeFade.y;
+			return mix(fallbackColor, hitColor, fade);
+		}
+	}
+
+	return fallbackColor;
+}
+
 void main() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
@@ -141,15 +177,19 @@ void main() {
 	vec3 pixelLight = max(light*normalVariation, texture(emissionSampler, textureCoords).r*4);
 	vec4 textureColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
 
-	float reflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
-	float fresnelReflection = (1 + dot(normalize(direction), normal));
-	fresnelReflection *= fresnelReflection;
-	fresnelReflection *= min(1, 2*reflectivity); // Limit it to 2*reflectivity to avoid making every block reflective.
-	reflectivity = reflectivity*fixedCubeMapLookup(reflect(direction, normal)).x;
-	reflectivity = reflectivity*(1 - fresnelReflection) + fresnelReflection;
+	float rawReflectivity = reflectionsEnabled ? texture(reflectivityAndAbsorptionSampler, textureCoords).a : 0.0;
+	vec3 reflDir = reflect(normalize(direction), normal);
+	vec3 skyRefl = fixedCubeMapLookup(reflDir).rgb;
+	vec3 reflColor = sampleSSR(mvVertexPos, reflDir, skyRefl);
+
+	float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
+	float specularReflectivity = rawReflectivity * (0.5 + 0.5 * fresnel);
+
 	textureColor.rgb *= textureColor.a;
-	textureColor.rgb += reflectivity*pixelLight;
-	blendColor.rgb = vec3((1 - textureColor.a)*(1 - fresnelReflection));
+	if (rawReflectivity > 0.01) {
+		textureColor.rgb += reflColor * pixelLight * specularReflectivity * 1.20;
+	}
+	blendColor.rgb = vec3(1.0 - textureColor.a);
 
 	if(isBackFace == 0) {
 		vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;

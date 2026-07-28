@@ -394,6 +394,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	MeshSelection.render(playerPos);
 
 	// Render transparent chunk meshes:
+	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE5);
 
 	gpu_performance_measuring.startQuery(.transparent_rendering_preparation);

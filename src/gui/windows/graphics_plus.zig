@@ -32,6 +32,11 @@ fn bloomCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn reflectionsCallback(newValue: bool) void {
+	settings.reflections = newValue;
+	settings.save();
+}
+
 fn shadowsCallback(newValue: bool) void {
 	settings.shadows = newValue;
 	settings.save();
@@ -106,6 +111,7 @@ pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
+	list.add(CheckBox.init(.{0, 0}, 200, "Reflections", settings.reflections, &reflectionsCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.shadowDarkness, &shadowDarknessCallback, &shadowDarknessFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
