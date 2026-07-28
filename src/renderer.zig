@@ -91,6 +91,7 @@ pub fn init() void {
 	worldFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
 	MSAA.init();
 	FXAA.init();
+	TAA.init();
 	Bloom.init();
 	GodRays.init();
 	MeshSelection.init();
@@ -114,6 +115,7 @@ pub fn deinit() void {
 	worldFrameBuffer.deinit();
 	MSAA.deinit();
 	FXAA.deinit();
+	TAA.deinit();
 	Bloom.deinit();
 	GodRays.deinit();
 	MeshSelection.deinit();
@@ -149,6 +151,37 @@ fn initReflectionCubeMap() void {
 }
 
 var worldFrameBuffer: graphics.FrameBuffer = undefined;
+
+/// Standard TAA sub-pixel jitter sequence (Halton(2,3), 8 samples) covering the pixel footprint before
+/// repeating. Applied to a copy of game.projectionMatrix uploaded to frame_uniforms — see
+/// jitteredProjectionMatrix — game.projectionMatrix itself is deliberately never mutated: many other
+/// systems (particles, item drops, skybox stars, GodRays/Bloom's tanXY direction reconstruction, the
+/// deferred composite) read it directly and are not (yet) jitter-aware.
+const haltonJitterSequence = [8]Vec2f{
+	.{1.0/2.0 - 0.5, 1.0/3.0 - 0.5},
+	.{1.0/4.0 - 0.5, 2.0/3.0 - 0.5},
+	.{3.0/4.0 - 0.5, 1.0/9.0 - 0.5},
+	.{1.0/8.0 - 0.5, 4.0/9.0 - 0.5},
+	.{5.0/8.0 - 0.5, 7.0/9.0 - 0.5},
+	.{3.0/8.0 - 0.5, 2.0/9.0 - 0.5},
+	.{7.0/8.0 - 0.5, 5.0/9.0 - 0.5},
+	.{1.0/16.0 - 0.5, 8.0/9.0 - 0.5},
+};
+var taaJitterIndex: usize = 0;
+
+/// Adds this frame's TAA jitter (in NDC units) to a copy of the given projection matrix. Only valid
+/// for this engine's non-standard Z-up/Y-forward Mat4f.perspective layout (verified by hand: row 0's
+/// second column is the coefficient on view-space y in the clip.x formula, row 1's second column is
+/// the same for clip.z/up — adding jx/jy there shifts NDC.xy by exactly (jx, jy) independent of depth,
+/// with zero effect on tanXY-style FOV terms at rows[0][0]/rows[1][2] or on clip.w/depth).
+fn jitteredProjectionMatrix(base: Mat4f, pixelWidth: u31, pixelHeight: u31) Mat4f {
+	if (settings.antiAliasingMode != .taa) return base;
+	const jitter = haltonJitterSequence[taaJitterIndex % haltonJitterSequence.len];
+	var result = base;
+	result.rows[0][1] += jitter[0]*2.0/@as(f32, @floatFromInt(pixelWidth));
+	result.rows[1][1] += jitter[1]*2.0/@as(f32, @floatFromInt(pixelHeight));
+	return result;
+}
 
 pub var lastWidth: u31 = 0;
 pub var lastHeight: u31 = 0;
@@ -246,10 +279,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	gpu_performance_measuring.stopQuery();
 	game.camera.updateViewMatrix();
 
+	const jitteredProjection = jitteredProjectionMatrix(game.projectionMatrix, lastWidth, lastHeight);
 	main.graphics.frame_uniforms.uploadNewFrame(.{
 		.playerPositionInteger = @as(Vec3i, @floor(playerPos)),
 		.playerPositionFraction = @as(Vec3f, @floatCast(@mod(playerPos, Vec3d{1, 1, 1}))),
-		.projectionMatrix = game.projectionMatrix.toGl(),
+		.projectionMatrix = jitteredProjection.toGl(),
 		.viewMatrix = game.camera.viewMatrix.toGl(),
 	});
 
@@ -464,17 +498,29 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
 	}
 
-	if (settings.antiAliasingMode == .fxaa) {
-		FXAA.preDraw(lastWidth, lastHeight);
-	} else {
-		c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
+	switch (settings.antiAliasingMode) {
+		.fxaa => FXAA.preDraw(lastWidth, lastHeight),
+		.taa => TAA.preDraw(lastWidth, lastHeight),
+		.off, .msaa => c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer),
 	}
 
 	graphics.draw.rectVao.bind();
 	c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 
-	if (settings.antiAliasingMode == .fxaa) {
-		FXAA.render(lastWidth, lastHeight);
+	switch (settings.antiAliasingMode) {
+		.fxaa => FXAA.render(lastWidth, lastHeight),
+		.taa => {
+			// TAA.render's invViewMatrix parameter: passed camera.viewMatrix directly, not an actual
+			// inverse — matches every other invViewMatrix uniform in this file (deferredUniforms,
+			// Bloom's colorExtractUniforms, GodRays' maskUniforms). camera.viewMatrix is a pure rotation
+			// (world->view, no translation — see game.zig's updateViewMatrix), so its transpose (applied
+			// at upload via glUniformMatrix4fv's transpose flag) already equals its inverse (view->world)
+			// for an orthonormal rotation matrix — the actual inversion this technique needs.
+			TAA.render(playerPos, jitteredProjection, game.camera.viewMatrix);
+			TAA.endFrame(playerPos, game.camera.viewMatrix, game.projectionMatrix);
+			taaJitterIndex +%= 1;
+		},
+		.off, .msaa => {},
 	}
 
 	c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
@@ -576,6 +622,134 @@ const FXAA = struct { // MARK: FXAA
 		c.glUniform2f(uniforms.inverseScreenSize, 1.0/@as(f32, @floatFromInt(currentWidth)), 1.0/@as(f32, @floatFromInt(currentHeight)));
 		graphics.draw.rectVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+	}
+};
+
+/// Temporal Anti-Aliasing. Accumulates renderWorld's per-frame sub-pixel jitter (see
+/// jitteredProjectionMatrix) into a persistent history buffer via reprojection, giving each on-screen
+/// pixel effectively many sub-pixel-shifted samples over time — this is what actually resolves
+/// alpha-cutout foliage aliasing well (MSAA above only smooths true polygon edges; FXAA is a blur with
+/// no real geometric information). Scoped smaller than "full" TAA: reprojection here is camera-only
+/// (no per-object motion vectors, since this engine has none), so moving entities/the player's own
+/// hand-held item will show some ghosting — bounded by the resolve shader's neighborhood clamping, not
+/// eliminated. Runs in the same "final post-process pass" slot FXAA/plain passthrough use.
+const TAA = struct { // MARK: TAA
+	/// Pre-resolve buffer: deferredRenderPassPipeline renders here (like FXAA.buffer) before the resolve
+	/// shader reads it as this frame's new, un-blended color.
+	var currentBuffer: graphics.FrameBuffer = undefined;
+	/// Ping-pong pair holding the actual temporal accumulation: one holds this frame's just-resolved
+	/// (blended-with-history) output, the other holds last frame's, swapping roles every frame — can't
+	/// read and write the same texture within one draw, hence two buffers instead of one.
+	var resolveBuffers: [2]graphics.FrameBuffer = undefined;
+	var resolveIndex: usize = 0;
+	var width: u31 = std.math.maxInt(u31);
+	var height: u31 = std.math.maxInt(u31);
+	var pipeline: graphics.Pipeline = undefined;
+	var uniforms: struct {
+		tanXY: c_int,
+		zNear: c_int,
+		zFar: c_int,
+		invViewMatrix: c_int,
+		lastViewProjMatrix: c_int,
+		cameraDelta: c_int,
+		historyBlendFactor: c_int,
+	} = undefined;
+
+	/// Un-jittered — TAA-specific state, distinct from any of renderer.zig's other per-frame caches.
+	var lastPlayerPos: Vec3d = .{0, 0, 0};
+	var lastViewMatrix: Mat4f = Mat4f.identity();
+	var lastProjectionMatrix: Mat4f = Mat4f.identity();
+	var hasHistory: bool = false;
+
+	pub fn init() void {
+		currentBuffer.init(false, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+		for (&resolveBuffers) |*buffer| buffer.init(false, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+		pipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/taa_resolve.vert",
+			"assets/cubyz/shaders/taa_resolve.frag",
+			"",
+			&uniforms,
+			graphics.draw.SimpleVertex2D,
+			&.{
+				.{.binding = 3, .count = 1, .type = .combinedImageSampler, .stageFlags = .{.fragment = true}},
+				.{.binding = 4, .count = 1, .type = .combinedImageSampler, .stageFlags = .{.fragment = true}},
+				.{.binding = 6, .count = 1, .type = .combinedImageSampler, .stageFlags = .{.fragment = true}},
+			},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.noBlending}},
+		);
+	}
+
+	pub fn deinit() void {
+		currentBuffer.deinit();
+		for (&resolveBuffers) |*buffer| buffer.deinit();
+		pipeline.deinit();
+	}
+
+	fn updateSize(currentWidth: u31, currentHeight: u31) void {
+		if (width != currentWidth or height != currentHeight) {
+			width = currentWidth;
+			height = currentHeight;
+			currentBuffer.updateSize(width, height, c.GL_RGBA8);
+			std.debug.assert(currentBuffer.validate());
+			for (&resolveBuffers) |*buffer| {
+				buffer.updateSize(width, height, c.GL_RGBA16F);
+				std.debug.assert(buffer.validate());
+			}
+			hasHistory = false; // Old resolve buffers are the wrong size/stale — start fresh instead of sampling garbage/stretched history.
+		}
+	}
+
+	/// Redirects the upcoming deferredRenderPassPipeline draw into TAA's own intermediate buffer
+	/// instead of straight to activeFrameBuffer/screen, so TAA has a finished LDR image to resolve.
+	fn preDraw(currentWidth: u31, currentHeight: u31) void {
+		updateSize(currentWidth, currentHeight);
+		currentBuffer.bind();
+	}
+
+	/// depthTexture must already be bound to GL_TEXTURE4 by the caller (renderWorld already does this
+	/// for the deferred composite pass, right before this runs).
+	fn render(playerPos: Vec3d, projectionMatrix: Mat4f, invViewMatrix: Mat4f) void {
+		const writeIndex = resolveIndex;
+		const readIndex = 1 - resolveIndex;
+		resolveIndex = readIndex;
+
+		pipeline.bind(null);
+		currentBuffer.bindTexture(c.GL_TEXTURE3);
+		resolveBuffers[readIndex].bindTexture(c.GL_TEXTURE6);
+		resolveBuffers[writeIndex].bind();
+
+		c.glUniform2f(uniforms.tanXY, 1.0/projectionMatrix.rows[0][0], 1.0/projectionMatrix.rows[1][2]);
+		c.glUniform1f(uniforms.zNear, zNear);
+		c.glUniform1f(uniforms.zFar, zFar);
+		c.glUniformMatrix4fv(uniforms.invViewMatrix, 1, c.GL_TRUE, @ptrCast(&invViewMatrix.transpose()));
+
+		const cameraDelta: Vec3f = @floatCast(playerPos - lastPlayerPos);
+		c.glUniform3fv(uniforms.cameraDelta, 1, @ptrCast(&cameraDelta));
+		// lastProjectionMatrix is un-jittered (renderer.zig only ever writes game.projectionMatrix here,
+		// never the jittered copy) — reprojecting against a jittered matrix would bias the history
+		// sample by up to a pixel every frame, drifting rather than converging.
+		const lastViewProj = lastProjectionMatrix.mul(lastViewMatrix);
+		c.glUniformMatrix4fv(uniforms.lastViewProjMatrix, 1, c.GL_TRUE, @ptrCast(&lastViewProj.transpose()));
+
+		c.glUniform1f(uniforms.historyBlendFactor, if (hasHistory) 0.9 else 0.0);
+
+		graphics.draw.rectVao.bind();
+		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+
+		// Present this frame's resolved result (just-written buffer) to the real target.
+		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, resolveBuffers[writeIndex].frameBuffer);
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, activeFrameBuffer);
+		c.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, c.GL_COLOR_BUFFER_BIT, c.GL_NEAREST);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
+
+	fn endFrame(playerPos: Vec3d, viewMatrix: Mat4f, projectionMatrix: Mat4f) void {
+		lastPlayerPos = playerPos;
+		lastViewMatrix = viewMatrix;
+		lastProjectionMatrix = projectionMatrix;
+		hasHistory = true;
 	}
 };
 
