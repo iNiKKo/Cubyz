@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const main = @import("main");
+const game = main.game;
 const settings = main.settings;
 const graphics = main.graphics;
 const vec = main.vec;
@@ -15,20 +16,15 @@ const c = @import("c");
 // replacement, per user request. Deliberately its own file/pipeline/shaders: this is a much simpler,
 // cheaper effect (one static quad, no greedy-meshed 3D geometry, no CPU-side coverage grid) and keeping
 // it separate means it can't tangle with clouds.zig's own state or accidentally regress it.
-//
-// Unlike clouds.zig's per-cell coverage decisions, this doesn't need any CPU-side data at all: the quad
-// is always exactly centered on the player (see planeHalfSize below), and the wispy pattern itself is
-// computed procedurally straight in the fragment shader from world position + a wind-scrolled offset —
-// there's nothing here for the CPU to precompute per frame beyond a couple of uniforms.
 
-/// Always centered on the player (no per-frame recentering math needed — see the module doc comment),
-/// so this only needs to reach comfortably past the far draw/fog distance.
+/// World-space size of one grid cell, along both horizontal axes.
 const planeHalfSize: f32 = 4096.0;
-/// World Z — above clouds.zig's cloudBaseHeight (288), so this reads as a higher, thinner layer above
-/// the main clouds rather than intersecting them.
+/// World Z — Layer 3: high-altitude thin cloud plane above 3D clouds (288).
 const planeHeight: f32 = 480.0;
-const maxAlpha: f32 = 0.25; // much thinner than clouds.zig's baseAlpha (0.65) — a wisp, not a blanket.
-/// blocks/second, deliberately different from clouds.zig's windVelocity (2.0, 0.8) so the two layers
+/// World Z — Layer 4: top of all cloud layers (above Layer 3 at 480.0).
+const stormPlaneHeight: f32 = 520.0;
+
+/// blocks/second, deliberately different from clouds.zig's windVelocity (2.0, 0.8) so the layers
 /// visibly drift apart instead of moving in lockstep.
 const windVelocity = Vec2f{3.0, 1.4};
 
@@ -45,6 +41,8 @@ var uniforms: struct {
 	tint: c_int,
 	planeHeightRelative: c_int,
 	noiseOrigin: c_int,
+	coverageThreshold: c_int,
+	maxAlpha: c_int,
 } = undefined;
 var vao: graphics.VertexArray = undefined;
 
@@ -81,31 +79,51 @@ pub fn deinit() void {
 	vao.deinit();
 }
 
-/// Drawn after clouds.draw() in renderer.zig — visually layers this thin wispy plane over the main
-/// chunky clouds, matching "add those on top of the existing clouds."
 pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	if (!settings.clouds) return;
 
 	pipeline.bind(null);
 
-	const neutralWhite = Vec3f{0.98, 0.98, 1.0};
-	const tint = @min(Vec3f{1, 1, 1}, neutralWhite*@as(Vec3f, @splat(0.7)) + skyColor*@as(Vec3f, @splat(0.3)))*ambientLight;
-	c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
-
-	const planeHeightRelative: f32 = @floatCast(@as(f64, planeHeight) - playerPos[2]);
-	c.glUniform1f(uniforms.planeHeightRelative, planeHeightRelative);
-
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
-	// The quad's local XY *is* player-relative XY directly (see planeHalfSize's doc comment), so the
-	// fragment shader only needs to add true world XY (playerPos.xy) to recover an absolute noise
-	// coordinate — anchors the wispy pattern to real world position (stable as the player moves) rather
-	// than just drifting with wind, same idea as clouds.zig's coverage field.
 	const playerXY = Vec2f{@floatCast(playerPos[0]), @floatCast(playerPos[1])};
 	const noiseOrigin = playerXY + windOffset;
-	c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&noiseOrigin));
 
-	vao.bind();
-	c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);
+	const neutralWhite = Vec3f{0.98, 0.98, 1.0};
+	const tint = @min(Vec3f{1, 1, 1}, neutralWhite*@as(Vec3f, @splat(0.7)) + skyColor*@as(Vec3f, @splat(0.3)))*ambientLight;
+
+	// Layer 3: High-altitude 2D thin cloud layer (Z = 480)
+	{
+		const planeHeightRelative: f32 = @floatCast(@as(f64, planeHeight) - playerPos[2]);
+		c.glUniform1f(uniforms.planeHeightRelative, planeHeightRelative);
+		c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
+		c.glUniform1f(uniforms.coverageThreshold, 0.55);
+		c.glUniform1f(uniforms.maxAlpha, 0.25);
+		c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&noiseOrigin));
+
+		vao.bind();
+		c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);
+	}
+
+	// Layer 4: Top-of-all-layers Storm 2D Planar Cloud Layer — darker, heavy sky coverage, spawns during rain (Z = 520)
+	const rainIntensity: f32 = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
+	if (rainIntensity > 0.02) {
+		const stormAlpha = rainIntensity * 0.85;
+		if (stormAlpha > 0.01) {
+			const stormPlaneHeightRelative: f32 = @floatCast(@as(f64, stormPlaneHeight) - playerPos[2]);
+			c.glUniform1f(uniforms.planeHeightRelative, stormPlaneHeightRelative);
+
+			const darkStormTint = tint * @as(Vec3f, @splat(0.35)); // Dark stormy tint
+			c.glUniform3fv(uniforms.tint, 1, @ptrCast(&darkStormTint));
+			c.glUniform1f(uniforms.coverageThreshold, 0.20); // Heavy overcast coverage across sky
+			c.glUniform1f(uniforms.maxAlpha, stormAlpha);
+
+			const stormNoiseOrigin = noiseOrigin * @as(Vec2f, @splat(1.15));
+			c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&stormNoiseOrigin));
+
+			vao.bind();
+			c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);
+		}
+	}
 }

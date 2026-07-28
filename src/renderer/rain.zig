@@ -8,6 +8,7 @@ const vec = main.vec;
 const Vec2f = vec.Vec2f;
 const Vec3f = vec.Vec3f;
 const Vec3d = vec.Vec3d;
+const Vec3i = vec.Vec3i;
 const Mat4f = vec.Mat4f;
 
 const c = @import("c");
@@ -30,14 +31,11 @@ const mesh_storage = @import("mesh_storage.zig");
 // reads as a rectangle from any horizontal viewing angle without needing per-vertex billboard math.
 
 /// World-space size of one grid cell, along both horizontal axes.
-const cellSize: f32 = 1.8;
-/// Half-extent (blocks) of the square AOE grid around the player — rain only ever spawns within this
-/// area, deliberately small and independent of render/shadow distance (see the request this answers:
-/// "3D AOE rain... that only actually spawn around the player").
-const gridRadius: f32 = 20.0;
-/// Upper bound on cells per side, sized generously above gridRadius*2/cellSize so the fixed-size backing
-/// arrays never need runtime allocation even if gridRadius is raised later.
-const maxGridDim: u32 = 32;
+const cellSize: f32 = 0.50;
+/// Half-extent (blocks) of the square AOE grid around the player.
+const gridRadius: f32 = 22.0;
+/// Upper bound on cells per side.
+const maxGridDim: u32 = 96;
 
 const dropWidth: f32 = 0.08;
 const dropHeight: f32 = 0.75;
@@ -53,7 +51,7 @@ const groundScanAboveMargin: f64 = 8.0;
 /// How far below the player findGroundZ gives up looking for solid ground (a deep cliff/ravine/void) and
 /// just lets the drop fall that far before looping — keeps the worst case bounded instead of scanning
 /// indefinitely into open air.
-const groundScanMaxDepth: f64 = 48.0;
+const groundScanMaxDepth: f64 = 12.0;
 /// The player's *eye* Z (what playerPos below actually is — see main.zig's `render(game.Player.
 /// getEyePosBlocking(), ...)`) bobs with crouch (Player.eye.desiredPos shifts smoothly but with no
 /// change to the player's real world position at all) and rises through a jump's arc. Using it directly
@@ -66,22 +64,24 @@ const groundScanMaxDepth: f64 = 48.0;
 /// shift the rain pattern at all, while a real sustained elevation change (climbing, falling, teleporting)
 /// still eventually moves it once it crosses a snap boundary.
 const verticalAnchorSnap: f64 = 4.0;
-/// Fraction of grid cells that actually contain a falling drop.
-const activeDensity: f32 = 0.85;
+/// Fraction of grid cells that actually contain a falling drop, at full (1.0) rain intensity — scaled
+/// down linearly by the current rainIntensity in update() so light drizzle looks sparser than a downpour.
+const maxActiveDensity: f32 = 0.95;
 const dropColor = Vec3f{0.6, 0.7, 0.9};
-const dropAlpha: f32 = 0.75;
+const dropAlpha: f32 = 0.40; // Translucent liquid raindrops
 
 const RainVertex = extern struct {
 	pos: [3]f32,
+	color: [3]f32,
 
 	pub const attributeDescriptions: []const c.VkVertexInputAttributeDescription = &.{
 		.{.location = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = @offsetOf(@This(), "pos")},
+		.{.location = 1, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = @offsetOf(@This(), "color")},
 	};
 };
 
 var pipeline: graphics.Pipeline = undefined;
 var uniforms: struct {
-	tint: c_int,
 	alpha: c_int,
 } = undefined;
 var vao: graphics.VertexArray = undefined;
@@ -124,30 +124,56 @@ fn hashCell(gx: i64, gy: i64) f32 {
 }
 
 /// Height (world Z) a drop falling straight down through this column actually lands at, i.e. the top of
-/// the first solid block found scanning downward from groundScanAboveMargin above the player. Without
-/// this, every column looped between the same fixed height above/below the *player's* Z regardless of
-/// what's actually underneath — so standing at the edge of a cliff, rain over the drop-off stopped at
-/// the same height as rain over solid ground next to it, instead of continuing down until it actually
-/// hit something. Gives up and returns the bottom of the scanned range if nothing solid turns up within
-/// groundScanMaxDepth (an open void/very deep drop), rather than scanning indefinitely.
+/// the first solid block found scanning downward from above the fall range top. Starts scanning from
+/// above fallRangeAbovePlayer so tree canopies, leaves, and roofs above head height are properly hit.
 fn findGroundZ(worldX: f64, worldY: f64, anchorZ: f64) f64 {
 	const blockX: i32 = @intFromFloat(@floor(worldX));
 	const blockY: i32 = @intFromFloat(@floor(worldY));
-	const scanTop: i32 = @intFromFloat(@floor(anchorZ + groundScanAboveMargin));
+	const scanTop: i32 = @intFromFloat(@floor(anchorZ + fallRangeAbovePlayer + 4.0));
 	const scanBottom: i32 = @intFromFloat(@floor(anchorZ - groundScanMaxDepth));
 	var z = scanTop;
 	while (z >= scanBottom) : (z -= 1) {
 		const block = mesh_storage.getBlockFromRenderThread(blockX, blockY, z) orelse continue;
 		if (block.typ != 0) return @floatFromInt(z + 1);
 	}
-	return @floatFromInt(scanBottom);
+	return anchorZ - 4.0;
 }
 
-/// Rebuilds the raindrop-quad mesh every frame — cheap enough (at most maxGridDim² small quads, and the
-/// grid itself is intentionally small per gridRadius) that there's no need for clouds.zig's
-/// coverage-texture-sharing trick; rain doesn't cast shadows and nothing else needs to sample its shape.
-pub fn update(playerPos: Vec3d, viewMatrix: Mat4f) void {
-	if (!settings.rain) {
+const ValueNoise = main.server.terrain.noise.ValueNoise;
+const rainNoiseScale: f32 = 64.0;
+const rainWorldSeed: u64 = 0x5a4b3c2d1e0f9887;
+
+/// Evaluates fixed world-position rain noise. Uses a sharp edge transition (edgeWidth = 0.02) to produce
+/// a distinct, visible vertical rain curtain/wall where rain starts and stops in the world.
+fn getSpatialRainIntensity(worldX: f64, worldY: f64, globalRainIntensity: f32) f32 {
+	if (globalRainIntensity <= 0.01) return 0.0;
+	const nx: f32 = @floatCast(worldX / rainNoiseScale);
+	const ny: f32 = @floatCast(worldY / rainNoiseScale);
+	const n = ValueNoise.samplePoint2D(nx, ny, rainWorldSeed);
+	
+	const threshold: f32 = 0.46;
+	const edgeWidth: f32 = 0.02;
+	
+	const factor = std.math.clamp((n - (threshold - edgeWidth)) / (2.0 * edgeWidth), 0.0, 1.0);
+	return globalRainIntensity * factor;
+}
+
+/// Rebuilds the raindrop-quad mesh every frame with per-voxel light sampling.
+pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
+	const cloudBaseHeight: f64 = 288.0;
+	// Hard cap: If player is standing at or above clouds (Z >= 286), no rain spawns!
+	if (!settings.rain or playerPos[2] >= cloudBaseHeight - 2.0) {
+		indexCount = 0;
+		return;
+	}
+	const globalRainIntensity = game.world.?.dayTime.rainIntensity;
+	if (globalRainIntensity <= 0.01) {
+		indexCount = 0;
+		return;
+	}
+	// Desert biomes (dry & hot) never get rain
+	const playerBiome = game.world.?.playerBiome.load(.monotonic);
+	if (playerBiome.properties.dry and playerBiome.properties.hot) {
 		indexCount = 0;
 		return;
 	}
@@ -155,14 +181,8 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f) void {
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 
-	// See verticalAnchorSnap's doc comment: deliberately not playerPos[2] (the eye position, which bobs
-	// with crouch and rises through a jump) — the true physics position, snapped to a coarse grid, so the
-	// fall range doesn't visibly shift with either.
 	const anchorZ: f64 = @floor(game.Player.getPosBlocking()[2]/verticalAnchorSnap)*verticalAnchorSnap;
 
-	// Camera's world-space right vector, flattened to the horizontal plane — shared by every drop this
-	// frame so each quad reads as an upright rectangle facing the camera in yaw, without needing a
-	// per-drop billboard basis (drops are small/thin enough that the shared approximation is unnoticeable).
 	var camRight = Vec3f{viewMatrix.rows[0][0], viewMatrix.rows[0][1], 0};
 	if (vec.dot(camRight, camRight) < 1e-8) camRight = Vec3f{1, 0, 0};
 	camRight = vec.normalize(camRight);
@@ -181,7 +201,6 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f) void {
 		for (0..gridDim) |cx| {
 			const worldCellX = originCellX + @as(i64, @intCast(cx));
 			const worldCellY = originCellY + @as(i64, @intCast(cy));
-			if (hashCell(worldCellX, worldCellY) > activeDensity) continue;
 
 			const jitterX = (hashCell(worldCellX +% 91, worldCellY) - 0.5)*cellSize*0.8;
 			const jitterY = (hashCell(worldCellX, worldCellY +% 91) - 0.5)*cellSize*0.8;
@@ -190,19 +209,21 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f) void {
 			const worldX: f64 = (@as(f64, @floatFromInt(worldCellX)) + 0.5)*cellSize + jitterX;
 			const worldY: f64 = (@as(f64, @floatFromInt(worldCellY)) + 0.5)*cellSize + jitterY;
 
+			const cellRainIntensity = getSpatialRainIntensity(worldX, worldY, globalRainIntensity);
+			if (cellRainIntensity <= 0.01) continue;
+			const activeDensity = cellRainIntensity * maxActiveDensity;
+			if (hashCell(worldCellX, worldCellY) > activeDensity) continue;
+
 			// Distance-from-player fade so drops don't just pop in/out at the AOE grid's square edge.
 			const dx: f32 = @floatCast(worldX - playerPos[0]);
 			const dy: f32 = @floatCast(worldY - playerPos[1]);
 			const edgeDist = @sqrt(dx*dx + dy*dy)/gridRadius;
 			if (edgeDist >= 1.0) continue;
 
-			// Continuous downward loop from fallRangeAbovePlayer down to this column's actual ground
-			// height (not a fixed offset below the player — see findGroundZ), staggered per-cell by
-			// `phase` so drops don't all reset to the top in unison. fallSpeed stays constant regardless
-			// of the column's range, so a drop over a cliff edge visibly falls further before looping,
-			// rather than looping faster/slower to fit a fixed distance.
-			const topZ: f64 = anchorZ + fallRangeAbovePlayer;
+			// Hard cap topZ under cloudBaseHeight (288.0)
+			const topZ: f64 = @min(anchorZ + fallRangeAbovePlayer, cloudBaseHeight - 1.0);
 			const groundZ: f64 = findGroundZ(worldX, worldY, anchorZ);
+			if (topZ <= groundZ) continue;
 			const range: f32 = @max(@as(f32, @floatCast(topZ - groundZ)), 1.0);
 			const loopFrac = @mod(elapsedSeconds*fallSpeed/range + phase, 1.0);
 			const dropZ: f64 = topZ - @as(f64, loopFrac*range);
@@ -213,14 +234,25 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f) void {
 				@floatCast(dropZ - playerPos[2]),
 			};
 
+			// Real-time voxel light sampling at the drop's world position
+			const dropBlockX: i32 = @intFromFloat(@floor(worldX));
+			const dropBlockY: i32 = @intFromFloat(@floor(worldY));
+			const dropBlockZ: i32 = @intFromFloat(@floor(dropZ));
+			const light: [6]u8 = mesh_storage.getLight(dropBlockX, dropBlockY, dropBlockZ) orelse [6]u8{255, 255, 255, 0, 0, 0};
+			const sunLight: Vec3f = ambientLight * @as(Vec3f, @floatFromInt(Vec3i{light[0], light[1], light[2]})) / @as(Vec3f, @splat(255.0));
+			const blockLight: Vec3f = @as(Vec3f, @floatFromInt(Vec3i{light[3], light[4], light[5]})) / @as(Vec3f, @splat(255.0));
+			const lightFactor = @min(@as(Vec3f, @splat(1.0)), @sqrt(sunLight*sunLight + blockLight*blockLight) + @as(Vec3f, @splat(0.04)));
+			const vertexColor: Vec3f = dropColor * lightFactor;
+			const colorArray: [3]f32 = .{vertexColor[0], vertexColor[1], vertexColor[2]};
+
 			const halfWidth: Vec3f = @as(Vec3f, @splat(dropWidth*0.5))*camRight;
 			const halfHeight: Vec3f = @as(Vec3f, @splat(dropHeight*0.5))*up;
 
 			const base: u32 = @intCast(vertices.items.len);
-			vertices.append(.{.pos = center - halfWidth - halfHeight});
-			vertices.append(.{.pos = center + halfWidth - halfHeight});
-			vertices.append(.{.pos = center + halfWidth + halfHeight});
-			vertices.append(.{.pos = center - halfWidth + halfHeight});
+			vertices.append(.{.pos = center - halfWidth - halfHeight, .color = colorArray});
+			vertices.append(.{.pos = center + halfWidth - halfHeight, .color = colorArray});
+			vertices.append(.{.pos = center + halfWidth + halfHeight, .color = colorArray});
+			vertices.append(.{.pos = center - halfWidth + halfHeight, .color = colorArray});
 			indices.append(base + 0);
 			indices.append(base + 1);
 			indices.append(base + 2);
@@ -240,7 +272,6 @@ pub fn draw() void {
 	pipeline.bind(null);
 	vao.bind();
 
-	c.glUniform3fv(uniforms.tint, 1, @ptrCast(&dropColor));
 	c.glUniform1f(uniforms.alpha, dropAlpha);
 
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(indexCount), c.GL_UNSIGNED_INT, null);

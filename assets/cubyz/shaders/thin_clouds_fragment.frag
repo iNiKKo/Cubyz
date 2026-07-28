@@ -8,13 +8,13 @@ uniform vec3 tint;
 // thin_clouds.zig's playerXY + wind drift — added to localPos below to recover an absolute world-XY
 // noise coordinate (see thin_clouds.zig's doc comment for why localPos alone isn't already that).
 uniform vec2 noiseOrigin;
+uniform float coverageThreshold;
+uniform float maxAlpha;
 
 const float noiseScale = 220.0;
 const float detailNoiseScale = noiseScale*0.4;
 const float detailWeight = 0.35;
-const float coverageThreshold = 0.55;
-const float edgeSoftness = 0.12; // smoothstep width around the threshold — soft wispy edges, not a hard cutout.
-const float maxAlpha = 0.25; // must match thin_clouds.zig's maxAlpha (kept in sync manually, only used here).
+const float edgeSoftness = 0.15; // smoothstep width around the threshold — soft wispy edges.
 
 // Standard hash-based 2D value noise (lattice of pseudo-random corner values, bilinearly interpolated
 // with a smoothstep-shaped blend) — no CPU-side texture needed, this whole layer is computed on the fly.

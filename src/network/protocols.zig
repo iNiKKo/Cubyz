@@ -607,6 +607,7 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 		biome = 4,
 		particles = 5,
 		clear = 6,
+		rainIntensity = 7,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -669,6 +670,11 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 					main.audio.setMusic(newBiome.preferredMusic);
 				}
 			},
+			.rainIntensity => {
+				const world = conn.manager.world.?;
+				const intensity = try reader.readFloat(f32);
+				world.rainIntensityTarget.store(intensity, .monotonic);
+			},
 			.particles => {
 				const particleIdLen = try reader.readVarInt(u16);
 				const particleId = try reader.readSlice(particleIdLen);
@@ -705,7 +711,7 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		switch (try reader.readEnum(UpdateType)) {
-			.gamemode, .teleport, .time, .biome, .particles, .clear => return error.InvalidSide,
+			.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity => return error.InvalidSide,
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
 				const pos: ?Vec3i = switch (typ) {
@@ -759,6 +765,16 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 		writer.writeInt(u32, biomeIndex);
 
 		conn.send(.secure, id, writer.data.items);
+	}
+
+	pub fn sendRainIntensity(conn: *Connection, intensity: f32) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 13);
+		defer writer.deinit();
+
+		writer.writeEnum(UpdateType, .rainIntensity);
+		writer.writeFloat(f32, intensity);
+
+		conn.send(.lossy, id, writer.data.items);
 	}
 
 	pub fn sendParticles(conn: *Connection, particleId: []const u8, pos: Vec3d, collides: bool, count: u32, spawnZon: []const u8) void {

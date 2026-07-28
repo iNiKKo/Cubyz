@@ -1207,6 +1207,35 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		return map.getBiome(wx - map.pos.wx, wy - map.pos.wy, wz - map.pos.wz);
 	}
 
+	/// Like getBiome, but also returns a seed unique to the specific biome patch occupying this position —
+	/// used by WeatherMap to key persistent per-patch weather state, so re-entering the same patch of e.g.
+	/// jungle later finds its weather where it was left.
+	///
+	/// BUG, FIXED (2026-07-28): this originally went through CaveBiomeMapView.getBiomeAndSeed, mirroring
+	/// getBiome above. That function only ever writes its `seed` out-param in the *cave* fallback path
+	/// (getRoughBiome) — when checkSurfaceBiome succeeds, which is virtually always true for a player
+	/// standing on the surface, it returns early without touching `seed` at all, leaving it as whatever
+	/// garbage happened to be on the stack. That meant WeatherMap's per-patch key was effectively random
+	/// every tick for surface biomes (the overwhelmingly common case), so the occupancy timer never
+	/// actually accumulated toward entryDelayMillis and no roll ever fired — reported by the player as
+	/// "3-5 minutes in a wet biome, nothing happened." Fixed by getting the seed from ClimateMap directly
+	/// (the actual surface biome placement system — see ClimateMap.zig's BiomeSample.seed, populated in
+	/// climategen/NoiseBasedVoronoi.zig as `random.initSeed2D(worldSeed, closestBiomePoint.pos)`), which
+	/// is always defined, sidestepping the surface/cave ambiguity entirely rather than patching
+	/// CaveBiomeMapView. This also means weather is purely a surface-climate concept now — a player
+	/// underground in a cave gets the overlying surface biome's weather roll, which is harmless since
+	/// clouds/rain aren't visible underground anyway (there's no "can the player see the sky" check
+	/// anywhere in this feature yet; not attempted here).
+	pub fn getBiomeAndSeed(_: *const ServerWorld, wx: i32, wy: i32, _: i32) struct {biome: *const terrain.biomes.Biome, seed: u64} {
+		const biomeSize: i32 = terrain.SurfaceMap.MapFragment.biomeSize;
+		const alignedX = wx & ~(biomeSize - 1);
+		const alignedY = wy & ~(biomeSize - 1);
+		const map = terrain.ClimateMap.getBiomeMap(main.stackAllocator, alignedX, alignedY, biomeSize, biomeSize);
+		defer map.deinit(main.stackAllocator);
+		const sample = map.get(0, 0);
+		return .{.biome = sample.biome, .seed = sample.seed};
+	}
+
 	pub fn getBlock(self: *ServerWorld, x: i32, y: i32, z: i32) ?Block {
 		const chunkPos = Vec3i{x, y, z} & ~@as(Vec3i, @splat(main.chunk.chunkMask));
 		const otherChunk = self.getSimulationChunkAndIncreaseRefCount(chunkPos[0], chunkPos[1], chunkPos[2]) orelse return null;

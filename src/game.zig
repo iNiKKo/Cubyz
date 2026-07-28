@@ -281,6 +281,13 @@ pub const World = struct { // MARK: World
 	entityComponentPalette: *assets.Palette = undefined,
 	itemDrops: ClientItemDropManager = undefined,
 	playerBiome: Atomic(*const main.server.terrain.biomes.Biome) = undefined,
+	/// Last rain-intensity value ([0, 1]) received from the server for the biome patch the player currently
+	/// occupies. Written by network/protocols.zig's genericUpdate.clientReceive whenever the server-side
+	/// eased value (see server/WeatherMap.zig) moves enough to resend. DayTime.rainIntensity (below) is
+	/// what actually gets read by rendering — it eases toward this target every frame client-side too, the
+	/// same double-smoothing "server eases, client also eases toward whatever it last heard" pattern
+	/// already used for playerBiome's fog color, so sparse network updates never look like a step either.
+	rainIntensityTarget: Atomic(f32) = .init(0),
 
 	shouldRestart: std.atomic.Value(bool) = .init(false),
 	shouldReload: bool = false,
@@ -422,6 +429,9 @@ pub const World = struct { // MARK: World
 
 		biomeFog: Fog = Fog{.skyColor = .{0.8, 0.8, 1}, .fogColor = .{0.8, 0.8, 1}, .density = 1.0/15.0/128.0, .fogLower = 100, .fogHigher = 1000},
 		fog: Fog = Fog{.skyColor = .{0.8, 0.8, 1}, .fogColor = .{0.8, 0.8, 1}, .density = 1.0/15.0/128.0, .fogLower = 100, .fogHigher = 1000},
+		/// Rendered rain intensity ([0, 1]), eased every frame toward World.rainIntensityTarget (see that
+		/// field's doc comment) — read by renderer/clouds.zig and renderer/rain.zig.
+		rainIntensity: f32 = 0,
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
 		/// How far (0-1) between `dayTime`'s current tick and the next, in real time — `dayTime` itself
@@ -554,6 +564,9 @@ pub const World = struct { // MARK: World
 			self.biomeFog.density += (biome.fogDensity - self.biomeFog.density)*t;
 			self.biomeFog.fogLower += (biome.fogLower - self.biomeFog.fogLower)*t;
 			self.biomeFog.fogHigher += (biome.fogHigher - self.biomeFog.fogHigher)*t;
+
+			const rainIntensityTarget = world.?.rainIntensityTarget.load(.monotonic);
+			self.rainIntensity += (rainIntensityTarget - self.rainIntensity)*t;
 
 			const skyColorFactor = self.getSkyColorFactor();
 			self.updateAmbientLight();

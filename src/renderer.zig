@@ -284,7 +284,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	// Must run before opaque terrain draws: terrain samples the cloud coverage texture this uploads
 	// for cloud shadows, even though the clouds' own geometry isn't drawn until later (clouds.draw()).
 	clouds.update(playerPos);
-	rain.update(playerPos, game.camera.viewMatrix);
+	rain.update(playerPos, game.camera.viewMatrix, ambientLight);
 
 	var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
 	defer for (chunkLists) |list| list.deinit();

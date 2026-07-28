@@ -30,6 +30,7 @@ pub const storage = @import("storage.zig");
 pub const permission = @import("permission.zig");
 
 pub const command = @import("command.zig");
+pub const WeatherMap = @import("WeatherMap.zig");
 
 pub const WorldEditData = struct {
 	const maxWorldEditHistoryCapacity: u32 = 1024;
@@ -127,6 +128,7 @@ pub const User = struct { // MARK: User
 	jobQueueLastUpdate: struct { position: Vec3i, time: std.Io.Timestamp, alreadyInUpdate: bool = false } = .{.position = @splat(0), .time = .{.nanoseconds = 0}},
 
 	lastSentBiomeId: u32 = 0xffffffff,
+	lastSentRainIntensity: f32 = -1,
 
 	newKeyString: ?[]const u8 = null,
 	key: network.authentication.PublicKey = undefined,
@@ -639,6 +641,7 @@ fn deinit() void {
 	main.sync.server.deinit();
 	main.items.Inventory.server.deinit();
 	main.entity.server.deinit();
+	WeatherMap.deinit();
 
 	command.deinit();
 
@@ -717,6 +720,18 @@ fn update() void { // MARK: update()
 		if (biomeId != user.lastSentBiomeId) {
 			user.lastSentBiomeId = biomeId;
 			main.network.protocols.genericUpdate.sendBiome(user.conn, biomeId);
+		}
+
+		const biomeAndSeed = world.?.getBiomeAndSeed(pos[0], pos[1], pos[2]);
+		const nowMillis = main.timestamp().toMilliseconds();
+		const updateTimeSeconds: f32 = @as(f32, @floatFromInt(updateTime.toNanoseconds()))/1_000_000_000.0;
+		const rainIntensity = WeatherMap.tick(biomeAndSeed.seed, biomeAndSeed.biome, nowMillis, updateTimeSeconds);
+		// Only resend once the value has moved meaningfully, same "don't spam a packet every tick" idea
+		// as the biome-change check above — the eased value in WeatherMap.tick changes every tick, but
+		// only crosses this threshold occasionally.
+		if (@abs(rainIntensity - user.lastSentRainIntensity) >= 0.02) {
+			user.lastSentRainIntensity = rainIntensity;
+			main.network.protocols.genericUpdate.sendRainIntensity(user.conn, rainIntensity);
 		}
 	}
 
