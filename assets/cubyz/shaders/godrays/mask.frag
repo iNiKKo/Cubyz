@@ -49,7 +49,7 @@ float cloudAttenuation() {
 
 void main() {
 	float depth = texelFetch(depthTexture, ivec2(depthTexCoords), 0).r;
-	float isSky = depth >= 1.0 - 1e-6 ? 1.0 : 0.0;
+	float isSky = depth >= 1.0 - 1e-7 ? 1.0 : 0.0;
 	vec2 delta = (screenUv - sunScreenPos)*vec2(aspectRatio, 1.0);
 	float sunProximity = 1.0 - smoothstep(sunDiscRadius, sunDiscRadius + sunDiscFeather, length(delta));
 	float mask = isSky*sunProximity*cloudAttenuation();

@@ -105,72 +105,6 @@ fn nightBrightnessFormatter(allocator: main.heap.NeverFailingAllocator, _: f32) 
 	return allocator.print("Night Brightness", .{});
 }
 
-fn bloomCallback(newValue: bool) void {
-	settings.bloom = newValue;
-	settings.save();
-}
-
-fn shadowsCallback(newValue: bool) void {
-	settings.shadows = newValue;
-	settings.save();
-}
-
-fn shadowDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
-	return allocator.print("#ffffffDynamic Shadow Distance: {d:.0}m", .{@round(value)});
-}
-
-fn shadowDistanceCallback(newValue: f32) void {
-	settings.shadowDistance = @round(newValue);
-	settings.save();
-}
-
-fn shadowRayStepsFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
-	return allocator.print("#ffffffShadow Quality: {d:.0}", .{@round(value)});
-}
-
-fn shadowRayStepsCallback(newValue: f32) void {
-	settings.shadowRaySteps = @intFromFloat(@round(newValue));
-	settings.save();
-}
-
-fn foliageShadowsCallback(newValue: bool) void {
-	settings.foliageShadows = newValue;
-	settings.save();
-}
-
-fn cloudsCallback(newValue: bool) void {
-	settings.clouds = newValue;
-	settings.save();
-}
-
-fn cloudDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
-	return allocator.print("#ffffffCloud Distance: {d:.0}", .{@round(value)});
-}
-
-fn cloudDistanceCallback(newValue: f32) void {
-	settings.cloudDistance = @round(newValue);
-	settings.save();
-}
-
-fn godRaysCallback(newValue: bool) void {
-	settings.godRays = newValue;
-	settings.save();
-}
-
-fn rainCallback(newValue: bool) void {
-	settings.rain = newValue;
-	settings.save();
-}
-
-fn godRayIntensityFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
-	return allocator.print("#ffffffGod Ray Intensity: {d:.1}", .{value});
-}
-
-fn godRayIntensityCallback(newValue: f32) void {
-	settings.godRayIntensity = newValue;
-	settings.save();
-}
-
 fn vsyncCallback(newValue: bool) void {
 	settings.vsync = newValue;
 	settings.save();
@@ -192,29 +126,19 @@ fn resolutionScaleCallback(newValue: u16) void {
 }
 
 pub fn onOpen() void {
-	const list = VerticalList.init(.{padding, 16 + padding}, 300, 16);
-	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffFPS Limit:\n", "{s}", &fpsPresetsText, fpsCapGetIndex(settings.fpsCap), &fpsCapCallback));
-	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffLOD1 Distance: ", "{} chunks", &renderDistances, @min(@max(settings.renderDistance, renderDistances[0]) - renderDistances[0], renderDistances.len - 1), &renderDistanceCallback));
+	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffFPS Limit:\n", "{s}", &fpsPresetsText, fpsCapGetIndex(settings.fpsCap), &fpsCapCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffLOD1 Distance: ", "{} chunks", &renderDistances, @min(@max(settings.renderDistance, renderDistances[0]) - renderDistances[0], renderDistances.len - 1), &renderDistanceCallback));
 	if (main.game.world == null) {
-		list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffHighest LOD: ", "{s}", &lodValues, @min(settings.highestLod, settings.highestSupportedLod), &highestLodCallback));
+		list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffHighest LOD: ", "{s}", &lodValues, @min(settings.highestLod, settings.highestSupportedLod), &highestLodCallback));
 	}
-	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffLeaves Quality (TODO: requires reload): ", "{}", &leavesQualities, settings.leavesQuality - leavesQualities[0], &leavesQualityCallback));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 50.0, 400.0, settings.@"lod0.5Distance", &lodDistanceCallback, &lodDistanceFormatter));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 0.0, 0.5, settings.blockContrast, &contrastCallback, &contrastFormatter));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 0.0, 1.0, settings.nightBrightness, &nightBrightnessCallback, &nightBrightnessFormatter));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 40.0, 120.0, settings.fov, &fovCallback, &fovFormatter));
-	list.add(CheckBox.init(.{0, 0}, 128, "Bloom", settings.bloom, &bloomCallback));
-	list.add(CheckBox.init(.{0, 0}, 128, "Shadows", settings.shadows, &shadowsCallback));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 32.0, 512.0, @floatFromInt(settings.shadowRaySteps), &shadowRayStepsCallback, &shadowRayStepsFormatter));
-	list.add(CheckBox.init(.{0, 0}, 128, "Grass Shadows", settings.foliageShadows, &foliageShadowsCallback));
-	list.add(CheckBox.init(.{0, 0}, 128, "Clouds", settings.clouds, &cloudsCallback));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 64.0, 2048.0, settings.cloudDistance, &cloudDistanceCallback, &cloudDistanceFormatter));
-	list.add(CheckBox.init(.{0, 0}, 128, "God Rays", settings.godRays, &godRaysCallback));
-	list.add(ContinuousSlider.init(.{0, 0}, 128, 0.0, 3.0, settings.godRayIntensity, &godRayIntensityCallback, &godRayIntensityFormatter));
-	list.add(CheckBox.init(.{0, 0}, 128, "Rain", settings.rain, &rainCallback));
-	list.add(CheckBox.init(.{0, 0}, 128, "Vertical Synchronization", settings.vsync, &vsyncCallback));
-	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffAnisotropic Filtering: ", "{}x", &anisotropy, switch (settings.anisotropicFiltering) {
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffLeaves Quality: ", "{}", &leavesQualities, settings.leavesQuality - leavesQualities[0], &leavesQualityCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 50.0, 400.0, settings.@"lod0.5Distance", &lodDistanceCallback, &lodDistanceFormatter));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 0.5, settings.blockContrast, &contrastCallback, &contrastFormatter));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.nightBrightness, &nightBrightnessCallback, &nightBrightnessFormatter));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 40.0, 120.0, settings.fov, &fovCallback, &fovFormatter));
+	list.add(CheckBox.init(.{0, 0}, 200, "Vertical Synchronization", settings.vsync, &vsyncCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnisotropic Filtering: ", "{}x", &anisotropy, switch (settings.anisotropicFiltering) {
 		1 => 0,
 		2 => 1,
 		4 => 2,
@@ -222,7 +146,8 @@ pub fn onOpen() void {
 		16 => 4,
 		else => 2,
 	}, &anisotropicFilteringCallback));
-	list.add(DiscreteSlider.init(.{0, 0}, 128, "#ffffffResolution Scale: ", "{}%", &resolutions, @as(u16, @trunc(@log2(settings.resolutionScale) + 2.0)), &resolutionScaleCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffResolution Scale: ", "{}%", &resolutions, @as(u16, @trunc(@log2(settings.resolutionScale) + 2.0)), &resolutionScaleCallback));
+	list.add(Button.initText(.{0, 0}, 200, "Graphics+ Settings...", .{.onAction = gui.openWindowCallback("graphics_plus")}));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();
 	window.contentSize = window.rootComponent.?.pos() + window.rootComponent.?.size() + @as(Vec2f, @splat(padding));

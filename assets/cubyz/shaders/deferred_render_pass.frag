@@ -92,7 +92,7 @@ void main() {
 	// Only apply terrain/height fog to actual world geometry (rawDepth < 0.99999).
 	// Open sky background pixels (depth = 1.0) contain the skybox, stars, sun, and moon
 	// which sit in outer space and must never be overwritten by atmospheric fog:
-	if (rawDepth < 0.99999) {
+	if (rawDepth < 0.999999) {
 		float densityAdjustment = sqrt(dot(tanXY*(clampedTexCoords*2 - 1), tanXY*(clampedTexCoords*2 - 1)) + 1);
 		float dist = zFromDepth(rawDepth);
 		float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;

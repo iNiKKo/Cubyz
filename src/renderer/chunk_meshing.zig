@@ -289,20 +289,26 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) voi
 	c.glUniform1ui(commandUniforms.commandIndexStart, allocation.start);
 	c.glUniform1ui(commandUniforms.size, @intCast(chunkIDs.len));
 	c.glUniform1i(commandUniforms.isTransparent, @intFromBool(transparent));
-	c.glUniform1i(commandUniforms.forceAllVisible, 0);
-	if (!transparent) {
+	c.glUniform1i(commandUniforms.forceAllVisible, @intFromBool(transparent));
+
+	if (transparent) {
 		c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 0);
-		c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1); // TODO: Replace with @divCeil once available
+		c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
 		c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
 
-		if (transparent) {
-			bindTransparentShaderAndUniforms(ambient);
-		} else {
-			bindShaderAndUniforms(ambient);
-		}
+		bindTransparentShaderAndUniforms(ambient);
 		c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
 		c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
+		return;
 	}
+
+	c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 0);
+	c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
+	c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
+
+	bindShaderAndUniforms(ambient);
+	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
+	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 
 	// Occlusion tests:
 	occlusionTestPipeline.bind(null);
@@ -313,14 +319,10 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) voi
 	// Draw again:
 	commandPipeline.bind();
 	c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 1);
-	c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1); // TODO: Replace with @divCeil once available
+	c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
 	c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
 
-	if (transparent) {
-		bindTransparentShaderAndUniforms(ambient);
-	} else {
-		bindShaderAndUniforms(ambient);
-	}
+	bindShaderAndUniforms(ambient);
 	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
 	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 }

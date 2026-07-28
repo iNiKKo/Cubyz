@@ -71,7 +71,7 @@ void main() {
 	if(gl_GlobalInvocationID.x >= size) return;
 	if(isTransparent) {
 		uint commandIndex = commandIndexStart + gl_GlobalInvocationID.x;
-		if(chunks[chunkID].visibilityState != 0) {
+		if(forceAllVisible || chunks[chunkID].visibilityState != 0) {
 			commands[commandIndex] = addCommand(chunks[chunkID].vertexCountTransparent, chunks[chunkID].vertexStartTransparent, chunkID);
 		} else {
 			commands[commandIndex] = DrawElementsIndirectCommand(0, 0, 0, 0, 0);

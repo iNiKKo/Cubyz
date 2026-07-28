@@ -90,7 +90,11 @@ fn setButtonPosFromValue(self: *DiscreteSlider) void {
 	const range: f32 = self.size[0] - 3*border - self.button.size[0];
 	const len: f32 = @floatFromInt(self.values.len);
 	const selection: f32 = @floatFromInt(self.currentSelection);
-	self.button.pos[0] = 1.5*border + range*(0.5 + selection)/len;
+	if (self.values.len > 1) {
+		self.button.pos[0] = 1.5*border + range*selection/(len - 1.0);
+	} else {
+		self.button.pos[0] = 1.5*border;
+	}
 	self.updateLabel(self.values[self.currentSelection], self.size[0]);
 }
 
@@ -107,7 +111,9 @@ fn updateLabel(self: *DiscreteSlider, newValue: []const u8, width: f32) void {
 fn updateValueFromButtonPos(self: *DiscreteSlider) void {
 	const range: f32 = self.size[0] - 3*border - self.button.size[0];
 	const len: f32 = @floatFromInt(self.values.len);
-	const selection: u16 = @trunc((self.button.pos[0] - 1.5*border)/range*len);
+	if (self.values.len <= 1) return;
+	const fraction = std.math.clamp((self.button.pos[0] - 1.5*border)/range, 0.0, 1.0);
+	const selection: u16 = @intFromFloat(@min(len - 1.0, @round(fraction*(len - 1.0))));
 	if (selection != self.currentSelection) {
 		self.currentSelection = selection;
 		self.updateLabel(self.values[selection], self.size[0]);

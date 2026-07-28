@@ -39,11 +39,11 @@ fn musicFormatter(allocator: NeverFailingAllocator, value: f32) []const u8 {
 	return allocator.print("Music volume:", .{});
 }
 
-const padding: f32 = 8;
+const padding: f32 = 16;
 
 pub fn onOpen() void {
-	const list = VerticalList.init(.{padding, 16 + padding}, 300, 16);
-	list.add(ContinuousSlider.init(.{0, 0}, 128, -60, 0, linearToDezibel(settings.musicVolume), &musicCallback, &musicFormatter));
+	const list = VerticalList.init(.{padding, 16 + padding}, 460, 20);
+	list.add(ContinuousSlider.init(.{0, 0}, 280, -60, 0, linearToDezibel(settings.musicVolume), &musicCallback, &musicFormatter));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();
 	window.contentSize = window.rootComponent.?.pos() + window.rootComponent.?.size() + @as(Vec2f, @splat(padding));
