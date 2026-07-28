@@ -55,11 +55,18 @@ float densityIntegral(float dist, float zStart, float zDist, float fogLower, flo
 float calculateFogDistance(float dist, float densityAdjustment, float playerWorldZ, float zScale, float fogDensity, float fogLower, float fogHigher) {
 	float effectiveDist = dist * densityAdjustment;
 
-	// Distance fog starts far out (at 75% of total max LOD distance):
-	// All HQ LOD0 chunks and low-res LOD chunks closer than 75% of max LOD distance are 100% crystal clear.
-	// Only near the outer edge of all loaded LOD chunks does fog smoothly ramp up to hide map boundaries.
-	float fogStart = 0.75 / max(1e-5, fogDensity);
-	float distFog = max(0.0, effectiveDist - fogStart) * fogDensity * 3.5;
+	// Distance fog starts at 60% of total max LOD distance (all closer chunks are 100% crystal clear) and
+	// ramps up to hide the outer edge of all loaded LOD chunks. Player-reported "the fog at the ends of
+	// the LOD (furthest chunks) isn't there or is very weak" was correct: with the previous 0.75 start
+	// fraction and 3.5 multiplier, terrain right at the actual edge of the loaded world was still ~42%
+	// visible (totalFog = (1-0.75)*3.5 = 0.875, fogFactor = exp(-0.875) ≈ 0.417) — a mild haze, not enough
+	// to hide chunks actually disappearing/popping in at the render-distance boundary. Tuned so the ramp
+	// starts earlier (0.6, giving more distance to fade smoothly rather than a sudden wall) and reaches
+	// ~4% visibility exactly at the edge (totalFog = (1-0.6)*8.0 = 3.2, fogFactor = exp(-3.2) ≈ 0.041).
+	float fogStartFraction = 0.6;
+	float fogEdgeMultiplier = 8.0;
+	float fogStart = fogStartFraction / max(1e-5, fogDensity);
+	float distFog = max(0.0, effectiveDist - fogStart) * fogDensity * fogEdgeMultiplier;
 
 	// Height fog (mist layer near ground):
 	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;

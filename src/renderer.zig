@@ -89,6 +89,8 @@ pub fn init() void {
 	);
 	worldFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
 	worldFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
+	MSAA.init();
+	FXAA.init();
 	Bloom.init();
 	GodRays.init();
 	MeshSelection.init();
@@ -110,6 +112,8 @@ pub fn deinit() void {
 	deferredRenderPassPipeline.deinit();
 	fakeReflectionPipeline.deinit();
 	worldFrameBuffer.deinit();
+	MSAA.deinit();
+	FXAA.deinit();
 	Bloom.deinit();
 	GodRays.deinit();
 	MeshSelection.deinit();
@@ -225,10 +229,20 @@ fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
 }
 
 pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void { // MARK: renderWorld()
-	worldFrameBuffer.bind();
+	const msaaActive = settings.antiAliasingMode == .msaa;
+	if (msaaActive) {
+		MSAA.updateSize(lastWidth, lastHeight);
+		MSAA.frameBuffer.bind();
+	} else {
+		worldFrameBuffer.bind();
+	}
 	c.glViewport(0, 0, lastWidth, lastHeight);
 	gpu_performance_measuring.startQuery(.clear);
-	worldFrameBuffer.clear(Vec4f{skyColor[0], skyColor[1], skyColor[2], 1});
+	if (msaaActive) {
+		MSAA.frameBuffer.clear(Vec4f{skyColor[0], skyColor[1], skyColor[2], 1});
+	} else {
+		worldFrameBuffer.clear(Vec4f{skyColor[0], skyColor[1], skyColor[2], 1});
+	}
 	gpu_performance_measuring.stopQuery();
 	game.camera.updateViewMatrix();
 
@@ -311,6 +325,18 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	gpu_performance_measuring.startQuery(.particle_rendering);
 	particles.ParticleSystem.render(game.projectionMatrix, game.camera.viewMatrix, ambientLight);
 	gpu_performance_measuring.stopQuery();
+
+	// Resolve MSAA's multisampled opaque-geometry buffer into worldFrameBuffer here, before transparent
+	// rendering: transparent_fragment.frag samples worldFrameBuffer's depth as a plain sampler2D (soft-
+	// particle-style depth test against opaque geometry, renderer.zig ~worldFrameBuffer.bindDepthTexture
+	// below) which a still-multisampled texture can't be bound as. Only opaque geometry is multisampled
+	// — transparent/clouds/rain continue drawing into worldFrameBuffer directly like always, unaffected.
+	if (msaaActive) {
+		gpu_performance_measuring.startQuery(.msaa_resolve);
+		MSAA.frameBuffer.resolveTo(&worldFrameBuffer, lastWidth, lastHeight);
+		worldFrameBuffer.bind();
+		gpu_performance_measuring.stopQuery();
+	}
 
 	// Rebind block textures back to their original slots
 	c.glActiveTexture(c.GL_TEXTURE0);
@@ -438,16 +464,120 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
 	}
 
-	c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
+	if (settings.antiAliasingMode == .fxaa) {
+		FXAA.preDraw(lastWidth, lastHeight);
+	} else {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
+	}
 
 	graphics.draw.rectVao.bind();
 	c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+
+	if (settings.antiAliasingMode == .fxaa) {
+		FXAA.render(lastWidth, lastHeight);
+	}
 
 	c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 
 	if (!main.gui.hideGui) main.entity.client.renderHud(ambientLight, playerPos);
 	gpu_performance_measuring.stopQuery();
 }
+
+/// Hardware multisample anti-aliasing for opaque geometry. Only the opaque-terrain/entity/particle
+/// draw passes render into MSAA.frameBuffer — transparent chunks, clouds, and rain keep drawing into
+/// worldFrameBuffer directly like always, since transparent_fragment.frag samples worldFrameBuffer's
+/// depth as a plain sampler2D (a soft-particle-style depth test against already-drawn opaque geometry)
+/// which a still-multisampled texture can't be bound as. MSAA.frameBuffer is resolved into
+/// worldFrameBuffer (see renderWorld's msaaActive branch) right after opaque geometry finishes, before
+/// that depth read happens. Note MSAA only smooths true polygon edges — it does not multisample
+/// discarded fragments inside a triangle, so it does not fix aliasing on alpha-cutout foliage (see
+/// FXAA's doc comment below for that problem; TAA is the option that actually addresses it).
+const MSAA = struct { // MARK: MSAA
+	var frameBuffer: graphics.MultisampledFrameBuffer = undefined;
+	var width: u31 = std.math.maxInt(u31);
+	var height: u31 = std.math.maxInt(u31);
+
+	pub fn init() void {
+		frameBuffer.init(4);
+	}
+
+	pub fn deinit() void {
+		frameBuffer.deinit();
+	}
+
+	fn updateSize(currentWidth: u31, currentHeight: u31) void {
+		if (width != currentWidth or height != currentHeight) {
+			width = currentWidth;
+			height = currentHeight;
+			// RGBA16F (not RGB16F): 3-component multisample color textures are a known rough edge on
+			// some GL drivers (poor/incorrect hardware support forces slow emulated paths, sometimes
+			// buggy ones) — RGBA is the safe, universally well-supported multisample format.
+			frameBuffer.updateSize(width, height, c.GL_RGBA16F);
+			std.debug.assert(frameBuffer.validate());
+		}
+	}
+};
+
+/// Final-image post-process anti-aliasing (FXAA). Distant high-frequency detail (e.g. tree canopies
+/// made of many small alpha-cutout leaf quads) has nothing smoothing its silhouette edges and reads as
+/// a blobby, hard-to-make-out mass rather than a legible shape once it's more than a few pixels wide on
+/// screen — MSAA above doesn't fix this (alpha-cutout discard isn't a polygon edge). FXAA runs last
+/// (after deferredRenderPassPipeline has already composited bloom/god-rays/fog into a plain LDR image)
+/// purely as an edge-detection blur over the finished picture, so it needs no changes to the
+/// geometry/shading passes that precede it — but being a blur with no real geometric information, it
+/// can't tell "jagged edge" from "dense real detail," so on foliage-heavy medium-far range scenes it
+/// trades pixelation for a soft/blurry look rather than genuinely resolving it. TAA is the option that
+/// actually fixes foliage aliasing well.
+const FXAA = struct { // MARK: FXAA
+	var buffer: graphics.FrameBuffer = undefined;
+	var width: u31 = std.math.maxInt(u31);
+	var height: u31 = std.math.maxInt(u31);
+	var pipeline: graphics.Pipeline = undefined;
+	var uniforms: struct {
+		inverseScreenSize: c_int,
+	} = undefined;
+
+	pub fn init() void {
+		buffer.init(false, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+		pipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/fxaa.vert",
+			"assets/cubyz/shaders/fxaa.frag",
+			"",
+			&uniforms,
+			graphics.draw.SimpleVertex2D,
+			&.{.{.binding = 3, .count = 1, .type = .combinedImageSampler, .stageFlags = .{.fragment = true}}},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.noBlending}},
+		);
+	}
+
+	pub fn deinit() void {
+		buffer.deinit();
+		pipeline.deinit();
+	}
+
+	/// Redirects the upcoming deferredRenderPassPipeline draw into FXAA's own intermediate buffer
+	/// instead of straight to activeFrameBuffer/screen, so FXAA has a finished LDR image to read from.
+	fn preDraw(currentWidth: u31, currentHeight: u31) void {
+		if (width != currentWidth or height != currentHeight) {
+			width = currentWidth;
+			height = currentHeight;
+			buffer.updateSize(width, height, c.GL_RGBA8);
+			std.debug.assert(buffer.validate());
+		}
+		buffer.bind();
+	}
+
+	fn render(currentWidth: u31, currentHeight: u31) void {
+		pipeline.bind(null);
+		buffer.bindTexture(c.GL_TEXTURE3);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, activeFrameBuffer);
+		c.glUniform2f(uniforms.inverseScreenSize, 1.0/@as(f32, @floatFromInt(currentWidth)), 1.0/@as(f32, @floatFromInt(currentHeight)));
+		graphics.draw.rectVao.bind();
+		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+	}
+};
 
 const Bloom = struct { // MARK: Bloom
 	var buffer1: graphics.FrameBuffer = undefined;
@@ -1557,9 +1687,20 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			}
 		}
 
-		// Restore normal rendering state:
+		// Restore normal rendering state. Must rebind whichever buffer renderWorld's opaque pass is
+		// actually using (MSAA.frameBuffer when MSAA is active, worldFrameBuffer otherwise) — this used
+		// to hardcode worldFrameBuffer unconditionally, which silently redirected the rest of the
+		// frame's opaque draws away from MSAA.frameBuffer whenever shadows were enabled. renderWorld's
+		// later MSAA resolve then blitted MSAA.frameBuffer (still just its initial clear color, since no
+		// geometry was ever drawn into it after this point) over the real image, producing severe
+		// corruption — reported by the player as MSAA "just doesn't work," which stopped reproducing
+		// entirely with shadows disabled. That was the actual bug, not MSAA's own FBO/blit setup.
 		c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
-		worldFrameBuffer.bind();
+		if (settings.antiAliasingMode == .msaa) {
+			MSAA.frameBuffer.bind();
+		} else {
+			worldFrameBuffer.bind();
+		}
 		c.glViewport(0, 0, lastWidth, lastHeight);
 	}
 };

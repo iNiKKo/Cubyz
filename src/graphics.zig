@@ -1818,6 +1818,97 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	}
 };
 
+/// A framebuffer with a multisampled color+depth attachment, for MSAA. Its textures can't be sampled
+/// directly by the usual `sampler2D`-based post-process shaders (Bloom, GodRays, the deferred
+/// composite) — call `resolveTo` after rendering into this buffer to get a plain, regularly-sampled
+/// `FrameBuffer` those passes can keep consuming unchanged.
+pub const MultisampledFrameBuffer = struct { // MARK: MultisampledFrameBuffer
+	frameBuffer: c_uint,
+	texture: c_uint,
+	depthTexture: c_uint,
+	samples: c_int,
+
+	/// Queries GL_MAX_SAMPLES so callers never request more than the driver actually supports.
+	pub fn maxSupportedSamples() c_int {
+		var maxSamples: c_int = 1;
+		c.glGetIntegerv(c.GL_MAX_SAMPLES, &maxSamples);
+		return maxSamples;
+	}
+
+	pub fn init(self: *MultisampledFrameBuffer, requestedSamples: c_int) void {
+		self.* = MultisampledFrameBuffer{
+			.frameBuffer = undefined,
+			.texture = undefined,
+			.depthTexture = undefined,
+			.samples = std.math.clamp(requestedSamples, 1, maxSupportedSamples()),
+		};
+		c.glGenFramebuffers(1, &self.frameBuffer);
+		c.glGenTextures(1, &self.texture);
+		c.glGenTextures(1, &self.depthTexture);
+	}
+
+	pub fn deinit(self: *MultisampledFrameBuffer) void {
+		c.glDeleteFramebuffers(1, &self.frameBuffer);
+		c.glDeleteTextures(1, &self.texture);
+		c.glDeleteTextures(1, &self.depthTexture);
+	}
+
+	pub fn updateSize(self: *MultisampledFrameBuffer, _width: u31, _height: u31, internalFormat: c_int) void {
+		const width = @max(_width, 1);
+		const height = @max(_height, 1);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
+
+		c.glBindTexture(c.GL_TEXTURE_2D_MULTISAMPLE, self.texture);
+		c.glTexImage2DMultisample(c.GL_TEXTURE_2D_MULTISAMPLE, self.samples, @intCast(internalFormat), width, height, c.GL_TRUE);
+		c.glFramebufferTexture2D(c.GL_FRAMEBUFFER, c.GL_COLOR_ATTACHMENT0, c.GL_TEXTURE_2D_MULTISAMPLE, self.texture, 0);
+
+		c.glBindTexture(c.GL_TEXTURE_2D_MULTISAMPLE, self.depthTexture);
+		c.glTexImage2DMultisample(c.GL_TEXTURE_2D_MULTISAMPLE, self.samples, c.GL_DEPTH_COMPONENT32F, width, height, c.GL_TRUE);
+		c.glFramebufferTexture2D(c.GL_FRAMEBUFFER, c.GL_DEPTH_ATTACHMENT, c.GL_TEXTURE_2D_MULTISAMPLE, self.depthTexture, 0);
+
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
+
+	pub fn clear(_: MultisampledFrameBuffer, clearColor: Vec4f) void {
+		c.glDepthFunc(c.GL_LESS);
+		c.glDepthMask(c.GL_TRUE);
+		c.glDisable(c.GL_SCISSOR_TEST);
+		c.glClearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+		c.glClear(c.GL_COLOR_BUFFER_BIT | c.GL_DEPTH_BUFFER_BIT);
+	}
+
+	pub fn validate(self: *const MultisampledFrameBuffer) bool {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
+		defer c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+		if (c.glCheckFramebufferStatus(c.GL_FRAMEBUFFER) != c.GL_FRAMEBUFFER_COMPLETE) {
+			std.log.err("Multisampled Frame Buffer Object error: {}", .{c.glCheckFramebufferStatus(c.GL_FRAMEBUFFER)});
+			return false;
+		}
+		return true;
+	}
+
+	pub fn bind(self: *const MultisampledFrameBuffer) void {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, self.frameBuffer);
+	}
+
+	pub fn unbind(_: *const MultisampledFrameBuffer) void {
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
+
+	/// Resolves (down-samples) this buffer's color+depth into a plain, regularly-sampled FrameBuffer
+	/// of the same dimensions, via glBlitFramebuffer. Depth uses GL_NEAREST (the only filter allowed
+	/// for a depth blit — depth values can't be meaningfully linearly filtered/averaged across samples).
+	pub fn resolveTo(self: *const MultisampledFrameBuffer, target: *const FrameBuffer, width: u31, height: u31) void {
+		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, self.frameBuffer);
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, target.frameBuffer);
+		std.debug.assert(c.glCheckFramebufferStatus(c.GL_READ_FRAMEBUFFER) == c.GL_FRAMEBUFFER_COMPLETE);
+		std.debug.assert(c.glCheckFramebufferStatus(c.GL_DRAW_FRAMEBUFFER) == c.GL_FRAMEBUFFER_COMPLETE);
+		c.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, c.GL_COLOR_BUFFER_BIT, c.GL_NEAREST);
+		c.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+	}
+};
+
 pub const TextureArray = struct { // MARK: TextureArray
 	textureID: c_uint,
 

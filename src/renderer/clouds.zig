@@ -94,10 +94,15 @@ const bottomBrightness: f32 = 0.8;
 const CloudVertex = extern struct {
 	pos: [3]f32,
 	brightness: f32,
+	/// Per-vertex opacity multiplier, [0, 1] — see edgeFadeStartFrac's doc comment. Separate from
+	/// `brightness` deliberately: brightness affects *color* (shading), this affects *how visible the
+	/// quad is at all*, which is what actually needs to reach 0 to hide the grid's edge, not just darken it.
+	edgeFade: f32,
 
 	pub const attributeDescriptions: []const c.VkVertexInputAttributeDescription = &.{
 		.{.location = 0, .format = c.VK_FORMAT_R32G32B32_SFLOAT, .offset = @offsetOf(@This(), "pos")},
 		.{.location = 1, .format = c.VK_FORMAT_R32_SFLOAT, .offset = @offsetOf(@This(), "brightness")},
+		.{.location = 2, .format = c.VK_FORMAT_R32_SFLOAT, .offset = @offsetOf(@This(), "edgeFade")},
 	};
 };
 
@@ -208,6 +213,33 @@ pub fn isPlayerInsideCloud(playerPos: Vec3d) bool {
 }
 
 
+/// The coverage grid is a finite square centered on the player — beyond it there's no cloud data at all
+/// (see `coverage`'s doc comment: "No cloud data outside the grid => no cloud"). Any cell right at that
+/// boundary always has its outward neighbor read as uncovered (buildLayerMesh's hasLeft/hasRight/etc.
+/// checks treat "off the edge of the grid" the same as genuinely open sky), so it gets a real wall face —
+/// a straight, hard-edged wall of cloud sitting at a fixed distance from the player, regardless of biome
+/// or rain intensity on either side of it. This was barely noticeable for the sparse base layer (rarely
+/// reaches the boundary) but became a real, reported problem once the storm layer started covering much
+/// more of the sky ("hard cut line which separates left side and right side even tho both sides have
+/// rain") — a bigger, denser layer hits that same finite boundary far more often.
+///
+/// Fix: fade cell opacity smoothly to 0 as it nears the grid edge (Chebyshev distance from grid center,
+/// normalized to [0,1], smoothstepped over the outer edgeFadeStartFrac of the grid), via a genuine
+/// per-vertex alpha channel (CloudVertex.edgeFade / clouds_fragment.frag's `baseAlpha*edgeFade`) — not
+/// brightness, which only darkens color and would still leave a *visible*, if dimmer, hard edge. This is
+/// the same "always fade, never a hard boundary" principle established earlier for weather transitions:
+/// a discontinuity (real geometry ending abruptly) can't be smoothed by darkening it, only by actually
+/// fading it below the point of visibility.
+const edgeFadeStartFrac: f32 = 0.75;
+
+fn edgeFadeForCell(cx: u32, cy: u32, gridDim: u32) f32 {
+	const halfDim: f32 = @as(f32, @floatFromInt(gridDim))/2.0;
+	const dx = @abs(@as(f32, @floatFromInt(cx)) + 0.5 - halfDim);
+	const dy = @abs(@as(f32, @floatFromInt(cy)) + 0.5 - halfDim);
+	const distNorm = @max(dx, dy)/halfDim;
+	return 1.0 - std.math.clamp((distNorm - edgeFadeStartFrac)/(1.0 - edgeFadeStartFrac), 0.0, 1.0);
+}
+
 /// Builds one slab's worth of cloud mesh (greedy-merged top/bottom rectangles + per-cell side walls) from
 /// the shared `coverage` grid, at the given Z range and brightness. Used for both the base layer and the
 /// storm layer — same shape/coverage, different height/thickness/tint, so weather never needs its own
@@ -259,14 +291,20 @@ fn buildLayerMesh(
 			const x1 = relCoordAt(gx1, originX, playerPos[0], windOffset[0]);
 			const y1 = relCoordAt(gy1, originY, playerPos[1], windOffset[1]);
 
-			addQuad(vertices, indices, .{x0, y0, relZTop}, .{x0, y1, relZTop}, .{x1, y1, relZTop}, .{x1, y0, relZTop}, layerTopBrightness);
-			addQuad(vertices, indices, .{x0, y1, relZBase}, .{x0, y0, relZBase}, .{x1, y0, relZBase}, .{x1, y1, relZBase}, layerBottomBrightness);
+			// Fade computed at the merged rectangle's own center cell — flat per-quad, same level of
+			// visual fidelity brightness already has for merged rectangles (not smoothly interpolated
+			// across the merge), just enough to make the grid boundary disappear rather than pop.
+			const fade = edgeFadeForCell(@intCast(cx + w/2), @intCast(cy + h/2), gridDim);
+
+			addQuad(vertices, indices, .{x0, y0, relZTop}, .{x0, y1, relZTop}, .{x1, y1, relZTop}, .{x1, y0, relZTop}, layerTopBrightness, fade);
+			addQuad(vertices, indices, .{x0, y1, relZBase}, .{x0, y0, relZBase}, .{x1, y0, relZBase}, .{x1, y1, relZBase}, layerBottomBrightness, fade);
 		}
 	}
 
 	for (0..gridDim) |cy| {
 		for (0..gridDim) |cx| {
 			if (layerCoverage[cy * gridDim + cx] == 0) continue;
+			const fade = edgeFadeForCell(@intCast(cx), @intCast(cy), gridDim);
 
 			const gx0: i64 = @intCast(cx);
 			const gy0: i64 = @intCast(cy);
@@ -283,10 +321,10 @@ fn buildLayerMesh(
 			const hasUp = cy > 0 and layerCoverage[(cy - 1) * gridDim + cx] != 0;
 			const hasDown = cy + 1 < gridDim and layerCoverage[(cy + 1) * gridDim + cx] != 0;
 
-			if (!hasLeft) addQuad(vertices, indices, .{wallX0, wallY1, relZTop}, .{wallX0, wallY0, relZTop}, .{wallX0, wallY0, relZBase}, .{wallX0, wallY1, relZBase}, layerSideBrightness);
-			if (!hasRight) addQuad(vertices, indices, .{wallX1, wallY0, relZTop}, .{wallX1, wallY1, relZTop}, .{wallX1, wallY1, relZBase}, .{wallX1, wallY0, relZBase}, layerSideBrightness);
-			if (!hasUp) addQuad(vertices, indices, .{wallX0, wallY0, relZTop}, .{wallX1, wallY0, relZTop}, .{wallX1, wallY0, relZBase}, .{wallX0, wallY0, relZBase}, layerSideBrightness);
-			if (!hasDown) addQuad(vertices, indices, .{wallX1, wallY1, relZTop}, .{wallX0, wallY1, relZTop}, .{wallX0, wallY1, relZBase}, .{wallX1, wallY1, relZBase}, layerSideBrightness);
+			if (!hasLeft) addQuad(vertices, indices, .{wallX0, wallY1, relZTop}, .{wallX0, wallY0, relZTop}, .{wallX0, wallY0, relZBase}, .{wallX0, wallY1, relZBase}, layerSideBrightness, fade);
+			if (!hasRight) addQuad(vertices, indices, .{wallX1, wallY0, relZTop}, .{wallX1, wallY1, relZTop}, .{wallX1, wallY1, relZBase}, .{wallX1, wallY0, relZBase}, layerSideBrightness, fade);
+			if (!hasUp) addQuad(vertices, indices, .{wallX0, wallY0, relZTop}, .{wallX1, wallY0, relZTop}, .{wallX1, wallY0, relZBase}, .{wallX0, wallY0, relZBase}, layerSideBrightness, fade);
+			if (!hasDown) addQuad(vertices, indices, .{wallX1, wallY1, relZTop}, .{wallX0, wallY1, relZTop}, .{wallX0, wallY1, relZBase}, .{wallX1, wallY1, relZBase}, layerSideBrightness, fade);
 		}
 	}
 }
@@ -561,12 +599,12 @@ fn relCoordAt(gridIndex: i64, gridOrigin: f64, playerCoord: f64, windOffsetCompo
 	return rel + windOffsetComponent;
 }
 
-fn addQuad(vertices: *main.ListManaged(CloudVertex), indices: *main.ListManaged(u32), p0: Vec3f, p1: Vec3f, p2: Vec3f, p3: Vec3f, brightness: f32) void {
+fn addQuad(vertices: *main.ListManaged(CloudVertex), indices: *main.ListManaged(u32), p0: Vec3f, p1: Vec3f, p2: Vec3f, p3: Vec3f, brightness: f32, edgeFade: f32) void {
 	const base: u32 = @intCast(vertices.items.len);
-	vertices.append(.{.pos = p0, .brightness = brightness});
-	vertices.append(.{.pos = p1, .brightness = brightness});
-	vertices.append(.{.pos = p2, .brightness = brightness});
-	vertices.append(.{.pos = p3, .brightness = brightness});
+	vertices.append(.{.pos = p0, .brightness = brightness, .edgeFade = edgeFade});
+	vertices.append(.{.pos = p1, .brightness = brightness, .edgeFade = edgeFade});
+	vertices.append(.{.pos = p2, .brightness = brightness, .edgeFade = edgeFade});
+	vertices.append(.{.pos = p3, .brightness = brightness, .edgeFade = edgeFade});
 	indices.append(base + 0);
 	indices.append(base + 1);
 	indices.append(base + 2);

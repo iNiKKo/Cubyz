@@ -37,6 +37,9 @@ pub var highestLod: u3 = highestSupportedLod;
 
 pub var resolutionScale: f32 = 1;
 
+pub const AntiAliasingMode = enum(u8) { off, fxaa, msaa, taa };
+pub var antiAliasingMode: AntiAliasingMode = .fxaa;
+
 pub var bloom: bool = true;
 
 pub var shadows: bool = true;

@@ -10,6 +10,7 @@ const GuiWindow = gui.GuiWindow;
 const Button = @import("../components/Button.zig");
 const CheckBox = @import("../components/CheckBox.zig");
 const ContinuousSlider = @import("../components/ContinuousSlider.zig");
+const DiscreteSlider = @import("../components/DiscreteSlider.zig");
 const VerticalList = @import("../components/VerticalList.zig");
 
 pub var window = GuiWindow{
@@ -18,6 +19,13 @@ pub var window = GuiWindow{
 };
 
 const padding: f32 = 16;
+
+const antiAliasingModes = [_][]const u8{"Off", "FXAA", "MSAA", "TAA"};
+
+fn antiAliasingCallback(newValue: u16) void {
+	settings.antiAliasingMode = @enumFromInt(newValue);
+	settings.save();
+}
 
 fn bloomCallback(newValue: bool) void {
 	settings.bloom = newValue;
@@ -87,6 +95,7 @@ fn rainCallback(newValue: bool) void {
 
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
