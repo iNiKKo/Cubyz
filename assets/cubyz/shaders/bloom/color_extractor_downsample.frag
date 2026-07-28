@@ -50,7 +50,9 @@ float densityIntegral(float dist, float zStart, float zDist, float fogLower, flo
 float calculateFogDistance(float dist, float densityAdjustment, float playerWorldZ, float zScale, float fogDensity, float fogLower, float fogHigher) {
 	float effectiveDist = dist * densityAdjustment;
 
-	float distFog = effectiveDist * fogDensity;
+	float fogStart = 0.75 / max(1e-5, fogDensity);
+	float distFog = max(0.0, effectiveDist - fogStart) * fogDensity * 3.5;
+
 	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;
 
 	float totalFog = max(distFog, heightFog);

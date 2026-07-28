@@ -396,15 +396,18 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		var fogDensity = game.world.?.dayTime.fog.density;
 		const playerZ: f32 = @floatCast(playerPos[2]);
 
+		// Calculate total maximum distance of all loaded LOD chunks combined (HQ LOD0 + low-res LODs):
+		const lodScale: f32 = @floatFromInt(@as(u32, 1) << main.settings.highestLod);
+		const totalMaxLodDist: f32 = @as(f32, @floatFromInt(@as(u32, main.settings.renderDistance) * 32)) * lodScale;
+
 		if (playerZ > 1000.0) {
 			const highAltFactor = std.math.clamp((playerZ - 1000.0) / 1000.0, 0.0, 1.0);
 			fogColor += (skyColorVal - fogColor) * @as(Vec3f, @splat(highAltFactor));
-			fogDensity += (1.0 / 600.0 - fogDensity) * highAltFactor;
+			fogDensity += ((1.0 / @max(1.0, totalMaxLodDist)) - fogDensity) * highAltFactor;
 		} else {
 			fogColor = skyColorVal;
-			const renderDist: f32 = @floatFromInt(@as(u32, main.settings.renderDistance) * 32);
-			if (renderDist > 0) {
-				fogDensity = 3.5 / renderDist;
+			if (totalMaxLodDist > 0) {
+				fogDensity = 1.0 / totalMaxLodDist;
 			}
 		}
 
@@ -1339,6 +1342,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	/// The same matrices flattened into OpenGL column-major layout for glUniformMatrix4fv.
 	/// Computed each frame alongside lightSpaceMatrices.
 	pub var lightSpaceMatricesGL: [numCascades][4][4]f32 = undefined;
+	pub var shadowFrameCounter: u32 = 0;
+	var lastShadowPlayerPos: Vec3d = .{ 0, 0, 0 };
 
 	fn init() void {
 		for (0..numCascades) |i| {
@@ -1387,7 +1392,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	/// getShadowRenderChunks' 360-degree occluder gathering, so coverage no longer depends on which way
 	/// the camera happens to be facing — at the cost of some shadow-map resolution being spent on
 	/// terrain outside the current view that a frustum-fitted cascade would have skipped.
-	fn computeLightSpaceMatrix(cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d) Mat4f {
+	fn computeLightSpaceMatrix(cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d, zMargin: f32) Mat4f {
 		const radius = cascadeFarDepth;
 
 		// Add player's fractional offset in light space so snapping is relative to absolute world origin:
@@ -1408,8 +1413,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		// Snap absolute world coordinates to exact texel multiples:
 		const snappedAbsX = @floor(absX / texelSize) * texelSize;
 		const snappedAbsZ = @floor(absZ / texelSize) * texelSize;
-
-		const zMargin: f32 = 256.0;
 		const minL_y = absY - radius - zMargin;
 		const snappedAbsMinL_y = @floor(minL_y / texelSize) * texelSize;
 		const maxL_y = absY + radius + 32.0;
@@ -1435,6 +1438,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 
 	fn update(playerPos: Vec3d) void {
 		if (!settings.shadows) return;
+		shadowFrameCounter +%= 1;
 
 		// Dynamically scale shadow map resolution according to settings.shadowRaySteps slider (Shadow Quality):
 		const desiredSize: u31 = if (settings.shadowRaySteps <= 96)
@@ -1462,12 +1466,16 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		// Light travels from sky to world along -sunDir (opposite to vector pointing from world to sun).
 		const lightView = Mat4f.lookInDirection(-sunDir);
 
+		const zMargins = [numCascades]f32{ 96.0, 256.0, 1024.0 };
+		const occluderSunDists = [numCascades]f32{ 96.0, 256.0, 1024.0 };
+
 		// Render each cascade:
 		for (0..numCascades) |i| {
 			lightSpaceMatrices[i] = computeLightSpaceMatrix(
 				cascadeFarDistances[i],
 				lightView,
 				playerPos,
+				zMargins[i],
 			);
 			lightSpaceMatricesGL[i] = lightSpaceMatrices[i].toGl();
 		}
@@ -1482,21 +1490,29 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
 		c.glViewport(0, 0, shadowMapSize, shadowMapSize);
 
-		for (0..numCascades) |i| {
+		const diffX = playerPos[0] - lastShadowPlayerPos[0];
+		const diffY = playerPos[1] - lastShadowPlayerPos[1];
+		const diffZ = playerPos[2] - lastShadowPlayerPos[2];
+		const moveDistSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
+		const isFastMovement = moveDistSq > 1.0; // If moving > 1 block per frame (flying/falling/sprinting fast), update immediately
+		lastShadowPlayerPos = playerPos;
+
+		const activeCascades: usize = if (settings.shadowDistance <= 24.0)
+			1
+		else if (settings.shadowDistance <= 96.0)
+			2
+		else
+			3;
+
+		for (0..activeCascades) |i| {
+			// Stagger distant cascade (Cascade 2) updates every 3rd frame ONLY when moving slowly or stationary:
+			if (i == 2 and !isFastMovement and shadowFrameCounter % 3 != 0) continue;
+
 			shadowFBs[i].bind();
 			c.glClear(c.GL_DEPTH_BUFFER_BIT);
 			c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatricesGL[i]));
 
-			// Gathered per-cascade (using this cascade's own, much smaller far distance) rather than once
-			// for all three using cascadeFarDistances[2] (the largest). An earlier version shared one
-			// chunk list — gathered at the *largest* cascade's radius — across all three cascades, so
-			// cascade 0 (meant to cover only 24 blocks, kept deliberately small so nearby tree shadows stay
-			// sharp and cheap) was redundantly re-uploading and re-drawing every chunk out to
-			// cascadeFarDistances[2] (potentially hundreds of blocks) three times over. That went
-			// unnoticed for a while because the main camera's oldVisibilityState gate (see forceAllVisible
-			// above) was accidentally culling most of that excess away — once that gate was correctly
-			// bypassed for the shadow pass, this redundant over-scoping became a real, measurable cost.
-			const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i]);
+			const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i], lightDir, occluderSunDists[i]);
 			var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
 			defer for (chunkLists) |list| list.deinit();
 			for (meshes) |mesh| {

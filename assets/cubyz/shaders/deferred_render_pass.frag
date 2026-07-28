@@ -55,8 +55,11 @@ float densityIntegral(float dist, float zStart, float zDist, float fogLower, flo
 float calculateFogDistance(float dist, float densityAdjustment, float playerWorldZ, float zScale, float fogDensity, float fogLower, float fogHigher) {
 	float effectiveDist = dist * densityAdjustment;
 
-	// Standard distance fog:
-	float distFog = effectiveDist * fogDensity;
+	// Distance fog starts far out (at 75% of total max LOD distance):
+	// All HQ LOD0 chunks and low-res LOD chunks closer than 75% of max LOD distance are 100% crystal clear.
+	// Only near the outer edge of all loaded LOD chunks does fog smoothly ramp up to hide map boundaries.
+	float fogStart = 0.75 / max(1e-5, fogDensity);
+	float distFog = max(0.0, effectiveDist - fogStart) * fogDensity * 3.5;
 
 	// Height fog (mist layer near ground):
 	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;
@@ -76,7 +79,9 @@ vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
 void main() {
 	fragColor = texture(color, texCoords);
 	fragColor += texture(bloomColor, texCoords);
-	fragColor.rgb += texture(godRayColor, texCoords).r*godRayTint;
+	if (godRayTint != vec3(0.0)) {
+		fragColor.rgb += texture(godRayColor, texCoords).r * godRayTint;
+	}
 	vec2 clampedTexCoords = (floor(texCoords*vec2(textureSize(color, 0))) + 0.5)/vec2(textureSize(color, 0));
 	vec3 direction = clampedTexCoords.x*(
 		clampedTexCoords.y*directions[0] + (1 - clampedTexCoords.y)*directions[1]

@@ -725,27 +725,51 @@ pub fn getLastRenderChunks() []*chunk_meshing.ChunkMesh {
 
 var shadowMeshList: main.List(*chunk_meshing.ChunkMesh) = .empty;
 
-/// Returns all loaded LOD0 chunk meshes within shadow distance regardless of camera frustum culling.
-/// Used by CascadedShadowMap so occluders outside or behind the player's FOV (trees, buildings, mountains)
-/// continue to render into shadow depth maps when the player turns their head away.
-pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32) []*chunk_meshing.ChunkMesh {
+/// Returns all loaded chunk meshes (including LODs and mountain peaks along the sun vector)
+/// that can cast shadows onto the receiver cascade.
+pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32, sunDir: Vec3f, occluderSunDist: f32) []*chunk_meshing.ChunkMesh {
 	shadowMeshList.clearRetainingCapacity();
-	const radiusBlocks: i32 = @intFromFloat(@ceil(shadowDist));
-	const totalRadius: i32 = radiusBlocks + chunk.chunkSize;
+	const playerPosInt: Vec3i = @floor(playerPos);
 
-	const storage = storageLists[0];
-	for (storage) |*node| {
-		if (!node.finishedMeshing) continue;
-		const mesh = node.mesh.load(.acquire) orelse continue;
-		if (mesh.isEmpty()) continue;
+	const maxLodToSearch: usize = if (shadowDist <= 32.0)
+		0
+	else if (shadowDist <= 128.0)
+		@min(@as(usize, 1), settings.highestLod)
+	else
+		settings.highestLod;
 
-		// Distance check: only include chunks within shadow distance of player:
-		const playerPosInt: Vec3i = @floor(playerPos);
-		const chunkCenter = Vec3i{ node.pos.wx + chunk.chunkSize / 2, node.pos.wy + chunk.chunkSize / 2, node.pos.wz + chunk.chunkSize / 2 };
-		const diff = chunkCenter - playerPosInt;
-		if (@abs(diff[0]) > totalRadius or @abs(diff[1]) > totalRadius or @abs(diff[2]) > totalRadius) continue;
+	for (0..maxLodToSearch + 1) |_lod| {
+		const storage = storageLists[_lod];
+		for (storage) |*node| {
+			if (!node.finishedMeshing) continue;
+			const mesh = node.mesh.load(.acquire) orelse continue;
+			if (mesh.isEmpty()) continue;
 
-		shadowMeshList.append(main.globalAllocator, mesh);
+			const chunkSize: i32 = chunk.chunkSize * node.pos.voxelSize;
+			const chunkCenter = Vec3i{ node.pos.wx + @divTrunc(chunkSize, 2), node.pos.wy + @divTrunc(chunkSize, 2), node.pos.wz + @divTrunc(chunkSize, 2) };
+			const diff = chunkCenter - playerPosInt;
+
+			// 1. Within spherical shadow radius of cascade receiver:
+			const distSq: i64 = @as(i64, diff[0])*diff[0] + @as(i64, diff[1])*diff[1] + @as(i64, diff[2])*diff[2];
+			const shadowRadius: i64 = @intFromFloat(@ceil(shadowDist + @as(f32, @floatFromInt(chunkSize))));
+			if (distSq <= shadowRadius * shadowRadius) {
+				shadowMeshList.append(main.globalAllocator, mesh);
+				continue;
+			}
+
+			// 2. Or sits along the sun vector towards the sun (casting a shadow onto the cascade):
+			const diffFloat = Vec3f{ @floatCast(@as(f64, @floatFromInt(diff[0]))), @floatCast(@as(f64, @floatFromInt(diff[1]))), @floatCast(@as(f64, @floatFromInt(diff[2]))) };
+			const projSun = main.vec.dot(diffFloat, sunDir);
+			if (projSun > -shadowDist and projSun < occluderSunDist) {
+				const projVector = sunDir * @as(Vec3f, @splat(projSun));
+				const perpVector = diffFloat - projVector;
+				const perpDistSq = main.vec.dot(perpVector, perpVector);
+				const radiusF: f32 = @floatFromInt(shadowRadius);
+				if (perpDistSq <= radiusF * radiusF) {
+					shadowMeshList.append(main.globalAllocator, mesh);
+				}
+			}
+		}
 	}
 	return shadowMeshList.items;
 }

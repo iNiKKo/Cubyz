@@ -70,21 +70,37 @@ float shadowKernelRotationAngle() {
 	return n * 6.2831853;
 }
 
+// 4-tap Poisson disk for distant Cascade 2 (fast & smooth far shadows):
+const vec2 poissonDiskFar[4] = vec2[](
+	vec2(-0.360,  0.933),
+	vec2( 0.408,  0.910),
+	vec2( 0.765, -0.644),
+	vec2(-0.545, -0.723)
+);
+
 // Sample the given cascade shadow map with a Poisson-disk PCF kernel.
 // projCoords: [0,1]³ UV.xy + reference depth .z (with normal bias already applied)
 // kernelRadius: PCF spread in texels
-float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius) {
+float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius, int samples) {
 	float angle = shadowKernelRotationAngle();
 	float s = sin(angle);
 	float cAngle = cos(angle);
 	float shadow = 0.0;
-	for (int i = 0; i < PCF_SAMPLES; ++i) {
-		vec2 diskPoint = poissonDisk[i];
-		vec2 rotated = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle);
-		vec2 offset = rotated * kernelRadius * csmTexelSize;
-		shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
+	if (samples <= 4) {
+		for (int i = 0; i < 4; ++i) {
+			vec2 diskPoint = poissonDiskFar[i];
+			vec2 offset = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle) * kernelRadius * csmTexelSize;
+			shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
+		}
+		return shadow * 0.25;
+	} else {
+		for (int i = 0; i < 9; ++i) {
+			vec2 diskPoint = poissonDisk[i];
+			vec2 offset = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle) * kernelRadius * csmTexelSize;
+			shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
+		}
+		return shadow / 9.0;
 	}
-	return shadow / float(PCF_SAMPLES);
 }
 
 // Samples one cascade's PCF shadow value for a given world position, including its own normal bias.
@@ -133,8 +149,8 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 	projCoords = projCoords * 0.5 + 0.5; // clip [-1,1] → UV [0,1]
 
-	if (any(lessThan(projCoords.xy, vec2(0.001))) || any(greaterThan(projCoords.xy, vec2(0.999)))) {
-		return 1.0; // outside cascade coverage: treat as unshadowed
+	if (any(lessThan(projCoords, vec3(0.001))) || any(greaterThan(projCoords, vec3(0.999)))) {
+		return 1.0; // outside cascade coverage (XY or Z): treat as unshadowed
 	}
 
 	// `projCoords.z` is normalized [0,1] across this cascade's *orthographic depth range*, and that range
@@ -145,15 +161,15 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// thing casting it: the lit gap it opens on the ground is biasBlocks / tan(sunElevation), so at a low
 	// sun a 0.13-block bias became a ~0.5-block gap (and cascade 2's became several blocks). Specifying
 	// the bias in blocks and converting here makes it mean the same small distance in every cascade.
-	// KEEP IN SYNC with renderer.zig computeLightSpaceMatrix: zMargin (256.0) + far margin (32.0) = 288.0.
-	float cascadeDepthRange = 2.0*csmCascadeFar[cascade] + 288.0;
+	// KEEP IN SYNC with renderer.zig computeLightSpaceMatrix: zMargin (1024.0) + far margin (32.0) = 1056.0.
+	float cascadeDepthRange = 2.0*csmCascadeFar[cascade] + (cascade == 0 ? 128.0 : (cascade == 1 ? 288.0 : 1056.0));
 	float biasBlocks = mix(0.010, 0.030, clamp(tanTheta/3.0, 0.0, 1.0)); // slope-scaled, in blocks
 	float bias = biasBlocks/max(cascadeDepthRange, 1.0);
 	projCoords.z -= bias;
 
-	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0);
-	else if (cascade == 1) return sampleCascadePCF(csmMap1, projCoords, PCF_KERNEL_RADIUS_C1);
-	else return sampleCascadePCF(csmMap2, projCoords, PCF_KERNEL_RADIUS_C2);
+	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0, 9);
+	else if (cascade == 1) return sampleCascadePCF(csmMap1, projCoords, PCF_KERNEL_RADIUS_C1, 9);
+	else return sampleCascadePCF(csmMap2, projCoords, PCF_KERNEL_RADIUS_C2, 4);
 }
 
 // Main sun/moon terrain shadow function. Returns a multiplier in [shadowAmbientFloor, 1.0]:

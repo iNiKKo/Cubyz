@@ -116,7 +116,7 @@ fn shadowsCallback(newValue: bool) void {
 }
 
 fn shadowDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
-	return allocator.print("#ffffffShadow Distance: {d:.0}", .{@round(value)});
+	return allocator.print("#ffffffDynamic Shadow Distance: {d:.0}m", .{@round(value)});
 }
 
 fn shadowDistanceCallback(newValue: f32) void {
