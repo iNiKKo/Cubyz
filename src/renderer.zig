@@ -428,7 +428,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	const isSubmerged = blocks.meshes.hasFog(playerBlock);
 
 	if (!isSubmerged and playerPos[2] <= 2000.0) {
-		clouds.draw(ambientLight, skyColor);
+		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 	}
 	if (!isSubmerged) {

@@ -6,11 +6,13 @@ layout(location = 0) in vec3 pos;
 layout(location = 1) in float brightness;
 layout(location = 2) in float edgeFade;
 
+uniform vec3 meshOriginRelative;
+
 layout(location = 0) out float outBrightness;
 layout(location = 1) out float outEdgeFade;
 
 void main() {
 	outBrightness = brightness;
 	outEdgeFade = edgeFade;
-	gl_Position = projectionMatrix*(viewMatrix*vec4(pos, 1));
+	gl_Position = projectionMatrix*(viewMatrix*vec4(pos + meshOriginRelative, 1.0));
 }

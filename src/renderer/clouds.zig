@@ -110,6 +110,7 @@ var pipeline: graphics.Pipeline = undefined;
 var uniforms: struct {
 	tint: c_int,
 	baseAlpha: c_int,
+	meshOriginRelative: c_int,
 } = undefined;
 var vao: graphics.VertexArray = undefined;
 /// Storm layer's own VAO — same pipeline/shader/vertex format as the base layer (no need for a second
@@ -264,10 +265,6 @@ fn buildLayerMesh(
 	vertices: *main.ListManaged(CloudVertex),
 	indices: *main.ListManaged(u32),
 	gridDim: u32,
-	originX: f64,
-	originY: f64,
-	playerPos: Vec3d,
-	windOffset: Vec2f,
 	relZBase: f32,
 	relZTop: f32,
 	layerTopBrightness: f32,
@@ -301,10 +298,10 @@ fn buildLayerMesh(
 			const gx1: i64 = @intCast(cx + w);
 			const gy1: i64 = @intCast(cy + h);
 
-			const x0 = relCoordAt(gx0, originX, playerPos[0], windOffset[0]);
-			const y0 = relCoordAt(gy0, originY, playerPos[1], windOffset[1]);
-			const x1 = relCoordAt(gx1, originX, playerPos[0], windOffset[0]);
-			const y1 = relCoordAt(gy1, originY, playerPos[1], windOffset[1]);
+			const x0 = relCoordAt(gx0);
+			const y0 = relCoordAt(gy0);
+			const x1 = relCoordAt(gx1);
+			const y1 = relCoordAt(gy1);
 
 			// Fade computed at the merged rectangle's own center cell — flat per-quad, same level of
 			// visual fidelity brightness already has for merged rectangles (not smoothly interpolated
@@ -326,10 +323,10 @@ fn buildLayerMesh(
 			const gx1: i64 = gx0 + 1;
 			const gy1: i64 = gy0 + 1;
 
-			const wallX0 = relCoordAt(gx0, originX, playerPos[0], windOffset[0]);
-			const wallY0 = relCoordAt(gy0, originY, playerPos[1], windOffset[1]);
-			const wallX1 = relCoordAt(gx1, originX, playerPos[0], windOffset[0]);
-			const wallY1 = relCoordAt(gy1, originY, playerPos[1], windOffset[1]);
+			const wallX0 = relCoordAt(gx0);
+			const wallY0 = relCoordAt(gy0);
+			const wallX1 = relCoordAt(gx1);
+			const wallY1 = relCoordAt(gy1);
 
 			const hasLeft = cx > 0 and layerCoverage[cy * gridDim + cx - 1] != 0;
 			const hasRight = cx + 1 < gridDim and layerCoverage[cy * gridDim + cx + 1] != 0;
@@ -608,10 +605,9 @@ pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
 	return atten;
 }
 
-fn relCoordAt(gridIndex: i64, gridOrigin: f64, playerCoord: f64, windOffsetComponent: f32) f32 {
-	const worldCoord: f64 = gridOrigin + @as(f64, @floatFromInt(gridIndex))*cellSizeD;
-	const rel: f32 = @floatCast(worldCoord - playerCoord);
-	return rel + windOffsetComponent;
+fn relCoordAt(gridIndex: i64) f32 {
+	const rel: f32 = @floatCast(@as(f64, @floatFromInt(gridIndex))*cellSizeD);
+	return rel;
 }
 
 fn addQuad(vertices: *main.ListManaged(CloudVertex), indices: *main.ListManaged(u32), p0: Vec3f, p1: Vec3f, p2: Vec3f, p3: Vec3f, brightness: f32, edgeFade: f32) void {
@@ -629,6 +625,12 @@ fn addQuad(vertices: *main.ListManaged(CloudVertex), indices: *main.ListManaged(
 }
 
 pub fn update(playerPos: Vec3d) void {
+	if (!settings.clouds) {
+		indexCount = 0;
+		stormIndexCount = 0;
+		return;
+	}
+
 	const desiredGridDim: u32 = @intFromFloat(@ceil(2*settings.cloudDistance/cellSize));
 	const gridDim: u32 = std.math.clamp(desiredGridDim, 4, maxGridDim);
 	const gridDimD: f64 = @floatFromInt(gridDim);
@@ -643,21 +645,23 @@ pub fn update(playerPos: Vec3d) void {
 	const originCellX: i64 = @intFromFloat(@floor(effectivePosX/cellSizeD) - gridDimD/2);
 	const originCellY: i64 = @intFromFloat(@floor(effectivePosY/cellSizeD) - gridDimD/2);
 
-	lastOriginCellX = originCellX;
-	lastOriginCellY = originCellY;
-	lastGridDim = gridDim;
-
 	const cloudMidHeightD: f64 = @as(f64, cloudBaseHeight) + @as(f64, cloudThickness)/2;
-
-	computeCloudCoverage(&coverage, gridDim, originCellX, originCellY, cloudSeed, detailSeed, coverageThreshold, 25, 4, null);
-
-	computeCloudCoverage(&stormCoverage, gridDim, originCellX, originCellY, stormCloudSeed, stormDetailSeed, stormCoverageThreshold, stormMaxClusterCells, stormMaxClusterDim, &coverage);
-
 	const originX: f64 = @as(f64, @floatFromInt(originCellX))*cellSizeD;
 	const originY: f64 = @as(f64, @floatFromInt(originCellY))*cellSizeD;
 	coverageOriginRelative = Vec2f{@floatCast(originX - playerPos[0]), @floatCast(originY - playerPos[1])} + windOffset;
 	coverageWorldSize = @floatCast(gridDimD*cellSizeD);
 	cloudHeightRelative = @floatCast(cloudMidHeightD - playerPos[2]);
+
+	if (originCellX == lastOriginCellX and originCellY == lastOriginCellY and gridDim == lastGridDim and indexCount > 0) {
+		return;
+	}
+
+	lastOriginCellX = originCellX;
+	lastOriginCellY = originCellY;
+	lastGridDim = gridDim;
+
+	computeCloudCoverage(&coverage, gridDim, originCellX, originCellY, cloudSeed, detailSeed, coverageThreshold, 25, 4, null);
+	computeCloudCoverage(&stormCoverage, gridDim, originCellX, originCellY, stormCloudSeed, stormDetailSeed, stormCoverageThreshold, stormMaxClusterCells, stormMaxClusterDim, &coverage);
 
 	c.glActiveTexture(c.GL_TEXTURE9);
 	c.glBindTexture(c.GL_TEXTURE_2D, coverageTextureId);
@@ -668,9 +672,7 @@ pub fn update(playerPos: Vec3d) void {
 	var indices: main.ListManaged(u32) = .init(main.stackAllocator);
 	defer indices.deinit();
 
-	const relZBase: f32 = @floatCast(@as(f64, cloudBaseHeight) - playerPos[2]);
-	const relZTop: f32 = relZBase + cloudThickness;
-	buildLayerMesh(&coverage, &vertices, &indices, gridDim, originX, originY, playerPos, windOffset, relZBase, relZTop, topBrightness, sideBrightness, bottomBrightness);
+	buildLayerMesh(&coverage, &vertices, &indices, gridDim, 0.0, cloudThickness, topBrightness, sideBrightness, bottomBrightness);
 
 	indexCount = @intCast(indices.items.len);
 	vao.update(CloudVertex, vertices.items, indices.items);
@@ -681,19 +683,18 @@ pub fn update(playerPos: Vec3d) void {
 	var stormIndices: main.ListManaged(u32) = .init(main.stackAllocator);
 	defer stormIndices.deinit();
 
-	const stormRelZBase: f32 = relZBase + stormGap;
-	const stormRelZTop: f32 = stormRelZBase + stormThickness;
-	buildLayerMesh(&stormCoverage, &stormVertices, &stormIndices, gridDim, originX, originY, playerPos, windOffset, stormRelZBase, stormRelZTop, topBrightness, sideBrightness, bottomBrightness);
+	buildLayerMesh(&stormCoverage, &stormVertices, &stormIndices, gridDim, 0.0, stormThickness, topBrightness, sideBrightness, bottomBrightness);
 
 	stormIndexCount = @intCast(stormIndices.items.len);
 	stormVao.update(CloudVertex, stormVertices.items, stormIndices.items);
 }
 
-fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f, alpha: f32) void {
+fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f, alpha: f32, meshOriginRelative: Vec3f) void {
 	if (layerIndexCount == 0) return;
 	vaoToDraw.bind();
 	c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
 	c.glUniform1f(uniforms.baseAlpha, alpha);
+	c.glUniform3fv(uniforms.meshOriginRelative, 1, @ptrCast(&meshOriginRelative));
 
 	c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
 	c.glDepthMask(c.GL_TRUE);
@@ -706,59 +707,55 @@ fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(layerIndexCount), c.GL_UNSIGNED_INT, null);
 }
 
-pub fn draw(ambientLight: Vec3f, skyColor: Vec3f) void {
+pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
+	if (!settings.clouds) return;
 	if (indexCount == 0 and stormIndexCount == 0) return;
 
 	pipeline.bind(null);
 
 	const neutralWhite: Vec3f = .{1, 1, 1};
-	// cloudBase: clouds absorb 12.5% sky color, 87.5% neutral white — a deliberate, small tint (see this
-	// project's memory.md, "Sky Color Absorption" item). The OLD second step multiplied cloudBase by a
-	// SECOND skyColor-weighted factor (`0.7 + skyColor*0.3`) on top of that, compounding the tint into a
-	// visibly blue cast on every cloud regardless of distance/fog/rain — confirmed numerically (a typical
-	// daytime skyColor of (0.45, 0.65, 0.95) produced a final tint of roughly (0.78, 0.86, 0.98), a real,
-	// consistently blue-biased color, not fog or alpha-blending as two earlier fix attempts assumed).
-	// Player screenshots showed clouds staying blue-tinted through two rounds of unrelated fog fixes —
-	// this double sky-color multiplication was the actual, previously-undiagnosed cause. Fixed by
-	// dropping the second skyColor multiplication entirely — ambientLight (day/night brightness) still
-	// scales the whole thing, but there is now only ONE small, deliberate sky-color influence
-	// (cloudBase's 12.5% absorption), not two compounding ones.
 	const cloudBase = neutralWhite * @as(Vec3f, @splat(0.875)) + skyColor * @as(Vec3f, @splat(0.125));
 	const tint = @min(Vec3f{1, 1, 1}, cloudBase) * ambientLight;
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+
+	const desiredGridDim: u32 = @intFromFloat(@ceil(2*settings.cloudDistance/cellSize));
+	const gridDim: u32 = std.math.clamp(desiredGridDim, 4, maxGridDim);
+	const gridDimD: f64 = @floatFromInt(gridDim);
+
+	const effectivePosX: f64 = playerPos[0] - @as(f64, windOffset[0]);
+	const effectivePosY: f64 = playerPos[1] - @as(f64, windOffset[1]);
+	const originCellX: i64 = @intFromFloat(@floor(effectivePosX/cellSizeD) - gridDimD/2);
+	const originCellY: i64 = @intFromFloat(@floor(effectivePosY/cellSizeD) - gridDimD/2);
+
+	const originX: f64 = @as(f64, @floatFromInt(originCellX))*cellSizeD;
+	const originY: f64 = @as(f64, @floatFromInt(originCellY))*cellSizeD;
+
+	const baseMeshOriginRel = Vec3f{
+		@floatCast(originX - playerPos[0] + @as(f64, windOffset[0])),
+		@floatCast(originY - playerPos[1] + @as(f64, windOffset[1])),
+		@floatCast(@as(f64, cloudBaseHeight) - playerPos[2]),
+	};
 
 	c.glEnable(c.GL_POLYGON_OFFSET_FILL);
 	c.glPolygonOffset(-1.0, -2.0);
 
 	// Base layer: fixed alpha, completely unaffected by weather.
-	drawLayer(&vao, indexCount, tint, baseAlpha);
+	drawLayer(&vao, indexCount, tint, baseAlpha, baseMeshOriginRel);
 
-	// Storm layer: smoothly fades in/out via alpha as rainIntensity changes.
-	// Uses exact same tint formula as base clouds to match color perfectly.
-	const rainIntensity = game.world.?.dayTime.rainIntensity;
-	// A plain linear rainIntensity->alpha ramp spends a long time (most of the fade-in window, since
-	// rainIntensity itself eases slowly — see DayTime.update()) sitting at low alpha, which reads as a
-	// faint, ghostly/translucent haze rather than a forming cloud — visually nothing like the base
-	// layer's constant, solid-looking baseAlpha. Player confirmed: "the way they look from start to
-	// finish of fade in doesn't look close to how layer 1 looks." Front-loading the curve (steep near 0,
-	// flattening out approaching 1 — a concave power curve, NOT smoothstep, which is actually *slower*
-	// than linear near 0) reaches an alpha close to baseAlpha much sooner in the fade, so the storm layer
-	// spends most of its fade-in already looking like a solid cloud instead of a ghost — while staying
-	// perfectly continuous (still 0 at rainIntensity=0, still baseAlpha at rainIntensity=1), so it can't
-	// introduce a pop the way a hard cutoff would.
-	//
-	// A squared curve (1-(1-x)^2) still wasn't steep enough — screenshot showed the storm layer still
-	// visibly blue-tinted at low-to-moderate rainIntensity, since ANY translucent white cloud blended at
-	// low alpha over blue sky reads as blue no matter how the curve is shaped (alpha blending math, not a
-	// curve-steepness problem) — a squared curve at rainIntensity=0.3 only reaches alpha~0.33, still
-	// solidly in the visibly-blue-tinted range. Went to a cubed curve (1-(1-x)^3) for a markedly steeper
-	// initial rise (at rainIntensity=0.3 this reaches alpha~0.43 instead of ~0.33), shrinking the
-	// low-alpha "still looks blue" window further while keeping the same 0->baseAlpha endpoints (still
-	// perfectly continuous, can't pop).
+	// Storm layer
+	const rainIntensity = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
 	const stormAlphaCurve = 1.0 - (1.0 - rainIntensity)*(1.0 - rainIntensity)*(1.0 - rainIntensity);
 	const stormAlpha = stormAlphaCurve * baseAlpha;
 	if (stormAlpha > 0.01 and stormIndexCount > 0) {
 		const stormTint = tint * @as(Vec3f, @splat(stormTintFactor));
-		drawLayer(&stormVao, stormIndexCount, stormTint, stormAlpha);
+		const stormMeshOriginRel = Vec3f{
+			@floatCast(originX - playerPos[0] + @as(f64, windOffset[0])),
+			@floatCast(originY - playerPos[1] + @as(f64, windOffset[1])),
+			@floatCast(@as(f64, cloudBaseHeight + stormGap) - playerPos[2]),
+		};
+		drawLayer(&stormVao, stormIndexCount, stormTint, stormAlpha, stormMeshOriginRel);
 	}
 
 	c.glDisable(c.GL_POLYGON_OFFSET_FILL);
