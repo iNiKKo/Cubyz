@@ -712,8 +712,19 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f) void {
 	pipeline.bind(null);
 
 	const neutralWhite: Vec3f = .{1, 1, 1};
+	// cloudBase: clouds absorb 12.5% sky color, 87.5% neutral white — a deliberate, small tint (see this
+	// project's memory.md, "Sky Color Absorption" item). The OLD second step multiplied cloudBase by a
+	// SECOND skyColor-weighted factor (`0.7 + skyColor*0.3`) on top of that, compounding the tint into a
+	// visibly blue cast on every cloud regardless of distance/fog/rain — confirmed numerically (a typical
+	// daytime skyColor of (0.45, 0.65, 0.95) produced a final tint of roughly (0.78, 0.86, 0.98), a real,
+	// consistently blue-biased color, not fog or alpha-blending as two earlier fix attempts assumed).
+	// Player screenshots showed clouds staying blue-tinted through two rounds of unrelated fog fixes —
+	// this double sky-color multiplication was the actual, previously-undiagnosed cause. Fixed by
+	// dropping the second skyColor multiplication entirely — ambientLight (day/night brightness) still
+	// scales the whole thing, but there is now only ONE small, deliberate sky-color influence
+	// (cloudBase's 12.5% absorption), not two compounding ones.
 	const cloudBase = neutralWhite * @as(Vec3f, @splat(0.875)) + skyColor * @as(Vec3f, @splat(0.125));
-	const tint = @min(Vec3f{1, 1, 1}, cloudBase * (@as(Vec3f, @splat(0.7)) + skyColor * @as(Vec3f, @splat(0.3)))) * ambientLight;
+	const tint = @min(Vec3f{1, 1, 1}, cloudBase) * ambientLight;
 
 	c.glEnable(c.GL_POLYGON_OFFSET_FILL);
 	c.glPolygonOffset(-1.0, -2.0);
@@ -724,7 +735,27 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f) void {
 	// Storm layer: smoothly fades in/out via alpha as rainIntensity changes.
 	// Uses exact same tint formula as base clouds to match color perfectly.
 	const rainIntensity = game.world.?.dayTime.rainIntensity;
-	const stormAlpha = rainIntensity * baseAlpha;
+	// A plain linear rainIntensity->alpha ramp spends a long time (most of the fade-in window, since
+	// rainIntensity itself eases slowly — see DayTime.update()) sitting at low alpha, which reads as a
+	// faint, ghostly/translucent haze rather than a forming cloud — visually nothing like the base
+	// layer's constant, solid-looking baseAlpha. Player confirmed: "the way they look from start to
+	// finish of fade in doesn't look close to how layer 1 looks." Front-loading the curve (steep near 0,
+	// flattening out approaching 1 — a concave power curve, NOT smoothstep, which is actually *slower*
+	// than linear near 0) reaches an alpha close to baseAlpha much sooner in the fade, so the storm layer
+	// spends most of its fade-in already looking like a solid cloud instead of a ghost — while staying
+	// perfectly continuous (still 0 at rainIntensity=0, still baseAlpha at rainIntensity=1), so it can't
+	// introduce a pop the way a hard cutoff would.
+	//
+	// A squared curve (1-(1-x)^2) still wasn't steep enough — screenshot showed the storm layer still
+	// visibly blue-tinted at low-to-moderate rainIntensity, since ANY translucent white cloud blended at
+	// low alpha over blue sky reads as blue no matter how the curve is shaped (alpha blending math, not a
+	// curve-steepness problem) — a squared curve at rainIntensity=0.3 only reaches alpha~0.33, still
+	// solidly in the visibly-blue-tinted range. Went to a cubed curve (1-(1-x)^3) for a markedly steeper
+	// initial rise (at rainIntensity=0.3 this reaches alpha~0.43 instead of ~0.33), shrinking the
+	// low-alpha "still looks blue" window further while keeping the same 0->baseAlpha endpoints (still
+	// perfectly continuous, can't pop).
+	const stormAlphaCurve = 1.0 - (1.0 - rainIntensity)*(1.0 - rainIntensity)*(1.0 - rainIntensity);
+	const stormAlpha = stormAlphaCurve * baseAlpha;
 	if (stormAlpha > 0.01 and stormIndexCount > 0) {
 		const stormTint = tint * @as(Vec3f, @splat(stormTintFactor));
 		drawLayer(&stormVao, stormIndexCount, stormTint, stormAlpha);

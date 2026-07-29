@@ -28,6 +28,9 @@ const mesh_storage = @import("mesh_storage.zig");
 
 var pipeline: graphics.Pipeline = undefined;
 var transparentPipeline: graphics.Pipeline = undefined;
+/// Reference point for water-reflection ripple animation (transparent_fragment.frag) — same
+/// real-elapsed-time pattern clouds.zig/thin_clouds.zig use for their own wind animation.
+var startTimestamp: std.Io.Timestamp = undefined;
 const UniformStruct = struct {
 	screenSize: c_int,
 	ambientLight: c_int,
@@ -47,6 +50,11 @@ const UniformStruct = struct {
 	sunDirection: c_int,
 	isSunlight: c_int,
 	shadowDarkness: c_int,
+	shadowTransitionFade: c_int,
+	/// Only meaningfully used by transparentPipeline's water-reflection ripple (see
+	/// transparent_fragment.frag) — harmless unused uniform location on the opaque pipeline, kept in
+	/// this shared struct rather than a second near-duplicate struct just for one extra field.
+	waterTime: c_int,
 	reflectionsEnabled: c_int,
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
@@ -90,6 +98,7 @@ pub var transparentQuadsDrawn: usize = 0;
 pub const maxQuadsInIndexBuffer = 3 << (3*chunk.chunkShift); // maximum 3 faces/block
 
 pub fn init() void {
+	startTimestamp = main.timestamp();
 	pipeline = graphics.Pipeline.init(
 		"assets/cubyz/shaders/chunks/chunk_vertex.vert",
 		"assets/cubyz/shaders/chunks/chunk_fragment.frag",
@@ -219,6 +228,15 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform3fv(locations.sunDirection, 1, @ptrCast(&sunDirection));
 	c.glUniform1i(locations.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
 	c.glUniform1f(locations.shadowDarkness, main.settings.shadowDarkness);
+	// sunDirection above is getShadowLightDirection()'s output, which clamps elevation to >= 0.35 (see
+	// that function's doc comment) — meaning shadow.glsl's own horizonFade (which fades shadow contrast
+	// out as abs(sunDirection.z) approaches 0, meant to hide the sun/moon crossing's instantaneous
+	// direction flip) can never actually engage: the clamp keeps sunDirection.z comfortably outside
+	// horizonFade's 0.02-0.18 window at all times, defeating that safety net exactly when it's needed
+	// most. shadowTransitionFade is a second, independent signal for "how close are we to the crossing"
+	// that isn't affected by the elevation clamp (see DayTime.getShadowTransitionFade's doc comment) —
+	// shadow.glsl blends toward fully-lit using this instead of (in addition to) horizonFade.
+	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 	c.glUniform1i(locations.reflectionsEnabled, @intFromBool(main.settings.reflections));
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
@@ -260,6 +278,10 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	c.glUniform1f(transparentUniforms.@"fog.density", game.world.?.dayTime.fog.density);
 	c.glUniform1f(transparentUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
 	c.glUniform1f(transparentUniforms.@"fog.fogHigher", game.world.?.dayTime.fog.fogHigher);
+
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	c.glUniform1f(transparentUniforms.waterTime, waterTime);
 
 	bindCommonUniforms(&transparentUniforms, ambient);
 

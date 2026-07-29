@@ -1069,7 +1069,17 @@ const GodRays = struct { // MARK: GodRays
 		const centerFadeOuter: f32 = 0.9;
 		const centerFadeT = std.math.clamp((centerDist - centerFadeInner)/(centerFadeOuter - centerFadeInner), 0.0, 1.0);
 		const centerFade = 1.0 - centerFadeT*centerFadeT*(3.0 - 2.0*centerFadeT); // smoothstep, inverted
-		const strength = Skybox.horizonFade(lightDir)*settings.godRayIntensity*moonDimming*centerFade;
+		// getVisibleCelestialDirection() flips 180 degrees in a single frame exactly at the sun/moon
+		// crossing (verified numerically — see DayTime.getShadowTransitionFade's doc comment), so
+		// sunScreenPos (this function's convergence point, computed above from that same lightDir) jumps
+		// to the opposite side of the screen in one frame too. Skybox.horizonFade alone only reaches 0.5
+		// strength exactly at the crossing (direction[2]==0 sits at its window's midpoint, not its zero
+		// end) — not dim enough to hide a convergence point teleporting across the screen at half
+		// brightness. Multiplying by getShadowTransitionFade() (which reaches exactly 0 right at the
+		// crossing, independent of horizonFade's own window) ensures god rays are fully invisible for the
+		// brief moment sunScreenPos actually jumps, then fade back in already converged on the new body.
+		const transitionFade = game.world.?.dayTime.getShadowTransitionFade();
+		const strength = Skybox.horizonFade(lightDir)*settings.godRayIntensity*moonDimming*centerFade*transitionFade;
 		// tanX/tanY (== width/height, per Mat4f.perspective()'s `tanX = aspect*tanY`) — scales the mask's
 		// screen-space proximity test so the sun's glow disc reads as circular on screen instead of
 		// stretched to match whatever the viewport's aspect ratio happens to be.

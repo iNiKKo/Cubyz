@@ -35,12 +35,28 @@ float valueNoise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// This layer is one giant flat quad (planeHalfSize = 4096 blocks in thin_clouds.zig) with no
+// distance-based falloff at all — from a first-person camera, a huge span of that flat plane compresses
+// into a thin, near-horizontal strip right at the horizon (classic infinite-flat-plane grazing-angle
+// behavior), which reads as the cloud layer "stretching as far as it can" toward the horizon rather than
+// fading into haze/distance like real clouds or this engine's own 3D cloud layers do. Fading alpha out
+// with horizontal distance from the player closes that off — matching the "fade the edge, don't show a
+// hard boundary" principle already used for this engine's 3D cloud coverage grid edge and the
+// render-distance fog wall.
+const float horizonFadeStart = 2500.0; // Blocks — fully opaque before this distance.
+const float horizonFadeEnd = 4000.0; // Blocks — fully faded by this distance (inside planeHalfSize=4096, so the plane's own edge is never visible).
+
 void main() {
 	vec2 worldPos = localPos + noiseOrigin;
 	float base = valueNoise(worldPos/noiseScale);
 	float detail = valueNoise(worldPos/detailNoiseScale);
 	float coverage = base*(1.0 - detailWeight) + detail*detailWeight;
 	float alpha = smoothstep(coverageThreshold - edgeSoftness, coverageThreshold + edgeSoftness, coverage)*maxAlpha;
+
+	float horizontalDist = length(localPos);
+	float horizonFade = 1.0 - smoothstep(horizonFadeStart, horizonFadeEnd, horizontalDist);
+	alpha *= horizonFade;
+
 	if (alpha <= 0.001) discard;
 	fragColor = vec4(tint, alpha);
 }

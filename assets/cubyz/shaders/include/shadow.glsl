@@ -26,6 +26,12 @@ layout(location = 33) uniform bool shadowsEnabled;
 layout(location = 38) uniform bool isSunlight; // false when moonlight is casting the shadow
 layout(location = 37) uniform vec3 sunDirection; // direction *toward* the sun/moon
 layout(location = 39) uniform float shadowDarkness; // [0.0, 1.0] shadow darkness factor
+// [0,1]: 1.0 = normal shadow contrast, 0.0 = faded to fully-lit right at the sun/moon crossing (see
+// DayTime.getShadowTransitionFade's doc comment for why this exists — the crossing's instantaneous
+// direction flip needs hiding, and the pre-existing horizonFade below can't do it since sunDirection is
+// already elevation-clamped by the time it reaches this shader, keeping abs(sunDirection.z) well outside
+// horizonFade's window even exactly at the crossing).
+layout(location = 51) uniform float shadowTransitionFade;
 // These cloud uniforms kept at same locations as before to avoid having to change bindCommonUniforms:
 layout(location = 34) uniform vec2 cloudCoverageOrigin;
 layout(location = 35) uniform float cloudCoverageWorldSize;
@@ -214,10 +220,15 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 		}
 	}
 
-	// Fade out shadow contrast near horizon so sunset/sunrise transition is silky smooth:
+	// Fade out shadow contrast near horizon so sunset/sunrise transition is silky smooth. NOTE:
+	// sunDirection here is already elevation-clamped (>= 0.35, see DayTime.getShadowLightDirection), so
+	// this horizonFade term alone can never actually reach 0 — it's kept for whatever residual smoothing
+	// it still provides at low-but-not-clamped elevations, but shadowTransitionFade (below) is the term
+	// that actually hides the sun/moon crossing's instantaneous direction flip.
 	float horizonFade = smoothstep(0.02, 0.18, abs(sunDirection.z));
 	float finalShadow = mix(shadowAmbientFloor, 1.0, light);
-	return mix(1.0, finalShadow, horizonFade);
+	finalShadow = mix(1.0, finalShadow, horizonFade);
+	return mix(1.0, finalShadow, shadowTransitionFade);
 }
 
 // MARK: cloud shadows

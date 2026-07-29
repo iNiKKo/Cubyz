@@ -485,6 +485,34 @@ pub const World = struct { // MARK: World
 			return self.getSunDirection()[2] >= 0;
 		}
 
+		/// [0,1] weight: 1.0 = full normal shadow/god-ray strength, 0.0 = faded to a neutral, near-flat
+		/// state right at the sun/moon crossing (dayProgress 0.25 = sunset, 0.75 = sunrise). Verified
+		/// numerically that getVisibleCelestialDirection()'s `sunDir[2] >= 0` selection flips the active
+		/// light's direction by a full 180 degrees in a single frame at exactly this crossing — with no
+		/// mitigation, that reads as shadows/god-rays instantly snapping to a new direction instead of
+		/// sweeping. Rather than rendering both bodies' shadows simultaneously and cross-fading them (a
+		/// bigger change requiring two full CSM render passes to share this project's compute/indirect-
+		/// draw GPU buffers within one frame — the same category of shared-GL-state risk that caused the
+		/// MSAA shadow-rebind bug earlier this project), this fades shadow/god-ray *strength* down to
+		/// near-zero right at the crossing and back up afterward: the direction still flips instantly
+		/// underneath, but it does so while shadows are barely visible, hiding the snap inside a brief,
+		/// deliberate fade rather than showing it as a hard pop.
+		///
+		/// Mirrors getSkyColorFactor()/updateAmbientLight()'s windowed-ramp technique, but measures
+		/// distance from the CROSSING itself (dayProgress 0.25/0.75), not from midnight (dayCycleLength/2)
+		/// like those two — they center on midnight because that's their day/night plateau's center; here
+		/// the crossing is what needs softening, not the plateau.
+		pub fn getShadowTransitionFade(self: *DayTime) f32 {
+			const progress = self.getDayProgress();
+			const distFromDawn = @abs(progress - 0.25);
+			const distFromDusk = @abs(progress - 0.75);
+			const distFromCrossing = @min(distFromDawn, distFromDusk);
+			const windowWidth: f32 = 1.0/24.0; // ~1/24 of a full day/night cycle on each side of the crossing.
+			if (distFromCrossing >= windowWidth) return 1.0;
+			const t = distFromCrossing/windowWidth; // 0 at the crossing itself, 1 at the window edge.
+			return t*t*(3.0 - 2.0*t); // smoothstep: eases toward 1.0, zero derivative at both ends.
+		}
+
 		pub fn getStarOpacity(self: *DayTime) f32 {
 			const dayTime = @abs(self.dayTime - dayCycleLength/2);
 			if (dayTime < dayCycleLength/4 - dayCycleLength/16) {
