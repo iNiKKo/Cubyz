@@ -74,6 +74,11 @@ fn foliageShadowsCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn foliageSwayCallback(newValue: bool) void {
+	settings.foliageSway = newValue;
+	settings.save();
+}
+
 fn cloudsCallback(newValue: bool) void {
 	settings.clouds = newValue;
 	settings.save();
@@ -127,6 +132,7 @@ pub fn onOpen() void {
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, @floatFromInt(settings.shadowRaySteps), &shadowRayStepsCallback, &shadowRayStepsFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Grass Shadows", settings.foliageShadows, &foliageShadowsCallback));
+	list.add(CheckBox.init(.{0, 0}, 200, "Foliage Sway", settings.foliageSway, &foliageSwayCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Clouds", settings.clouds, &cloudsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 64.0, 2048.0, settings.cloudDistance, &cloudDistanceCallback, &cloudDistanceFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "God Rays", settings.godRays, &godRaysCallback));

@@ -48,6 +48,8 @@ pub var bloom: bool = true;
 
 pub var reflections: bool = true;
 
+pub var foliageSway: bool = true;
+
 /// Controls max ray search distance for water/transparent screen-space reflections (32m to 512m).
 pub var waterReflectionDistance: f32 = 128.0;
 

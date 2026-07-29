@@ -57,6 +57,7 @@ const UniformStruct = struct {
 	waterTime: c_int,
 	reflectionsEnabled: c_int,
 	waterReflectionDistance: c_int,
+	foliageSway: c_int,
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
@@ -240,6 +241,10 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 	c.glUniform1i(locations.reflectionsEnabled, @intFromBool(main.settings.reflections));
 	c.glUniform1f(locations.waterReflectionDistance, main.settings.waterReflectionDistance);
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	c.glUniform1f(locations.waterTime, waterTime);
+	c.glUniform1i(locations.foliageSway, @intFromBool(main.settings.foliageSway));
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
 	if (main.settings.shadows) {

@@ -17,6 +17,8 @@ layout(location = 10) flat out int isFoliage;
 layout(location = 11) out vec3 worldPos;
 
 layout(location = 0) uniform vec3 ambientLight;
+uniform float waterTime;
+uniform bool foliageSway;
 
 #ifdef ENTITY
 layout(location = 14) uniform mat4 modelMatrix;
@@ -98,6 +100,17 @@ void main() {
 #endif
 	position *= voxelSize;
 	worldPos = vec3(chunks[chunkID].position.xyz) + position;
+
+	if (quads[quadIndex].isFoliage != 0 && foliageSway) {
+		bool isLilyPad = abs(quads[quadIndex].normal.z) > 0.8;
+		float heightMask = isLilyPad ? 1.0 : clamp(quads[quadIndex].corners[vertexID][2] + 0.2, 0.0, 1.0);
+		float scale = isLilyPad ? 0.060 : 0.030;
+
+		float windWave = sin(worldPos.x * 1.1 + worldPos.y * 0.7 + waterTime * 2.0) * scale;
+		windWave += cos(worldPos.x * 0.5 - worldPos.y * 1.3 + waterTime * 1.4) * (scale * 0.6);
+		worldPos.xy += vec2(windWave, windWave * 0.5) * heightMask;
+	}
+
 	position = worldPos - (vec3(playerPositionInteger) + playerPositionFraction);
 
 	direction = position;

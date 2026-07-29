@@ -16,5 +16,5 @@
 	.degradable = true,
 	.alwaysViewThrough = true,
 	.absorbedLight = 0x363436,
-	.model = "cubyz:cube",
+	.model = "cubyz:cube_leaf",
 }
