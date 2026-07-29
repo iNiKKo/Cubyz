@@ -1,4 +1,5 @@
 .{
+	.weatherProfile = .arid,
 	.properties = .{
 		.hot,
 		.dry,

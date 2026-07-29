@@ -1,6 +1,7 @@
 #version 460
 
 layout(location = 0) in vec2 localPos;
+layout(location = 1) in float cameraDistance;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -10,6 +11,9 @@ uniform vec3 tint;
 uniform vec2 noiseOrigin;
 uniform float coverageThreshold;
 uniform float maxAlpha;
+uniform vec3 fogColor;
+uniform float fogDensity;
+uniform float weatherFogStrength;
 
 const float noiseScale = 220.0;
 const float detailNoiseScale = noiseScale*0.4;
@@ -58,5 +62,12 @@ void main() {
 	alpha *= horizonFade;
 
 	if (alpha <= 0.001) discard;
-	fragColor = vec4(tint, alpha);
+	vec3 color = tint;
+	if (weatherFogStrength > 0.001) {
+		float fogStart = mix(0.60, 0.35, weatherFogStrength)/max(1e-5, fogDensity);
+		float fogAmount = max(0.0, cameraDistance - fogStart)*fogDensity*mix(8.0, 10.0, weatherFogStrength);
+		fogAmount = mix(fogAmount, fogAmount*fogAmount, weatherFogStrength);
+		color = mix(color, fogColor, 1.0 - exp(-fogAmount));
+	}
+	fragColor = vec4(color*alpha, alpha);
 }

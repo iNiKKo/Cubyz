@@ -43,6 +43,9 @@ var uniforms: struct {
 	noiseOrigin: c_int,
 	coverageThreshold: c_int,
 	maxAlpha: c_int,
+	fogColor: c_int,
+	fogDensity: c_int,
+	weatherFogStrength: c_int,
 } = undefined;
 var vao: graphics.VertexArray = undefined;
 
@@ -61,7 +64,7 @@ pub fn init() void {
 		&.{},
 		.{.cullMode = .none},
 		.{.depthTest = true, .depthWrite = false},
-		.{.attachments = &.{.alphaBlending}},
+		.{.attachments = &.{.premultipliedAlphaBlending}},
 	);
 
 	const verts = [_]Vertex{
@@ -91,7 +94,19 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	const noiseOrigin = playerXY + windOffset;
 
 	const neutralWhite = Vec3f{0.98, 0.98, 1.0};
-	const tint = @min(Vec3f{1, 1, 1}, neutralWhite*@as(Vec3f, @splat(0.7)) + skyColor*@as(Vec3f, @splat(0.3)))*ambientLight;
+	// Match the volumetric deck's atmosphere lighting: thin clouds should remain muted blue-grey at
+	// night and should not turn into a solid white sheet in full daylight.
+	const cloudLight = @min(Vec3f{0.86, 0.89, 0.93}, ambientLight*@as(Vec3f, @splat(0.55)) + Vec3f{0.30, 0.33, 0.38});
+	const localWeather = if (game.world) |world| world.weatherGrid.sampleAt(playerPos[0], playerPos[1]) else game.WeatherGrid.Sample{};
+	const weatherFogStrength: f32 = if (game.world) |world| world.dayTime.weatherVisibility else 0.0;
+	const weatherCloudDarkening: f32 = if (localWeather.kind == 1) std.math.lerp(1.0, 0.58, weatherFogStrength) else 1.0;
+	const tint = @min(Vec3f{1, 1, 1}, neutralWhite*@as(Vec3f, @splat(0.7)) + skyColor*@as(Vec3f, @splat(0.3)))*cloudLight*@as(Vec3f, @splat(weatherCloudDarkening));
+	var fogColor: Vec3f = if (game.world) |world| world.dayTime.fog.fogColor else Vec3f{0.7, 0.75, 0.8};
+	if (localWeather.kind == 1) {
+		const rainCloudHaze = Vec3f{0.30, 0.36, 0.44};
+		fogColor += (rainCloudHaze - fogColor)*@as(Vec3f, @splat(std.math.clamp(weatherFogStrength*0.9, 0.0, 0.8)));
+	}
+	const fogDensity: f32 = if (weatherFogStrength > 0.001) weatherFogStrength / (if (game.world) |world| world.dayTime.weatherFogRange else 96.0) else 0.0;
 
 	// Layer 3: High-altitude 2D thin cloud layer (Z = 480)
 	{
@@ -101,6 +116,9 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 		c.glUniform1f(uniforms.coverageThreshold, 0.55);
 		c.glUniform1f(uniforms.maxAlpha, 0.25);
 		c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&noiseOrigin));
+		c.glUniform3fv(uniforms.fogColor, 1, @ptrCast(&fogColor));
+		c.glUniform1f(uniforms.fogDensity, fogDensity);
+		c.glUniform1f(uniforms.weatherFogStrength, weatherFogStrength);
 
 		vao.bind();
 		c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);
@@ -120,7 +138,10 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 			c.glUniform1f(uniforms.maxAlpha, stormAlpha);
 
 			const stormNoiseOrigin = noiseOrigin * @as(Vec2f, @splat(1.15));
-			c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&stormNoiseOrigin));
+		c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&stormNoiseOrigin));
+		c.glUniform3fv(uniforms.fogColor, 1, @ptrCast(&fogColor));
+		c.glUniform1f(uniforms.fogDensity, fogDensity);
+		c.glUniform1f(uniforms.weatherFogStrength, weatherFogStrength);
 
 			vao.bind();
 			c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);

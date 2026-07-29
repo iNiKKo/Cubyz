@@ -10,9 +10,12 @@ uniform vec3 meshOriginRelative;
 
 layout(location = 0) out float outBrightness;
 layout(location = 1) out float outEdgeFade;
+layout(location = 2) out float outCameraDistance;
 
 void main() {
 	outBrightness = brightness;
 	outEdgeFade = edgeFade;
-	gl_Position = projectionMatrix*(viewMatrix*vec4(pos + meshOriginRelative, 1.0));
+	vec3 relativePosition = pos + meshOriginRelative;
+	outCameraDistance = length(relativePosition);
+	gl_Position = projectionMatrix*(viewMatrix*vec4(relativePosition, 1.0));
 }

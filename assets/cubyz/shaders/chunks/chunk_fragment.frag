@@ -40,6 +40,8 @@ layout(std430, binding = 1) buffer _animatedTexture
 
 #include "shadow.glsl"
 
+uniform float weatherShadowFade;
+
 float lightVariation(vec3 normal) {
 	const vec3 directionalPart = vec3(0, contrast/2, contrast);
 	const float baseLighting = 1 - contrast;
@@ -127,6 +129,9 @@ void main() {
 	// SSS/root-AO/shadow self-occlusion handling below just because it isn't flat on a block boundary.
 	bool shadedAsFoliage = isFoliage != 0;
 	float shadowFactor = sampleSunShadow(direction, normal, length(mvVertexPos), shadedAsFoliage)*sampleCloudShadow(direction);
+	// Rain/snow clouds turn the directional sun into diffuse overcast light. Preserve a small amount of
+	// form shading but remove the hard, sunny shadow contrast while local weather is active.
+	shadowFactor = mix(shadowFactor, 1.0, weatherShadowFade);
 
 	vec3 effectiveSunLight = outSunLight;
 	// Subsurface Scattering (SSS) / Translucency for foliage (grass blades, flowers, crops):

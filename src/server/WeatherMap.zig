@@ -1,106 +1,98 @@
 const std = @import("std");
 
 const main = @import("main");
-const random = main.random;
 const terrain = main.server.terrain;
 const Biome = terrain.biomes.Biome;
+const ValueNoise = terrain.noise.ValueNoise;
 
-// Per-biome-patch weather state, keyed by the same stable per-patch seed already used elsewhere for
-// biome-position-specific randomness (see CaveBiomeMap.zig's getBiomeAndSeed doc comment: "a seed that
-// is unique for the corresponding biome position"). This reuses existing biome placement identity rather
-// than inventing a separate weather grid — every patch of, say, jungle gets its own independent weather
-// state, while re-entering the exact same patch later finds its state exactly where it was left.
-//
-// Design (see memory.md's weather system entry for the full plan): a player standing in a patch for
-// `entryDelayMillis` starts the dice rolling; every `rerollIntervalMillis` after that while still
-// occupied, a new rainTarget is rolled based on the biome's hot/wet/temperate/dry properties. The
-// rendered/synced value (rainCurrent) always eases toward rainTarget exponentially rather than snapping,
-// so crossing a biome boundary never causes an instant visible change — only entering a *new* patch
-// changes which patch's (slowly-moving) value you're now reading.
+/// The eventual client snapshot carries this complete sample. The old rain-intensity packet temporarily
+/// carries `precipitation` for rain-capable climates until that snapshot lands.
+pub const PrecipitationKind = enum(u8) { none, rain, snow, dust };
 
-const WeatherPatchState = struct {
-	rainTarget: f32 = 0,
-	rainCurrent: f32 = 0,
-	/// Milliseconds timestamp of when a player first (re-)entered this patch after it was unoccupied, or
-	/// null while unoccupied. Used to gate the initial roll behind entryDelayMillis.
-	occupiedSinceMillis: ?i64 = null,
-	/// Milliseconds timestamp of the next scheduled reroll.
-	nextRerollMillis: i64 = 0,
+pub const WeatherSample = struct {
+	cloudCover: f32,
+	precipitation: f32,
+	dust: f32,
+	wind: @Vector(2, f32),
+	kind: PrecipitationKind,
 };
 
-/// How long a patch must be continuously occupied before its first weather roll happens. Cut from 2.5
-/// minutes to 30 seconds (2026-07-28) at the player's request — still long enough that briefly passing
-/// through a biome doesn't trigger a roll, but noticeably faster to see the system react at all.
-const entryDelayMillis: i64 = 30_000; // 30 seconds
-/// How often an occupied patch rerolls afterward.
-const rerollIntervalMillis: i64 = 450_000; // 7.5 minutes
-/// How quickly the synced/rendered value eases toward the rolled target — same exponential-approach
-/// technique game.zig's DayTime.update() already uses for biome fog color, so a fresh roll never pops.
-const easeRatePerSecond: f32 = 0.15;
+/// Weather is a world-coordinate calculation, never a roll caused by a player entering a biome. The
+/// moving field is sampled by backtracking through the prevailing wind; applying climate at the sampled
+/// destination makes an incoming jungle storm visibly evaporate over desert while never raining there.
+const cloudScale: f32 = 720.0;
+const detailScale: f32 = 180.0;
+const windEpochMillis: i64 = 900_000;
+const windSpeed: f32 = 0.85;
 
-var mutex: main.utils.Mutex = .{};
-var patches: std.AutoHashMapUnmanaged(u64, WeatherPatchState) = .{};
+pub fn deinit() void {}
 
-pub fn deinit() void {
-	mutex.lock();
-	defer mutex.unlock();
-	patches.deinit(main.globalAllocator.allocator);
-	patches = .{};
+fn windForEpoch(worldSeed: u64, epoch: i64) @Vector(2, f32) {
+	var seed = worldSeed ^ @as(u64, @bitCast(epoch)) ^ 0x4f1bbcdcaa6f8f43;
+	const angle = main.random.nextFloat(&seed)*2.0*std.math.pi;
+	const speed = windSpeed + main.random.nextFloatSigned(&seed)*0.25;
+	return .{@cos(angle)*speed, @sin(angle)*speed};
 }
 
-/// Rolls a new rain target for a patch based on its biome's climate properties. Hot biomes almost never
-/// get rain and even then only lightly; wet biomes (swamp/jungle) roll high most of the time; temperate/
-/// neitherWetNorDry average out; dry further dampens whatever hot/temperate/cold contributes.
-fn rollRainTarget(biome: *const Biome, seed: *u64) f32 {
-	const props = biome.properties;
-	// Desert biomes (dry & hot) never get rain
-	if (props.dry and props.hot) return 0;
-
-	var chance: f32 = 0.35; // baseline for temperate/unspecified
-	var maxIntensity: f32 = 0.6;
-	if (props.hot) {
-		chance = 0.03;
-		maxIntensity = 0.25;
-	}
-	if (props.cold) {
-		chance = 0.4;
-		maxIntensity = 0.7;
-	}
-	if (props.wet) {
-		chance = 0.75;
-		maxIntensity = 1.0;
-	}
-	if (props.dry) {
-		chance *= 0.4;
-		maxIntensity *= 0.5;
-	}
-
-	if (random.nextFloat(seed) > chance) return 0;
-	return random.nextFloat(seed)*maxIntensity;
+fn smoothstep(x: f32) f32 {
+	const t = std.math.clamp(x, 0.0, 1.0);
+	return t*t*(3.0 - 2.0*t);
 }
 
-/// Called once per server tick per online player (see server.zig's update(), right after the existing
-/// per-user biome-change check). `patchSeed` identifies which biome patch the player currently occupies
-/// (ServerWorld.getBiomeAndSeed); `biome` is that patch's resolved biome, used only when a roll actually
-/// happens. Returns the patch's current (smoothly-eased) rain intensity in [0, 1], to be sent to the
-/// client whenever it has moved meaningfully since the last value that was sent to that player.
-pub fn tick(patchSeed: u64, biome: *const Biome, nowMillis: i64, deltaSeconds: f32) f32 {
-	mutex.lock();
-	defer mutex.unlock();
+pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: i64) WeatherSample {
+	const epoch = @divFloor(nowMillis, windEpochMillis);
+	const epochStart = epoch*windEpochMillis;
+	const transition = smoothstep(@as(f32, @floatFromInt(nowMillis - epochStart))/@as(f32, @floatFromInt(windEpochMillis)));
+	const wind = windForEpoch(worldSeed, epoch)*@as(@Vector(2, f32), @splat(1.0 - transition)) + windForEpoch(worldSeed, epoch + 1)*@as(@Vector(2, f32), @splat(transition));
+	const elapsedSeconds: f32 = @as(f32, @floatFromInt(nowMillis))*0.001;
+	const advectedX = @as(f32, @floatFromInt(wx)) - wind[0]*elapsedSeconds;
+	const advectedY = @as(f32, @floatFromInt(wy)) - wind[1]*elapsedSeconds;
+	const broad = ValueNoise.samplePoint2D(advectedX/cloudScale, advectedY/cloudScale, worldSeed ^ 0x2e0f9b14d83ca761);
+	const detail = ValueNoise.samplePoint2D(advectedX/detailScale, advectedY/detailScale, worldSeed ^ 0x76a6ce159d4b202f);
+	const moisture = std.math.clamp(broad*0.75 + detail*0.25, 0.0, 1.0);
+	var cloudCover = smoothstep((moisture - 0.42)/0.34);
+	var precipitation = smoothstep((moisture - 0.64)/0.24);
+	var dust: f32 = 0;
+	var kind: PrecipitationKind = .rain;
 
-	const entry = patches.getOrPutValue(main.globalAllocator.allocator, patchSeed, .{}) catch unreachable;
-	const state = entry.value_ptr;
+	const profile = switch (biome.weatherProfile) {
+		.automatic => blk: {
+			if (biome.properties.cold) break :blk Biome.WeatherProfile.frost;
+			if (biome.properties.wet) break :blk Biome.WeatherProfile.humid;
+			if (biome.properties.dry) break :blk Biome.WeatherProfile.arid;
+			break :blk Biome.WeatherProfile.temperate;
+		},
+		else => biome.weatherProfile,
+	};
 
-	if (state.occupiedSinceMillis == null) {
-		state.occupiedSinceMillis = nowMillis;
-		state.nextRerollMillis = nowMillis + entryDelayMillis;
-	} else if (nowMillis >= state.nextRerollMillis) {
-		var seed = patchSeed ^ @as(u64, @bitCast(nowMillis)) ^ 0x9e3779b97f4a7c15;
-		state.rainTarget = rollRainTarget(biome, &seed);
-		state.nextRerollMillis = nowMillis + rerollIntervalMillis;
+	switch (profile) {
+		.humid => precipitation *= 1.0,
+		.temperate => precipitation *= 0.65,
+		.snow => {
+			precipitation *= 0.75;
+			kind = .snow;
+		},
+		.frost => {
+			// Snow is intentionally opt-in for visibly snow-covered biomes until terrain accumulation
+			// exists. Cold autumn/grass biomes otherwise look wrong under falling snow.
+			precipitation = 0;
+			kind = .none;
+		},
+		.arid => {
+			cloudCover *= 0.55;
+			precipitation *= 0.12;
+		},
+		.desert => {
+			// Destination climate wins: incoming moisture remains only as a short-lived high mist,
+			// never ground rain. Dust is driven by the same world wind, not a separate random effect.
+			cloudCover *= 0.20;
+			precipitation = 0;
+			dust = smoothstep((@sqrt(wind[0]*wind[0] + wind[1]*wind[1]) - 0.70)/0.35)*smoothstep((moisture - 0.38)/0.35);
+			if (dust > 0.01) kind = .dust else kind = .none;
+		},
+		.automatic => unreachable,
 	}
 
-	const t = 1 - @exp(-easeRatePerSecond*deltaSeconds);
-	state.rainCurrent += (state.rainTarget - state.rainCurrent)*t;
-	return state.rainCurrent;
+	if (precipitation <= 0.01 and kind != .dust) kind = .none;
+	return .{.cloudCover = cloudCover, .precipitation = precipitation, .dust = dust, .wind = wind, .kind = kind};
 }

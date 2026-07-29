@@ -14,6 +14,7 @@ const Connection = network.Connection;
 const ConnectionManager = network.ConnectionManager;
 const vec = @import("vec.zig");
 const Vec2f = vec.Vec2f;
+const Vec2i = vec.Vec2i;
 const Vec3i = vec.Vec3i;
 const Vec3f = vec.Vec3f;
 const Vec4f = vec.Vec4f;
@@ -264,6 +265,77 @@ pub const Player = struct { // MARK: Player
 	}
 };
 
+/// Server-authoritative weather sampled over nearby world cells. Rendering will interpolate/sample this
+/// map rather than treating the player's own precipitation as the state of the whole sky.
+pub const WeatherGrid = struct {
+	pub const dimension: usize = 5;
+	pub const cell_count: usize = dimension*dimension;
+	pub const cell_size: i32 = 512;
+	pub const Cell = struct {
+		cloud_cover: u8 = 0,
+		precipitation: u8 = 0,
+		dust: u8 = 0,
+		kind: u8 = 0,
+	};
+	pub const Sample = struct {
+		cloud_cover: f32 = 0,
+		precipitation: f32 = 0,
+		dust: f32 = 0,
+		kind: u8 = 0,
+	};
+	pub const Snapshot = struct {
+		origin_cell: Vec2i = .{0, 0},
+		wind: Vec2f = .{0, 0},
+		cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
+		revision: u64 = 0,
+		time_millis: i64 = 0,
+	};
+
+	mutex: main.utils.Mutex = .{},
+	origin_cell: Vec2i = .{0, 0},
+	wind: Vec2f = .{0, 0},
+	cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
+	revision: u64 = 0,
+	time_millis: i64 = 0,
+
+	pub fn update(self: *WeatherGrid, origin_cell: Vec2i, wind: Vec2f, time_millis: i64, cells: [cell_count]Cell) void {
+		self.mutex.lock();
+		defer self.mutex.unlock();
+		self.origin_cell = origin_cell;
+		self.wind = wind;
+		self.cells = cells;
+		self.revision +%= 1;
+		self.time_millis = time_millis;
+	}
+
+	pub fn snapshot(self: *WeatherGrid) Snapshot {
+		self.mutex.lock();
+		defer self.mutex.unlock();
+		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis};
+	}
+
+	/// Returns the server-authoritative weather at this world position. Outside the most recent snapshot
+	/// is deliberately clear: renderers must not invent a second client-only weather pattern at the edge.
+	pub fn sampleAt(self: *WeatherGrid, wx: f64, wy: f64) Sample {
+		return sampleSnapshot(self.snapshot(), wx, wy);
+	}
+
+	pub fn sampleSnapshot(weather_snapshot: Snapshot, wx: f64, wy: f64) Sample {
+		const cell_x: i32 = @intFromFloat(@floor(wx/@as(f64, @floatFromInt(cell_size))));
+		const cell_y: i32 = @intFromFloat(@floor(wy/@as(f64, @floatFromInt(cell_size))));
+		const rel_x = cell_x - weather_snapshot.origin_cell[0];
+		const rel_y = cell_y - weather_snapshot.origin_cell[1];
+		if (rel_x < 0 or rel_x >= dimension or rel_y < 0 or rel_y >= dimension) return .{};
+		const cell = weather_snapshot.cells[@as(usize, @intCast(rel_y))*dimension + @as(usize, @intCast(rel_x))];
+		return .{
+			.cloud_cover = @as(f32, @floatFromInt(cell.cloud_cover))/255.0,
+			.precipitation = @as(f32, @floatFromInt(cell.precipitation))/255.0,
+			.dust = @as(f32, @floatFromInt(cell.dust))/255.0,
+			.kind = cell.kind,
+		};
+	}
+};
+
 pub const World = struct { // MARK: World
 	conn: *Connection,
 	manager: *ConnectionManager,
@@ -288,6 +360,7 @@ pub const World = struct { // MARK: World
 	/// same double-smoothing "server eases, client also eases toward whatever it last heard" pattern
 	/// already used for playerBiome's fog color, so sparse network updates never look like a step either.
 	rainIntensityTarget: Atomic(f32) = .init(0),
+	weatherGrid: WeatherGrid = .{},
 
 	shouldRestart: std.atomic.Value(bool) = .init(false),
 	shouldReload: bool = false,
@@ -432,6 +505,12 @@ pub const World = struct { // MARK: World
 		/// Rendered rain intensity ([0, 1]), eased every frame toward World.rainIntensityTarget (see that
 		/// field's doc comment) — read by renderer/clouds.zig and renderer/rain.zig.
 		rainIntensity: f32 = 0,
+		/// Smoothed local rain/snow/dust visibility loss, [0, 1]. Kept separate from precipitation
+		/// so weather packets can update at a low rate without fog or daylight stepping.
+		weatherVisibility: f32 = 0,
+		/// Horizontal weather-fog scale in blocks. Rain deliberately reaches farther than snow; both values
+		/// are eased so crossing a weather-cell boundary cannot make the visibility wall jump.
+		weatherFogRange: f32 = 96,
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
 		/// How far (0-1) between `dayTime`'s current tick and the next, in real time — `dayTime` itself
@@ -604,6 +683,58 @@ pub const World = struct { // MARK: World
 			self.fog.density = self.biomeFog.density;
 			self.fog.fogLower = self.biomeFog.fogLower;
 			self.fog.fogHigher = self.biomeFog.fogHigher;
+
+			// Sandstorm visibility is local to the same server weather cell that emits dust particles.
+			// It must not tint/fog a player standing in a neighbouring clear biome.
+			const playerPos = Player.getPosBlocking();
+			const localWeather = world.?.weatherGrid.sampleAt(playerPos[0], playerPos[1]);
+			const dust = localWeather.dust;
+			const precipitationVisibility = if (localWeather.kind == 1 or localWeather.kind == 2) localWeather.precipitation else 0.0;
+			// WeatherMap commonly produces gentle rain in the 0.05-0.15 range. A linear response made
+			// that visually indistinguishable from clear weather, so use a square-root perceptual curve:
+			// light rain gains a readable haze while full storms still remain substantially stronger.
+			const visibilityTarget = @sqrt(@max(precipitationVisibility, dust));
+			self.weatherVisibility += (visibilityTarget - self.weatherVisibility)*t;
+			const weatherFogRangeTarget: f32 = switch (localWeather.kind) {
+				1 => 96, // rain: preserve more mid-distance visibility than snow.
+				2 => 64, // snow: retain the denser, closer white-out requested by the player.
+				3 => 56, // dust: sandstorms remain the most locally obscuring weather.
+				else => 96,
+			};
+			self.weatherFogRange += (weatherFogRangeTarget - self.weatherFogRange)*t;
+			if (dust > 0.01) {
+				const dustColor = Vec3f{0.72, 0.55, 0.32};
+				self.fog.fogColor += (dustColor - self.fog.fogColor)*@as(Vec3f, @splat(dust*0.65));
+				self.fog.skyColor += (dustColor - self.fog.skyColor)*@as(Vec3f, @splat(dust*0.35));
+				self.fog.density *= std.math.lerp(1.0, 6.0, dust);
+			}
+			if (localWeather.precipitation > 0.01 and (localWeather.kind == 1 or localWeather.kind == 2)) {
+				const precipitationFog = if (localWeather.kind == 2) Vec3f{0.88, 0.92, 0.97} else Vec3f{0.58, 0.65, 0.74};
+				self.fog.fogColor += (precipitationFog - self.fog.fogColor)*@as(Vec3f, @splat(localWeather.precipitation*0.35));
+				self.fog.skyColor += (precipitationFog - self.fog.skyColor)*@as(Vec3f, @splat(localWeather.precipitation*0.18));
+				self.fog.density *= std.math.lerp(1.0, 2.2, localWeather.precipitation);
+			}
+			if (self.weatherVisibility > 0.01) {
+				// Weather needs a dedicated atmospheric colour rather than a lightly tinted version of the
+				// clear biome sky. Otherwise distant terrain remains a readable silhouette and fogged cloud
+				// faces inherit the bright daytime blue/white sky. Snow retains its pale haze; rain becomes
+				// the muted blue-grey of a dense overcast.
+				const weatherHaze = switch (localWeather.kind) {
+					1 => Vec3f{0.36, 0.43, 0.52},
+					2 => Vec3f{0.78, 0.84, 0.91},
+					3 => Vec3f{0.58, 0.45, 0.28},
+					else => self.fog.fogColor,
+				};
+				const hazeStrength = std.math.clamp(self.weatherVisibility * 0.85, 0.0, 0.75);
+				self.fog.fogColor += (weatherHaze - self.fog.fogColor)*@as(Vec3f, @splat(hazeStrength));
+				self.fog.skyColor += (weatherHaze - self.fog.skyColor)*@as(Vec3f, @splat(hazeStrength * 0.55));
+				// Strong weather hides distant terrain through ordinary depth fog, not an abrupt circular
+				// wall. Fog density rises while its upper distance contracts, both eased above.
+				self.fog.density *= std.math.lerp(1.0, 30.0, self.weatherVisibility);
+				// Dense precipitation removes most direct daylight even at noon. Renderer shadow settings may
+				// boost ambient slightly afterward, so this target deliberately leaves a stronger storm dim.
+				self.ambientLight *= std.math.lerp(1.0, 0.42, self.weatherVisibility);
+			}
 		}
 	};
 };

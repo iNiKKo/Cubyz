@@ -12,6 +12,8 @@ const settings = main.settings;
 const renderer = main.renderer;
 const utils = main.utils;
 const vec = main.vec;
+const Vec2f = vec.Vec2f;
+const Vec2i = vec.Vec2i;
 const Vec3d = vec.Vec3d;
 const Vec3f = vec.Vec3f;
 const Vec3i = vec.Vec3i;
@@ -608,6 +610,7 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 		particles = 5,
 		clear = 6,
 		rainIntensity = 7,
+		weatherGrid = 8,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -675,6 +678,22 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 				const intensity = try reader.readFloat(f32);
 				world.rainIntensityTarget.store(intensity, .monotonic);
 			},
+			.weatherGrid => {
+				const world = conn.manager.world.?;
+				const origin = try reader.readVec(Vec2i);
+				const wind = try reader.readVec(Vec2f);
+				const timeMillis = try reader.readInt(i64);
+				var cells: [game.WeatherGrid.cell_count]game.WeatherGrid.Cell = undefined;
+				for (&cells) |*cell| {
+					cell.* = .{
+						.cloud_cover = try reader.readInt(u8),
+						.precipitation = try reader.readInt(u8),
+						.dust = try reader.readInt(u8),
+						.kind = try reader.readInt(u8),
+					};
+				}
+				world.weatherGrid.update(origin, wind, timeMillis, cells);
+			},
 			.particles => {
 				const particleIdLen = try reader.readVarInt(u16);
 				const particleId = try reader.readSlice(particleIdLen);
@@ -711,7 +730,7 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		switch (try reader.readEnum(UpdateType)) {
-			.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity => return error.InvalidSide,
+			.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity, .weatherGrid => return error.InvalidSide,
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
 				const pos: ?Vec3i = switch (typ) {
@@ -774,6 +793,23 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 		writer.writeEnum(UpdateType, .rainIntensity);
 		writer.writeFloat(f32, intensity);
 
+		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendWeatherGrid(conn: *Connection, origin: Vec2i, wind: Vec2f, timeMillis: i64, cells: [game.WeatherGrid.cell_count]game.WeatherGrid.Cell) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + 8 + 8 + 8 + game.WeatherGrid.cell_count*4);
+		defer writer.deinit();
+
+		writer.writeEnum(UpdateType, .weatherGrid);
+		writer.writeVec(Vec2i, origin);
+		writer.writeVec(Vec2f, wind);
+		writer.writeInt(i64, timeMillis);
+		for (cells) |cell| {
+			writer.writeInt(u8, cell.cloud_cover);
+			writer.writeInt(u8, cell.precipitation);
+			writer.writeInt(u8, cell.dust);
+			writer.writeInt(u8, cell.kind);
+		}
 		conn.send(.lossy, id, writer.data.items);
 	}
 

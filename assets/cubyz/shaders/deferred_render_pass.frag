@@ -14,12 +14,18 @@ layout(binding = 4) uniform sampler2D depthTexture;
 layout(binding = 5) uniform sampler2D bloomColor;
 
 layout(binding = 10) uniform sampler2D godRayColor;
+// Premultiplied translucent cloud RGB + alpha, rendered separately from opaque terrain depth.
+layout(binding = 11) uniform sampler2D cloudColor;
 
 layout(location = 1) uniform vec2 tanXY;
 layout(location = 2) uniform float zNear;
 layout(location = 3) uniform float zFar;
 uniform vec3 godRayTint;
 uniform float waterTime;
+// 1 = legacy pale/desaturated LOD haze; 0 = preserve the supplied fog hue for weather.
+uniform float fogWhitening;
+// 0 = ordinary LOD fog; weather increases both near-range haze and distant falloff.
+uniform float weatherFogStrength;
 
 struct Fog {
 	vec3 color;
@@ -64,8 +70,10 @@ float calculateFogDistance(float dist, float densityAdjustment, float playerWorl
 	// to hide chunks actually disappearing/popping in at the render-distance boundary. Tuned so the ramp
 	// starts earlier (0.6, giving more distance to fade smoothly rather than a sudden wall) and reaches
 	// ~4% visibility exactly at the edge (totalFog = (1-0.6)*8.0 = 3.2, fogFactor = exp(-3.2) ≈ 0.041).
-	float fogStartFraction = 0.6;
-	float fogEdgeMultiplier = 8.0;
+	// Storm visibility needs to close before distant terrain can remain a readable mountain silhouette.
+	// The clear-weather LOD fade is unchanged; only local weather moves the start nearer and steepens it.
+	float fogStartFraction = mix(0.6, 0.22, weatherFogStrength);
+	float fogEdgeMultiplier = mix(8.0, 14.0, weatherFogStrength);
 	float fogStart = fogStartFraction / max(1e-5, fogDensity);
 	float distFog = max(0.0, effectiveDist - fogStart) * fogDensity * fogEdgeMultiplier;
 
@@ -73,7 +81,10 @@ float calculateFogDistance(float dist, float densityAdjustment, float playerWorl
 	float heightFog = densityIntegral(effectiveDist, playerWorldZ - playerPositionInteger.z, zScale * effectiveDist, fogLower - playerPositionInteger.z, fogHigher - playerPositionInteger.z) * fogDensity;
 
 	float totalFog = max(distFog, heightFog);
-	return -totalFog;
+	// Ordinary LOD fog keeps its familiar exponential curve. Rain/snow/dust progressively move toward
+	// an exponential-squared tail: near terrain stays readable, but distant ridges cannot remain as a
+	// sharp silhouette through a strong storm.
+	return -mix(totalFog, totalFog*totalFog, weatherFogStrength);
 }
 
 vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
@@ -98,7 +109,7 @@ vec3 applyFrontfaceFog(float fogDistance, vec3 fogColor, vec3 inColor) {
 
 	// Block/underwater fog (fogLower > 1e9) uses pure fogColor so deep water stays rich ocean blue
 	// without desaturating into monochrome gray.
-	vec3 finalFogColor = (fog.fogLower > 1e9) ? fogColor : mix(fogColor, desaturatedFogColor, fogOpacity*fogOpacity*0.7);
+	vec3 finalFogColor = (fog.fogLower > 1e9) ? fogColor : mix(fogColor, desaturatedFogColor, fogOpacity*fogOpacity*fogWhitening);
 	inColor *= fogFactor;
 	inColor += finalFogColor;
 	inColor -= finalFogColor*fogFactor;
@@ -172,6 +183,20 @@ void main() {
 				fragColor.rgb = mix(fragColor.rgb, walledColor, horizonFactor);
 			}
 		}
+	}
+	vec4 clouds = texture(cloudColor, sampleCoords);
+	fragColor.rgb = clouds.rgb + fragColor.rgb*(1.0 - clouds.a);
+	// Storms need a true overhead haze as well as ground-distance fog. Cloud geometry intentionally stays
+	// translucent, so exposing every voxel/planar layer through a clear sky is distracting and physically
+	// backwards: looking upward through precipitation should converge into the same overcast atmosphere.
+	// Apply only where the opaque depth is open sky; terrain keeps its normal depth-derived weather fog.
+	if (rawDepth >= 0.999999 && weatherFogStrength > 0.001) {
+		vec3 skyDirection = normalize(direction);
+		float upwardness = smoothstep(-0.15, 0.55, skyDirection.z);
+		// Deliberately dense: this is the storm's opaque-looking overcast ceiling, not gentle fair-weather
+		// distance haze. Even drizzle should conceal most of the layered cloud geometry overhead.
+		float skyHaze = (1.0 - exp(-8.0*weatherFogStrength))*mix(0.65, 1.0, upwardness);
+		fragColor.rgb = mix(fragColor.rgb, fog.color, skyHaze);
 	}
 	float maxColor = max(1.0, max(fragColor.r, max(fragColor.g, fragColor.b)));
 	fragColor.rgb = fragColor.rgb/maxColor;

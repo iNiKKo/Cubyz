@@ -46,6 +46,9 @@ var deferredUniforms: struct {
 	@"fog.density": c_int,
 	@"fog.fogLower": c_int,
 	@"fog.fogHigher": c_int,
+	fogWhitening: c_int,
+	weatherFogStrength: c_int,
+	cloudColor: c_int,
 	tanXY: c_int,
 	zNear: c_int,
 	zFar: c_int,
@@ -94,6 +97,8 @@ pub fn init() void {
 	);
 	worldFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
 	worldFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
+	cloudFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
+	cloudFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGBA16F);
 	MSAA.init();
 	FXAA.init();
 	TAA.init();
@@ -120,6 +125,7 @@ pub fn deinit() void {
 	deferredRenderPassPipeline.deinit();
 	fakeReflectionPipeline.deinit();
 	worldFrameBuffer.deinit();
+	cloudFrameBuffer.deinit();
 	MSAA.deinit();
 	FXAA.deinit();
 	TAA.deinit();
@@ -160,6 +166,9 @@ fn initReflectionCubeMap() void {
 }
 
 var worldFrameBuffer: graphics.FrameBuffer = undefined;
+/// Premultiplied translucent cloud colour/alpha with a private per-frame depth copy. It receives opaque
+/// terrain depth before clouds render, then may add cloud depth without changing the terrain fog depth.
+var cloudFrameBuffer: graphics.FrameBuffer = undefined;
 
 /// Standard TAA sub-pixel jitter sequence (Halton(2,3), 8 samples) covering the pixel footprint before
 /// repeating. Applied to a copy of game.projectionMatrix uploaded to frame_uniforms — see
@@ -206,6 +215,7 @@ pub fn updateViewport(width: u31, height: u31) void {
 	lastHeight = @trunc(@as(f32, @floatFromInt(height))*main.settings.resolutionScale);
 	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
 	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
+	cloudFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
 	worldFrameBuffer.unbind();
 	fsr.updateSize(lastWidth, lastHeight, width, height);
 	CascadedShadowMap.updateMapSize(main.settings.resolutionScale);
@@ -427,10 +437,21 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
 	const isSubmerged = blocks.meshes.hasFog(playerBlock);
 
+	// Clear every frame (including underwater/high-altitude frames) so a previous frame's cloud layer can
+	// never be composited after clouds are intentionally skipped. Copy opaque terrain depth into the cloud
+	// target first: clouds can depth-test against terrain and against each other, but terrain fog continues
+	// reading the untouched depth in worldFrameBuffer.
+	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
+	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, cloudFrameBuffer.frameBuffer);
+	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+	cloudFrameBuffer.bind();
+	c.glClearColor(0, 0, 0, 0);
+	c.glClear(c.GL_COLOR_BUFFER_BIT);
 	if (!isSubmerged and playerPos[2] <= 2000.0) {
 		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 	}
+	worldFrameBuffer.bind();
 	if (!isSubmerged) {
 		rain.draw();
 	}
@@ -448,7 +469,9 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	} else {
 		Bloom.bindReplacementImage();
 	}
-	if (settings.godRays) {
+	// Direct crepuscular rays cannot remain visible beneath a local storm ceiling. Bind the replacement
+	// texture while weather is active so the final pass has a stable input without rendering the effect.
+	if (settings.godRays and game.world.?.dayTime.weatherVisibility < 0.02) {
 		gpu_performance_measuring.startQuery(.god_rays);
 		GodRays.render(lastWidth, lastHeight, game.camera.viewMatrix);
 		gpu_performance_measuring.stopQuery();
@@ -459,6 +482,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	c.glViewport(0, 0, lastWidth, lastHeight);
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
+	cloudFrameBuffer.bindTexture(c.GL_TEXTURE11);
 	worldFrameBuffer.unbind();
 	deferredRenderPassPipeline.bind(null);
 	if (clouds.isPlayerInsideCloud(playerPos)) {
@@ -467,6 +491,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform1f(deferredUniforms.@"fog.density", 0.08);
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", -1e5);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", 1e5);
+		c.glUniform1f(deferredUniforms.fogWhitening, 0.15);
+		c.glUniform1f(deferredUniforms.weatherFogStrength, 0.0);
 	} else if (!blocks.meshes.hasFog(playerBlock)) {
 		const skyColorVal = game.world.?.dayTime.fog.skyColor;
 		const baseFogColor = game.world.?.dayTime.fog.fogColor;
@@ -493,17 +519,34 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 				fogDensity = 1.0 / totalMaxLodDist;
 			}
 		}
+		// Ground-level rendering deliberately derives its base fog from LOD range above. Weather haze
+		// needs an independent density floor, not a multiplier of that base: otherwise its range changes
+		// with the player's LOD/render-distance setting. During weather, use DayTime's locally tinted haze
+		// instead of sky blue: this prevents clouds from bleaching white and makes the horizon wall merge
+		// with fog rather than tracing distant mountain silhouettes.
+		const weatherVisibility = game.world.?.dayTime.weatherVisibility;
+		if (weatherVisibility > 0.001) {
+			const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
+			fogColor += (baseFogColor - fogColor) * @as(Vec3f, @splat(weatherFogTint));
+		}
+		fogDensity = @max(fogDensity, weatherVisibility / game.world.?.dayTime.weatherFogRange);
 
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&fogColor));
 		c.glUniform1f(deferredUniforms.@"fog.density", fogDensity);
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", game.world.?.dayTime.fog.fogHigher);
+		// The clear-weather LOD horizon benefits from a pale atmospheric fade. Weather haze must retain
+		// its blue-grey tint instead; whitening it is what made rainy cloud undersides read pure white.
+		c.glUniform1f(deferredUniforms.fogWhitening, if (weatherVisibility > 0.001) 0.0 else 0.7);
+		c.glUniform1f(deferredUniforms.weatherFogStrength, weatherVisibility);
 	} else {
 		const fogColor = blocks.meshes.fogColor(playerBlock);
 		c.glUniform3f(deferredUniforms.@"fog.color", @as(f32, @floatFromInt(fogColor >> 16 & 255))/255.0, @as(f32, @floatFromInt(fogColor >> 8 & 255))/255.0, @as(f32, @floatFromInt(fogColor >> 0 & 255))/255.0);
 		c.glUniform1f(deferredUniforms.@"fog.density", blocks.meshes.fogDensity(playerBlock));
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", 1e10);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", 1e10);
+		c.glUniform1f(deferredUniforms.fogWhitening, 0.0);
+		c.glUniform1f(deferredUniforms.weatherFogStrength, 0.0);
 	}
 	c.glUniformMatrix4fv(deferredUniforms.invViewMatrix, 1, c.GL_TRUE, @ptrCast(&game.camera.viewMatrix.transpose()));
 	c.glUniform1f(deferredUniforms.zNear, zNear);
@@ -1726,6 +1769,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		lightSpaceMatrix: c_int,
 		waterTime: c_int,
 		foliageSway: c_int,
+		weatherWind: c_int,
 	} = undefined;
 
 	/// Light-space VP matrices in the Zig row-major format — used by the cascade frustum computation.
@@ -1880,6 +1924,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 		c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
 		c.glUniform1i(shadowPipelineUniforms.foliageSway, @intFromBool(settings.foliageSway));
+		const weatherWind = game.world.?.weatherGrid.snapshot().wind;
+		c.glUniform2fv(shadowPipelineUniforms.weatherWind, 1, @ptrCast(&weatherWind));
 		c.glActiveTexture(c.GL_TEXTURE0);
 		blocks.meshes.blockTextureArray.bind();
 
@@ -1954,6 +2000,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 					c.glUniform3fv(37, 1, @ptrCast(&lightDir));
 					c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
 					c.glUniform1i(shadowPipelineUniforms.foliageSway, @intFromBool(settings.foliageSway));
+					c.glUniform2fv(shadowPipelineUniforms.weatherWind, 1, @ptrCast(&weatherWind));
 					c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&baseLightSpaceMatrices[i].toGl()));
 					chunk_meshing.vao.bind();
 					c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);

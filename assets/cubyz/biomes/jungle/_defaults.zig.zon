@@ -1,4 +1,5 @@
 .{
+	.weatherProfile = .humid,
 	.fogDensity = 2,
 	.fogColor = 0xb0e9d2,
 	.validPlayerSpawn = true,

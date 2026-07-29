@@ -112,6 +112,18 @@ pub fn render() void {
 			draw.print("Biome Properties: {s}", .{tags.items}, 0, y, 8);
 			y += 8;
 		}
+		{
+			const weatherGrid = &main.game.world.?.weatherGrid;
+			const snapshot = weatherGrid.snapshot();
+			const pos = player.getPosBlocking();
+			const weather = main.game.WeatherGrid.sampleSnapshot(snapshot, pos[0], pos[1]);
+			draw.print("Weather: kind={} precip={d:.2} cloud={d:.2} dust={d:.2} visibility={d:.2}", .{weather.kind, weather.precipitation, weather.cloud_cover, weather.dust, main.game.world.?.dayTime.weatherVisibility}, 0, y, 8);
+			y += 8;
+			draw.print("Wind: ({d:.2}, {d:.2}) snapshot={} grid origin=({}, {})", .{snapshot.wind[0], snapshot.wind[1], snapshot.revision, snapshot.origin_cell[0], snapshot.origin_cell[1]}, 0, y, 8);
+			y += 8;
+			draw.print("Storm mesh indices: {}", .{main.renderer.clouds.stormIndexCount}, 0, y, 8);
+			y += 8;
+		}
 		draw.print("Opaque faces: {}, Transparent faces: {}", .{main.renderer.chunk_meshing.quadsDrawn, main.renderer.chunk_meshing.transparentQuadsDrawn}, 0, y, 8);
 		y += 8;
 		draw.print("Particle count: {}/{}", .{main.particles.ParticleSystem.getParticleCount(), main.particles.ParticleSystem.maxCapacity}, 0, y, 8);

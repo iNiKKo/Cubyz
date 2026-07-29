@@ -9,6 +9,7 @@ const ConnectionManager = network.ConnectionManager;
 const InventoryId = main.items.Inventory.InventoryId;
 const utils = main.utils;
 const vec = main.vec;
+const Vec2i = vec.Vec2i;
 const Vec3d = vec.Vec3d;
 const Vec3f = vec.Vec3f;
 const Vec3i = vec.Vec3i;
@@ -129,6 +130,7 @@ pub const User = struct { // MARK: User
 
 	lastSentBiomeId: u32 = 0xffffffff,
 	lastSentRainIntensity: f32 = -1,
+	lastSentWeatherGridMillis: i64 = 0,
 
 	newKeyString: ?[]const u8 = null,
 	key: network.authentication.PublicKey = undefined,
@@ -722,16 +724,47 @@ fn update() void { // MARK: update()
 			main.network.protocols.genericUpdate.sendBiome(user.conn, biomeId);
 		}
 
-		const biomeAndSeed = world.?.getBiomeAndSeed(pos[0], pos[1], pos[2]);
+		const biome = world.?.getBiome(pos[0], pos[1], pos[2]);
 		const nowMillis = main.timestamp().toMilliseconds();
-		const updateTimeSeconds: f32 = @as(f32, @floatFromInt(updateTime.toNanoseconds()))/1_000_000_000.0;
-		const rainIntensity = WeatherMap.tick(biomeAndSeed.seed, biomeAndSeed.biome, nowMillis, updateTimeSeconds);
-		// Only resend once the value has moved meaningfully, same "don't spam a packet every tick" idea
-		// as the biome-change check above — the eased value in WeatherMap.tick changes every tick, but
-		// only crosses this threshold occasionally.
+		const weather = WeatherMap.sample(world.?.settings.seed, biome, pos[0], pos[1], nowMillis);
+		// Transitional bridge until the weather-field snapshot protocol is introduced. Snow and dust are
+		// deliberately not sent through the legacy rain-only channel, so a cold/desert biome cannot render
+		// an incorrect rain effect while their dedicated client renderers are still pending.
+		const rainIntensity = if (weather.kind == .rain) weather.precipitation else 0.0;
 		if (@abs(rainIntensity - user.lastSentRainIntensity) >= 0.02) {
 			user.lastSentRainIntensity = rainIntensity;
 			main.network.protocols.genericUpdate.sendRainIntensity(user.conn, rainIntensity);
+		}
+
+		// 5 Hz is smooth enough for moving cloud geometry while retaining a bounded server-side
+		// climate-sampling cost (25 cells per snapshot).
+		if (nowMillis - user.lastSentWeatherGridMillis >= 200) {
+			user.lastSentWeatherGridMillis = nowMillis;
+			const centerCell = Vec2i{
+				@divFloor(pos[0], main.game.WeatherGrid.cell_size),
+				@divFloor(pos[1], main.game.WeatherGrid.cell_size),
+			};
+			const half: i32 = @intCast(main.game.WeatherGrid.dimension/2);
+			const originCell = centerCell - @as(Vec2i, @splat(half));
+			var cells: [main.game.WeatherGrid.cell_count]main.game.WeatherGrid.Cell = undefined;
+			var gridWind = weather.wind;
+			for (0..main.game.WeatherGrid.dimension) |gy| {
+				for (0..main.game.WeatherGrid.dimension) |gx| {
+					const cellPos = originCell + Vec2i{@intCast(gx), @intCast(gy)};
+					const sampleX = cellPos[0]*main.game.WeatherGrid.cell_size + @divTrunc(main.game.WeatherGrid.cell_size, 2);
+					const sampleY = cellPos[1]*main.game.WeatherGrid.cell_size + @divTrunc(main.game.WeatherGrid.cell_size, 2);
+					const cellBiome = world.?.getBiomeAndSeed(sampleX, sampleY, pos[2]).biome;
+					const cellWeather = WeatherMap.sample(world.?.settings.seed, cellBiome, sampleX, sampleY, nowMillis);
+					gridWind = cellWeather.wind;
+					cells[gy*main.game.WeatherGrid.dimension + gx] = .{
+						.cloud_cover = @intFromFloat(std.math.clamp(cellWeather.cloudCover, 0.0, 1.0)*255.0),
+						.precipitation = @intFromFloat(std.math.clamp(cellWeather.precipitation, 0.0, 1.0)*255.0),
+						.dust = @intFromFloat(std.math.clamp(cellWeather.dust, 0.0, 1.0)*255.0),
+						.kind = @intFromEnum(cellWeather.kind),
+					};
+				}
+			}
+			main.network.protocols.genericUpdate.sendWeatherGrid(user.conn, originCell, gridWind, nowMillis, cells);
 		}
 	}
 

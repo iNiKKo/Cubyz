@@ -1,4 +1,5 @@
 .{
+	.weatherProfile = .desert,
 	.properties = .{
 		.hot,
 		.dry,

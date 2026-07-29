@@ -409,6 +409,16 @@ const ColorBlendAttachmentState = struct { // MARK: ColorBlendAttachmentState
 		.dstAlphaBlendFactor = .oneMinusSrcAlpha,
 		.alphaBlendOp = .add,
 	};
+	/// Standard premultiplied-alpha composition. Required by off-screen translucent layers so their
+	/// accumulated RGB and alpha can be composited later without applying alpha a second time.
+	pub const premultipliedAlphaBlending: ColorBlendAttachmentState = .{
+		.srcColorBlendFactor = .one,
+		.dstColorBlendFactor = .oneMinusSrcAlpha,
+		.colorBlendOp = .add,
+		.srcAlphaBlendFactor = .one,
+		.dstAlphaBlendFactor = .oneMinusSrcAlpha,
+		.alphaBlendOp = .add,
+	};
 	pub const noBlending: ColorBlendAttachmentState = .{
 		.enabled = false,
 		.srcColorBlendFactor = .zero,

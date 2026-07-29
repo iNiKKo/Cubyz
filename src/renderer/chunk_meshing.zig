@@ -37,6 +37,7 @@ pub var startTimestamp: std.Io.Timestamp = undefined;
 const UniformStruct = struct {
 	screenSize: c_int,
 	ambientLight: c_int,
+	weatherShadowFade: c_int,
 	contrast: c_int,
 	@"fog.color": c_int,
 	@"fog.density": c_int,
@@ -61,6 +62,7 @@ const UniformStruct = struct {
 	reflectionsEnabled: c_int,
 	waterReflectionDistance: c_int,
 	foliageSway: c_int,
+	weatherWind: c_int,
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
@@ -220,6 +222,10 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.lodDistance, main.settings.@"lod0.5Distance");
 
 	c.glUniform3f(locations.ambientLight, ambient[0], ambient[1], ambient[2]);
+	const weatherVisibility: f32 = if (main.game.world) |world| world.dayTime.weatherVisibility else 0.0;
+	// Storms diffuse the sun through a thick cloud ceiling, so sharply defined CSM/cloud shadows should
+	// progressively flatten rather than remain black stripes on otherwise dim terrain.
+	c.glUniform1f(locations.weatherShadowFade, std.math.clamp(weatherVisibility*1.1, 0.0, 0.9));
 
 	c.glUniform1f(locations.zNear, renderer.zNear);
 	c.glUniform1f(locations.zFar, renderer.zFar);
@@ -249,6 +255,8 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 	c.glUniform1f(locations.waterTime, waterTime);
 	c.glUniform1i(locations.foliageSway, @intFromBool(main.settings.foliageSway));
+	const weatherWind = game.world.?.weatherGrid.snapshot().wind;
+	c.glUniform2fv(locations.weatherWind, 1, @ptrCast(&weatherWind));
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
 	if (main.settings.shadows) {

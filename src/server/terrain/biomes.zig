@@ -168,6 +168,19 @@ fn u32ToVec3(color: u32) Vec3f {
 
 /// A climate region with special ground, plants and structures.
 pub const Biome = struct { // MARK: Biome
+	/// Weather behaviour is intentionally separate from terrain-generation properties. In particular,
+	/// hot+dry describes both a sandy desert and a dry savannah, but only the former should generate
+	/// sandstorms or reject all precipitation.
+	pub const WeatherProfile = enum {
+		automatic,
+		humid,
+		temperate,
+		snow,
+		frost,
+		arid,
+		desert,
+	};
+
 	pub const GenerationProperties = packed struct(u15) {
 		// pairs of opposite properties. In-between values are allowed.
 		hot: bool = false,
@@ -213,6 +226,7 @@ pub const Biome = struct { // MARK: Biome
 	};
 
 	properties: GenerationProperties,
+	weatherProfile: WeatherProfile,
 	isCave: bool,
 	radius: f32,
 	radiusVariation: f32,
@@ -265,6 +279,7 @@ pub const Biome = struct { // MARK: Biome
 			.id = main.worldArena.dupe(u8, id),
 			.paletteId = paletteId,
 			.properties = GenerationProperties.fromZon(zon.getChild("properties"), true),
+			.weatherProfile = std.meta.stringToEnum(WeatherProfile, zon.get([]const u8, "weatherProfile") orelse "automatic") orelse .automatic,
 			.isCave = zon.get(bool, "isCave") orelse false,
 			.radius = (maxRadius + minRadius)/2,
 			.radiusVariation = (maxRadius - minRadius)/2,

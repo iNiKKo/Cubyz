@@ -139,25 +139,6 @@ fn findGroundZ(worldX: f64, worldY: f64, anchorZ: f64) f64 {
 	return anchorZ - 4.0;
 }
 
-const ValueNoise = main.server.terrain.noise.ValueNoise;
-const rainNoiseScale: f32 = 64.0;
-const rainWorldSeed: u64 = 0x5a4b3c2d1e0f9887;
-
-/// Evaluates fixed world-position rain noise. Uses a sharp edge transition (edgeWidth = 0.02) to produce
-/// a distinct, visible vertical rain curtain/wall where rain starts and stops in the world.
-fn getSpatialRainIntensity(worldX: f64, worldY: f64, globalRainIntensity: f32) f32 {
-	if (globalRainIntensity <= 0.01) return 0.0;
-	const nx: f32 = @floatCast(worldX / rainNoiseScale);
-	const ny: f32 = @floatCast(worldY / rainNoiseScale);
-	const n = ValueNoise.samplePoint2D(nx, ny, rainWorldSeed);
-	
-	const threshold: f32 = 0.46;
-	const edgeWidth: f32 = 0.02;
-	
-	const factor = std.math.clamp((n - (threshold - edgeWidth)) / (2.0 * edgeWidth), 0.0, 1.0);
-	return globalRainIntensity * factor;
-}
-
 /// Rebuilds the raindrop-quad mesh every frame with per-voxel light sampling.
 pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 	const cloudBaseHeight: f64 = 288.0;
@@ -166,20 +147,9 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 		indexCount = 0;
 		return;
 	}
-	const globalRainIntensity = game.world.?.dayTime.rainIntensity;
-	if (globalRainIntensity <= 0.01) {
-		indexCount = 0;
-		return;
-	}
-	// Desert biomes (dry & hot) never get rain
-	const playerBiome = game.world.?.playerBiome.load(.monotonic);
-	if (playerBiome.properties.dry and playerBiome.properties.hot) {
-		indexCount = 0;
-		return;
-	}
-
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+	const weatherSnapshot = game.world.?.weatherGrid.snapshot();
 
 	const anchorZ: f64 = @floor(game.Player.getPosBlocking()[2]/verticalAnchorSnap)*verticalAnchorSnap;
 
@@ -209,7 +179,13 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const worldX: f64 = (@as(f64, @floatFromInt(worldCellX)) + 0.5)*cellSize + jitterX;
 			const worldY: f64 = (@as(f64, @floatFromInt(worldCellY)) + 0.5)*cellSize + jitterY;
 
-			const cellRainIntensity = getSpatialRainIntensity(worldX, worldY, globalRainIntensity);
+			const weather = game.world.?.weatherGrid.sampleAt(worldX, worldY);
+			// `1` rain, `2` snow, `3` dust. All share the cheap quad pipeline but use distinct
+			// strength, colour, and geometry below rather than being represented as blue rain.
+			if (weather.kind != 1 and weather.kind != 2 and weather.kind != 3) continue;
+			const isSnow = weather.kind == 2;
+			const isDust = weather.kind == 3;
+			const cellRainIntensity = if (isDust) weather.dust else weather.precipitation;
 			if (cellRainIntensity <= 0.01) continue;
 			const activeDensity = cellRainIntensity * maxActiveDensity;
 			if (hashCell(worldCellX, worldCellY) > activeDensity) continue;
@@ -225,12 +201,15 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const groundZ: f64 = findGroundZ(worldX, worldY, anchorZ);
 			if (topZ <= groundZ) continue;
 			const range: f32 = @max(@as(f32, @floatCast(topZ - groundZ)), 1.0);
-			const loopFrac = @mod(elapsedSeconds*fallSpeed/range + phase, 1.0);
+			const cellFallSpeed = if (isSnow) 7.0 else if (isDust) 4.0 else fallSpeed;
+			const loopFrac = @mod(elapsedSeconds*cellFallSpeed/range + phase, 1.0);
 			const dropZ: f64 = topZ - @as(f64, loopFrac*range);
+			const fallSeconds = @as(f32, @floatCast(topZ - dropZ))/cellFallSpeed;
+			const windScale: f32 = if (isDust) 1.5 else if (isSnow) 0.35 else 0.15;
 
 			const center = Vec3f{
-				@floatCast(worldX - playerPos[0]),
-				@floatCast(worldY - playerPos[1]),
+				@floatCast(worldX + @as(f64, weatherSnapshot.wind[0]*fallSeconds*windScale) - playerPos[0]),
+				@floatCast(worldY + @as(f64, weatherSnapshot.wind[1]*fallSeconds*windScale) - playerPos[1]),
 				@floatCast(dropZ - playerPos[2]),
 			};
 
@@ -242,11 +221,14 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const sunLight: Vec3f = ambientLight * @as(Vec3f, @floatFromInt(Vec3i{light[0], light[1], light[2]})) / @as(Vec3f, @splat(255.0));
 			const blockLight: Vec3f = @as(Vec3f, @floatFromInt(Vec3i{light[3], light[4], light[5]})) / @as(Vec3f, @splat(255.0));
 			const lightFactor = @min(@as(Vec3f, @splat(1.0)), @sqrt(sunLight*sunLight + blockLight*blockLight) + @as(Vec3f, @splat(0.04)));
-			const vertexColor: Vec3f = dropColor * lightFactor;
+			const precipitationColor: Vec3f = if (isSnow) .{0.92, 0.95, 1.0} else if (isDust) .{0.72, 0.55, 0.32} else dropColor;
+			const vertexColor: Vec3f = precipitationColor * lightFactor;
 			const colorArray: [3]f32 = .{vertexColor[0], vertexColor[1], vertexColor[2]};
 
-			const halfWidth: Vec3f = @as(Vec3f, @splat(dropWidth*0.5))*camRight;
-			const halfHeight: Vec3f = @as(Vec3f, @splat(dropHeight*0.5))*up;
+			const cellWidth: f32 = if (isSnow) 0.18 else if (isDust) 0.32 else dropWidth;
+			const cellHeight: f32 = if (isSnow) 0.18 else if (isDust) 0.12 else dropHeight;
+			const halfWidth: Vec3f = @as(Vec3f, @splat(cellWidth*0.5))*camRight;
+			const halfHeight: Vec3f = @as(Vec3f, @splat(cellHeight*0.5))*up;
 
 			const base: u32 = @intCast(vertices.items.len);
 			vertices.append(.{.pos = center - halfWidth - halfHeight, .color = colorArray});
@@ -259,6 +241,54 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			indices.append(base + 0);
 			indices.append(base + 2);
 			indices.append(base + 3);
+		}
+	}
+
+	// A sparse distant tier makes a rain/snow cell readable from outside its biome. It deliberately uses
+	// only a few long-lived streaks per 512-block weather cell; the dense, ground-aware grid above remains
+	// the close-range effect and prevents a distant weather cell from becoming a solid square curtain.
+	const farTopZ: f64 = @min(anchorZ + fallRangeAbovePlayer, cloudBaseHeight - 1.0);
+	const farGroundZ: f64 = anchorZ - 4.0;
+	const farRange: f32 = @max(@as(f32, @floatCast(farTopZ - farGroundZ)), 1.0);
+	for (weatherSnapshot.cells, 0..) |weatherCell, weatherIndex| {
+		if (weatherCell.kind != 1 and weatherCell.kind != 2 and weatherCell.kind != 3) continue;
+		const wxCell = weatherSnapshot.origin_cell[0] + @as(i32, @intCast(weatherIndex % game.WeatherGrid.dimension));
+		const wyCell = weatherSnapshot.origin_cell[1] + @as(i32, @intCast(weatherIndex / game.WeatherGrid.dimension));
+		const isSnow = weatherCell.kind == 2;
+		const isDust = weatherCell.kind == 3;
+		const weatherStrength = if (isDust) weatherCell.dust else weatherCell.precipitation;
+		if (weatherStrength == 0) continue;
+		const intensity = @as(f32, @floatFromInt(weatherStrength))/255.0;
+		const farCount: usize = @intFromFloat(6.0 + intensity*18.0);
+		for (0..farCount) |i| {
+			const hx: i64 = @as(i64, wxCell)*31 + @as(i64, @intCast(i));
+			const hy: i64 = @as(i64, wyCell)*47 + @as(i64, @intCast(i))*7;
+			const worldX = (@as(f64, @floatFromInt(wxCell)) + @as(f64, hashCell(hx, hy)))*@as(f64, @floatFromInt(game.WeatherGrid.cell_size));
+			const worldY = (@as(f64, @floatFromInt(wyCell)) + @as(f64, hashCell(hy, hx)))*@as(f64, @floatFromInt(game.WeatherGrid.cell_size));
+			const dx: f32 = @floatCast(worldX - playerPos[0]);
+			const dy: f32 = @floatCast(worldY - playerPos[1]);
+			const distance = @sqrt(dx*dx + dy*dy);
+			if (distance < gridRadius*1.2) continue;
+			const phase = hashCell(hx +% 173, hy +% 271);
+			const speed = if (isSnow) 7.0 else if (isDust) 4.0 else fallSpeed;
+			const dropZ = farTopZ - @as(f64, @mod(elapsedSeconds*speed/farRange + phase, 1.0)*farRange);
+			const fallSeconds = @as(f32, @floatCast(farTopZ - dropZ))/speed;
+			const windScale: f32 = if (isDust) 1.5 else if (isSnow) 0.35 else 0.15;
+			const center = Vec3f{
+				@floatCast(worldX + @as(f64, weatherSnapshot.wind[0]*fallSeconds*windScale) - playerPos[0]),
+				@floatCast(worldY + @as(f64, weatherSnapshot.wind[1]*fallSeconds*windScale) - playerPos[1]),
+				@floatCast(dropZ - playerPos[2]),
+			};
+			const fade = std.math.clamp(1.0 - distance/(@as(f32, @floatFromInt(game.WeatherGrid.dimension*game.WeatherGrid.cell_size))/2.0), 0.15, 0.55);
+			const color = (if (isSnow) Vec3f{0.92, 0.95, 1.0} else if (isDust) Vec3f{0.72, 0.55, 0.32} else dropColor) * @as(Vec3f, @splat(fade));
+			const halfWidth: Vec3f = @as(Vec3f, @splat(if (isSnow) 0.12 else if (isDust) 0.22 else 0.05))*camRight;
+			const halfHeight: Vec3f = @as(Vec3f, @splat(if (isSnow) 0.12 else if (isDust) 0.08 else 0.8))*up;
+			const base: u32 = @intCast(vertices.items.len);
+			vertices.append(.{.pos = center - halfWidth - halfHeight, .color = .{color[0], color[1], color[2]}});
+			vertices.append(.{.pos = center + halfWidth - halfHeight, .color = .{color[0], color[1], color[2]}});
+			vertices.append(.{.pos = center + halfWidth + halfHeight, .color = .{color[0], color[1], color[2]}});
+			vertices.append(.{.pos = center - halfWidth + halfHeight, .color = .{color[0], color[1], color[2]}});
+			indices.appendSlice(&.{base, base + 1, base + 2, base, base + 2, base + 3});
 		}
 	}
 

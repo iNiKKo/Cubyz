@@ -79,13 +79,15 @@ const stormDetailSeed: u64 = stormCloudSeed ^ 0x9e3779b97f4a7c15;
 // colouring in." Now uses the *same* topBrightness/sideBrightness/bottomBrightness constants as the base
 // layer (one shared per-vertex mechanism) and only stormTintFactor (a single multiplier in draw()) as the
 // one, sole darkening knob.
-const stormGap: f32 = 1.0;
+// A distinct upper storm deck: base clouds occupy [cloudBaseHeight, cloudBaseHeight+cloudThickness].
+// Start the storm deck exactly on that top plane — no overlap, but no immersion-breaking air gap.
+const stormGap: f32 = cloudThickness;
 const stormThickness: f32 = 10.0;
 const stormAlphaFullRain: f32 = 0.65; // Same opacity (baseAlpha = 0.65) as the first cloud layer
 const stormCoverageThreshold: f32 = 0.60; // Puffy cloud coverage in sky gaps, not a giant block
 const stormMaxClusterCells: u32 = 25; // Compact puffy cloud clusters matching base layer
 const stormMaxClusterDim: u32 = 4; // Max 4x4 cells (~160x160 blocks) matching base layer
-const stormTintFactor: f32 = 1.0; // 100% exact same color as the first cloud layer
+const stormTintFactor: f32 = 0.78; // Storm deck is visibly heavier than the fair-weather layer.
 
 const topBrightness: f32 = 1.0;
 const sideBrightness: f32 = 0.9;
@@ -111,6 +113,9 @@ var uniforms: struct {
 	tint: c_int,
 	baseAlpha: c_int,
 	meshOriginRelative: c_int,
+	fogColor: c_int,
+	fogDensity: c_int,
+	weatherFogStrength: c_int,
 } = undefined;
 var vao: graphics.VertexArray = undefined;
 /// Storm layer's own VAO — same pipeline/shader/vertex format as the base layer (no need for a second
@@ -118,7 +123,7 @@ var vao: graphics.VertexArray = undefined;
 var stormVao: graphics.VertexArray = undefined;
 
 var indexCount: u32 = 0;
-var stormIndexCount: u32 = 0;
+pub var stormIndexCount: u32 = 0;
 
 /// One coverage byte (0 or 255) per grid cell, uploaded as a small texture purely so shadow.glsl's
 /// sampleCloudShadow can test against the *exact* same per-cell coverage the visible mesh was built
@@ -131,6 +136,8 @@ var coverage: [maxGridDim*maxGridDim]u8 = undefined;
 /// morphology pass needed. This is what makes the storm layer fill in the gaps between existing clouds
 /// rather than sit directly on top of them (see stormGap's doc comment for why that changed).
 var stormCoverage: [maxGridDim*maxGridDim]u8 = undefined;
+/// The exact combined mask used for terrain cloud shadows.
+var shadowCoverage: [maxGridDim*maxGridDim]u8 = undefined;
 var coverageTextureId: c_uint = 0;
 
 /// Player-relative XY origin (world-space, minus playerPos.xy) of the coverage grid this frame.
@@ -158,7 +165,7 @@ pub fn init() void {
 		&.{},
 		.{.cullMode = .none},
 		.{.depthTest = true, .depthWrite = false},
-		.{.attachments = &.{.alphaBlending}},
+		.{.attachments = &.{.premultipliedAlphaBlending}},
 	);
 	vao = .init(CloudVertex, &.{}, &.{});
 	stormVao = .init(CloudVertex, &.{}, &.{});
@@ -204,14 +211,14 @@ fn sampleCoverage(worldX: f64, worldY: f64) bool {
 var lastOriginCellX: i64 = 0;
 var lastOriginCellY: i64 = 0;
 var lastGridDim: u32 = 0;
+var lastWeatherRevision: u64 = 0;
 
 pub fn isPlayerInsideCloud(playerPos: Vec3d) bool {
 	if (!settings.clouds) return false;
 	const z = playerPos[2];
 	if (z < cloudBaseHeight or z > cloudBaseHeight + cloudThickness) return false;
-	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
-	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
-	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	// Base cloud-inside testing uses world-space coverage directly; it needs no client wind offset.
+	const windOffset = Vec2f{0, 0};
 	const effectivePosX: f64 = playerPos[0] - @as(f64, windOffset[0]);
 	const effectivePosY: f64 = playerPos[1] - @as(f64, windOffset[1]);
 
@@ -580,11 +587,7 @@ fn computeCloudCoverage(outCoverage: []u8, gridDim: u32, originCellX: i64, origi
 pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
 	if (!settings.clouds) return 1.0;
 	if (dir[2] <= 0.001) return 1.0;
-	const rainIntensity: f32 = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
 	var atten: f32 = 1.0;
-
-	// Rain overall atmospheric sun attenuation
-	atten *= std.math.lerp(1.0, 0.35, rainIntensity);
 
 	const relZ = cloudBaseHeight - playerPos[2];
 	if (relZ > 0) {
@@ -598,8 +601,12 @@ pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
 		if (sampleCoverage(hitX, hitY)) {
 			atten *= 0.30;
 		}
-		if (rainIntensity > 0.02 and sampleCoverageWithSeeds(hitX, hitY, stormCloudSeed, stormDetailSeed, stormCoverageThreshold)) {
-			atten *= std.math.lerp(1.0, 0.30, rainIntensity);
+		const weatherSnapshot = if (game.world) |world| world.weatherGrid.snapshot() else game.WeatherGrid.Snapshot{};
+		const weather = game.WeatherGrid.sampleSnapshot(weatherSnapshot, hitX, hitY);
+		if (weather.precipitation > 0.01) {
+			// Storm attenuation is local to the cloud cell the sun ray actually crosses. A nearby jungle
+			// storm can darken its own ground without dimming a player standing under clear desert sky.
+			atten *= std.math.lerp(1.0, 0.30, weather.precipitation);
 		}
 	}
 	return atten;
@@ -635,9 +642,9 @@ pub fn update(playerPos: Vec3d) void {
 	const gridDim: u32 = std.math.clamp(desiredGridDim, 4, maxGridDim);
 	const gridDimD: f64 = @floatFromInt(gridDim);
 
-	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
-	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
-	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	const weatherSnapshot = if (game.world) |world| world.weatherGrid.snapshot() else game.WeatherGrid.Snapshot{};
+	// Must match update(): storm mesh coordinates are already world-space weather coordinates.
+	const windOffset = Vec2f{0, 0};
 
 	const effectivePosX: f64 = playerPos[0] - @as(f64, windOffset[0]);
 	const effectivePosY: f64 = playerPos[1] - @as(f64, windOffset[1]);
@@ -651,21 +658,54 @@ pub fn update(playerPos: Vec3d) void {
 	coverageOriginRelative = Vec2f{@floatCast(originX - playerPos[0]), @floatCast(originY - playerPos[1])} + windOffset;
 	coverageWorldSize = @floatCast(gridDimD*cellSizeD);
 	cloudHeightRelative = @floatCast(cloudMidHeightD - playerPos[2]);
-
-	if (originCellX == lastOriginCellX and originCellY == lastOriginCellY and gridDim == lastGridDim and indexCount > 0) {
+	if (originCellX == lastOriginCellX and originCellY == lastOriginCellY and gridDim == lastGridDim and lastWeatherRevision == weatherSnapshot.revision and indexCount > 0) {
 		return;
 	}
 
 	lastOriginCellX = originCellX;
 	lastOriginCellY = originCellY;
 	lastGridDim = gridDim;
+	lastWeatherRevision = weatherSnapshot.revision;
 
 	computeCloudCoverage(&coverage, gridDim, originCellX, originCellY, cloudSeed, detailSeed, coverageThreshold, 25, 4, null);
 	computeCloudCoverage(&stormCoverage, gridDim, originCellX, originCellY, stormCloudSeed, stormDetailSeed, stormCoverageThreshold, stormMaxClusterCells, stormMaxClusterDim, &coverage);
+	// The storm mesh may exist only where the server's local weather field permits precipitation.
+	// Base clouds remain decorative fair-weather clouds; the storm layer is the local, biome-aware mass.
+	for (0..gridDim) |cy| {
+		for (0..gridDim) |cx| {
+			const worldX: f64 = @as(f64, @floatFromInt(originCellX + @as(i64, @intCast(cx))))*cellSizeD + cellSizeD/2;
+			const worldY: f64 = @as(f64, @floatFromInt(originCellY + @as(i64, @intCast(cy))))*cellSizeD + cellSizeD/2;
+			const weather = game.WeatherGrid.sampleSnapshot(weatherSnapshot, worldX, worldY);
+			const idx = cy*gridDim + cx;
+			// The fallback formation pass below runs after the original exclude mask, so enforce the
+			// non-overlap rule again here: a normal-cloud cell and storm-cloud cell may never intersect.
+			// Cloud persistence follows cloud cover, not the intermittent ground-precipitation
+			// threshold. Otherwise snow/rain may continue while its whole cloud mesh disappears.
+			if (coverage[idx] != 0 or weather.cloud_cover <= 0.15) {
+				stormCoverage[idx] = 0;
+			} else if (stormCoverage[idx] == 0) {
+				// Local precipitation lowers the threshold of the same storm noise field rather than
+				// filling an entire weather cell as a square. This guarantees cloud formation above
+				// rain/snow while retaining organically shaped edges and holes.
+				// Even light snow/rain must reliably have visible cloud mass. The original 0.30
+				// reduction still left low-intensity cells in noise gaps; this stronger curve keeps
+				// the same irregular noise boundary while making precipitation dominate formation.
+				// Cloud mass and ground precipitation are intentionally separate weather values. A light
+				// drizzle can have a broad overcast sky (as the debug readout exposed), so formation must
+				// follow cloud_cover, not the much smaller precipitation amount.
+				// Retain substantial noise even in a dense overcast: a near-zero threshold filled
+				// almost every 40-block cell and read as giant L/box-shaped weather slabs.
+				const localThreshold = std.math.lerp(0.78, 0.42, weather.cloud_cover);
+				stormCoverage[idx] = if (sampleCoverageWithSeeds(worldX, worldY, stormCloudSeed, stormDetailSeed, localThreshold)) 255 else 0;
+			}
+		}
+	}
 
+	// Upload base clouds plus the same locally permitted storm cells used by the visible storm mesh.
+	for (0..gridDim*gridDim) |i| shadowCoverage[i] = @max(coverage[i], stormCoverage[i]);
 	c.glActiveTexture(c.GL_TEXTURE9);
 	c.glBindTexture(c.GL_TEXTURE_2D, coverageTextureId);
-	c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_R8, @intCast(gridDim), @intCast(gridDim), 0, c.GL_RED, c.GL_UNSIGNED_BYTE, &coverage);
+	c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_R8, @intCast(gridDim), @intCast(gridDim), 0, c.GL_RED, c.GL_UNSIGNED_BYTE, &shadowCoverage);
 
 	var vertices: main.ListManaged(CloudVertex) = .init(main.stackAllocator);
 	defer vertices.deinit();
@@ -689,21 +729,29 @@ pub fn update(playerPos: Vec3d) void {
 	stormVao.update(CloudVertex, stormVertices.items, stormIndices.items);
 }
 
-fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f, alpha: f32, meshOriginRelative: Vec3f) void {
+fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f, alpha: f32, meshOriginRelative: Vec3f, writeDepth: bool, fogColor: Vec3f, fogDensity: f32, weatherFogStrength: f32) void {
 	if (layerIndexCount == 0) return;
 	vaoToDraw.bind();
 	c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
 	c.glUniform1f(uniforms.baseAlpha, alpha);
 	c.glUniform3fv(uniforms.meshOriginRelative, 1, @ptrCast(&meshOriginRelative));
+	c.glUniform3fv(uniforms.fogColor, 1, @ptrCast(&fogColor));
+	c.glUniform1f(uniforms.fogDensity, fogDensity);
+	c.glUniform1f(uniforms.weatherFogStrength, weatherFogStrength);
 
-	c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
-	c.glDepthMask(c.GL_TRUE);
-	c.glDepthFunc(c.GL_LEQUAL);
-	c.glDrawElements(c.GL_TRIANGLES, @intCast(layerIndexCount), c.GL_UNSIGNED_INT, null);
+	if (writeDepth) {
+		c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
+		c.glDepthMask(c.GL_TRUE);
+		c.glDepthFunc(c.GL_LEQUAL);
+		c.glDrawElements(c.GL_TRIANGLES, @intCast(layerIndexCount), c.GL_UNSIGNED_INT, null);
+	}
 
 	c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
 	c.glDepthMask(c.GL_FALSE);
-	c.glDepthFunc(c.GL_EQUAL);
+	// In weather, the later deferred fog pass must continue to see the opaque terrain depth, not a
+	// semi-transparent cloud's front face. Otherwise it fogs the blended cloud colour as a fully opaque
+	// high-altitude surface, which is the source of the white/blue cloud washout.
+	c.glDepthFunc(if (writeDepth) c.GL_EQUAL else c.GL_LEQUAL);
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(layerIndexCount), c.GL_UNSIGNED_INT, null);
 }
 
@@ -715,10 +763,23 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 
 	const neutralWhite: Vec3f = .{1, 1, 1};
 	const cloudBase = neutralWhite * @as(Vec3f, @splat(0.875)) + skyColor * @as(Vec3f, @splat(0.125));
-	const tint = @min(Vec3f{1, 1, 1}, cloudBase) * ambientLight;
-	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
-	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
-	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	// Clouds are an atmosphere-lit volume, not terrain. Multiplying them directly by the terrain ambient
+	// makes their pale albedo clip white at noon and collapse almost black at night. Keep a cool skylight
+	// floor and compress the daylight contribution so both ends of the day/night cycle stay readable.
+	const cloudLight = @min(Vec3f{0.86, 0.89, 0.93}, ambientLight * @as(Vec3f, @splat(0.55)) + Vec3f{0.30, 0.33, 0.38});
+	const localWeather = if (game.world) |world| world.weatherGrid.sampleAt(playerPos[0], playerPos[1]) else game.WeatherGrid.Sample{};
+	const weatherFogActive = if (game.world) |world| world.dayTime.weatherVisibility > 0.001 else false;
+	const weatherFogStrength: f32 = if (game.world) |world| world.dayTime.weatherVisibility else 0.0;
+	const weatherCloudDarkening: f32 = if (localWeather.kind == 1) std.math.lerp(1.0, 0.58, weatherFogStrength) else 1.0;
+	const tint = @min(Vec3f{1, 1, 1}, cloudBase) * cloudLight * @as(Vec3f, @splat(weatherCloudDarkening));
+	var fogColor: Vec3f = if (game.world) |world| world.dayTime.fog.fogColor else Vec3f{0.7, 0.75, 0.8};
+	if (localWeather.kind == 1) {
+		// Rain clouds scatter a dark blue-grey overcast, not the bright clear-sky haze used by fair weather.
+		const rainCloudHaze = Vec3f{0.30, 0.36, 0.44};
+		fogColor += (rainCloudHaze - fogColor)*@as(Vec3f, @splat(std.math.clamp(weatherFogStrength*0.9, 0.0, 0.8)));
+	}
+	const fogDensity: f32 = if (weatherFogActive) weatherFogStrength / (if (game.world) |world| world.dayTime.weatherFogRange else 96.0) else 0.0;
+	const windOffset = Vec2f{0, 0};
 
 	const desiredGridDim: u32 = @intFromFloat(@ceil(2*settings.cloudDistance/cellSize));
 	const gridDim: u32 = std.math.clamp(desiredGridDim, 4, maxGridDim);
@@ -742,20 +803,21 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	c.glPolygonOffset(-1.0, -2.0);
 
 	// Base layer: fixed alpha, completely unaffected by weather.
-	drawLayer(&vao, indexCount, tint, baseAlpha, baseMeshOriginRel);
+	// The dedicated cloud target owns a private depth copy, so restore the depth prepass there. It keeps
+	// voxel cloud faces and the thin layer correctly ordered without ever contaminating terrain fog depth.
+	drawLayer(&vao, indexCount, tint, baseAlpha, baseMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
 
-	// Storm layer
-	const rainIntensity = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
-	const stormAlphaCurve = 1.0 - (1.0 - rainIntensity)*(1.0 - rainIntensity)*(1.0 - rainIntensity);
-	const stormAlpha = stormAlphaCurve * baseAlpha;
-	if (stormAlpha > 0.01 and stormIndexCount > 0) {
+	// Storm coverage is already gated per world position by the server weather snapshot in update().
+	// It must not be gated again by the player's own rain value, or a jungle storm visible from a dry
+	// desert would disappear merely because the player is standing outside its precipitation cell.
+	if (stormIndexCount > 0) {
 		const stormTint = tint * @as(Vec3f, @splat(stormTintFactor));
 		const stormMeshOriginRel = Vec3f{
 			@floatCast(originX - playerPos[0] + @as(f64, windOffset[0])),
 			@floatCast(originY - playerPos[1] + @as(f64, windOffset[1])),
 			@floatCast(@as(f64, cloudBaseHeight + stormGap) - playerPos[2]),
 		};
-		drawLayer(&stormVao, stormIndexCount, stormTint, stormAlpha, stormMeshOriginRel);
+		drawLayer(&stormVao, stormIndexCount, stormTint, baseAlpha, stormMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
 	}
 
 	c.glDisable(c.GL_POLYGON_OFFSET_FILL);

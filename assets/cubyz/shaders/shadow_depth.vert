@@ -31,6 +31,7 @@ layout(std430, binding = 4) buffer _quads
 layout(location = 37) uniform vec3 sunDirection;
 uniform float waterTime;
 uniform bool foliageSway;
+uniform vec2 weatherWind;
 
 layout(location = 0) out vec2 uv;
 layout(location = 1) flat out int textureIndex;
@@ -79,7 +80,8 @@ void main() {
 		// `position` here is still voxel-local (pre `*= voxelSize`) — divide by voxelSize to convert the
 		// world-space displacement back into this shader's local units before adding it in below, so LOD
 		// chunks (voxelSize > 1) sway by the same real-world distance as full-resolution ones.
-		position.xy += (vec2(windWave, windWave * 0.5) * heightMask) / float(voxelSize);
+		vec2 windDir = length(weatherWind) > 1e-4 ? normalize(weatherWind) : vec2(0.894, 0.447);
+		position.xy += (windDir * windWave * heightMask) / float(voxelSize);
 	}
 
 	if (quads[quadIndex].isFoliage != 0) {
