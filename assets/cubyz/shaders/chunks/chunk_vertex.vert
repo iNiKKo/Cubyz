@@ -14,6 +14,7 @@ layout(location = 7) flat out float distanceForLodCheck;
 layout(location = 8) flat out int opaqueInLod;
 layout(location = 9) out vec3 outBlockLight;
 layout(location = 10) flat out int isFoliage;
+layout(location = 11) out vec3 worldPos;
 
 layout(location = 0) uniform vec3 ambientLight;
 
@@ -82,7 +83,6 @@ void main() {
 
 	textureIndex = textureAndQuad & 65535;
 	int quadIndex = textureAndQuad >> 16;
-
 	vec3 position = vec3(
 		encodedPositionAndLightIndex & 31,
 		encodedPositionAndLightIndex >> 5 & 31,
@@ -97,8 +97,8 @@ void main() {
 	position = (modelMatrix*vec4(position - vec3(1), 1)).xyz + vec3(1);
 #endif
 	position *= voxelSize;
-	position += vec3(chunks[chunkID].position.xyz - playerPositionInteger);
-	position -= playerPositionFraction;
+	worldPos = vec3(chunks[chunkID].position.xyz) + position;
+	position = worldPos - (vec3(playerPositionInteger) + playerPositionFraction);
 
 	direction = position;
 

@@ -56,6 +56,7 @@ const UniformStruct = struct {
 	/// this shared struct rather than a second near-duplicate struct just for one extra field.
 	waterTime: c_int,
 	reflectionsEnabled: c_int,
+	waterReflectionDistance: c_int,
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
@@ -117,7 +118,7 @@ pub fn init() void {
 		&transparentUniforms,
 		graphics.VertexArray.EmptyVertex,
 		&.{},
-		.{},
+		.{ .cullMode = .none },
 		.{.depthTest = true, .depthWrite = false, .depthCompare = .lessOrEqual},
 		.{.attachments = &.{.{
 			.srcColorBlendFactor = .one,
@@ -238,6 +239,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	// shadow.glsl blends toward fully-lit using this instead of (in addition to) horizonFade.
 	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 	c.glUniform1i(locations.reflectionsEnabled, @intFromBool(main.settings.reflections));
+	c.glUniform1f(locations.waterReflectionDistance, main.settings.waterReflectionDistance);
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
 	if (main.settings.shadows) {
@@ -542,7 +544,12 @@ const SortingData = struct { // MARK: SortingData
 		self.isBackFace = self.face.position.isBackFace;
 		const quadIndex = self.face.blockAndQuad.quadIndex;
 		const normalVector: Vec3f = quadIndex.quadInfo().normal;
-		self.shouldBeCulled = vec.dot(normalVector, @floatFromInt(Vec3i{dx, dy, dz})) > 0; // TODO: Adjust for arbitrary voxel models.
+		const dotVal = vec.dot(normalVector, @floatFromInt(Vec3i{dx, dy, dz}));
+		if (self.isBackFace) {
+			self.shouldBeCulled = dotVal < 0;
+		} else {
+			self.shouldBeCulled = dotVal > 0;
+		}
 		const fullDx = dx - @as(i32, @trunc(normalVector[0])); // TODO: This calculation should only be done for border faces.
 		const fullDy = dy - @as(i32, @trunc(normalVector[1]));
 		const fullDz = dz - @as(i32, @trunc(normalVector[2]));
@@ -736,7 +743,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 	fn canBeSeenThroughOtherBlock(block: Block, other: Block, neighbor: chunk.Neighbor) bool {
 		const rotatedModel = blocks.meshes.model(block).model();
 		_ = rotatedModel; // TODO: Check if the neighbor model occludes this one. (maybe not that relevant)
-		return block.typ != 0 and (other.typ == 0 or (block != other and other.viewThrough()) or other.alwaysViewThrough() or !blocks.meshes.model(other).model().isNeighborOccluded[neighbor.reverse().toInt()]);
+		return block.typ != 0 and (other.typ == 0 or (block.typ != other.typ and other.viewThrough()) or other.alwaysViewThrough() or !blocks.meshes.model(other).model().isNeighborOccluded[neighbor.reverse().toInt()]);
 	}
 
 	fn appendInternalQuads(block: Block, pos: chunk.BlockPos, comptime backFace: bool, list: *main.ListManaged(FaceData)) void {
@@ -886,11 +893,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -915,11 +922,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -944,11 +951,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -973,11 +980,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -1002,11 +1009,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -1031,11 +1038,11 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block == neighborBlock) continue;
+							if (block.typ == neighborBlock.typ) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
-								appendNeighborFacingQuads(block, neighbor.reverse(), pos, true, &transparentCore);
+								appendNeighborFacingQuads(block, neighbor, neighborPos, true, &transparentCore);
 							}
 							appendNeighborFacingQuads(block, neighbor, neighborPos, false, &transparentCore);
 						} else {
@@ -1652,26 +1659,16 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 			{
 				var i: usize = 0;
 				var culledStart: usize = self.currentSorting.len;
-				while (culledStart > 0) {
-					if (!self.currentSorting[culledStart - 1].shouldBeCulled) {
-						break;
-					}
-					culledStart -= 1;
-				}
-				while (i < culledStart) : (i += 1) {
+				while (i < culledStart) {
 					if (self.currentSorting[i].shouldBeCulled) {
 						culledStart -= 1;
 						std.mem.swap(SortingData, &self.currentSorting[i], &self.currentSorting[culledStart]);
-						while (culledStart > 0) {
-							if (!self.currentSorting[culledStart - 1].shouldBeCulled) {
-								break;
-							}
-							culledStart -= 1;
+					} else {
+						if (!self.currentSorting[i].isBackFace) {
+							std.mem.swap(SortingData, &self.currentSorting[i], &self.currentSorting[backFaceStart]);
+							backFaceStart += 1;
 						}
-					}
-					if (!self.currentSorting[i].isBackFace) {
-						std.mem.swap(SortingData, &self.currentSorting[i], &self.currentSorting[backFaceStart]);
-						backFaceStart += 1;
+						i += 1;
 					}
 				}
 				self.culledSortingCount = @intCast(culledStart);

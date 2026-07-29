@@ -51,6 +51,7 @@ var deferredUniforms: struct {
 	zFar: c_int,
 	invViewMatrix: c_int,
 	godRayTint: c_int,
+	waterTime: c_int,
 } = undefined;
 var fakeReflectionPipeline: graphics.Pipeline = undefined;
 var fakeReflectionUniforms: struct {
@@ -62,11 +63,13 @@ var fakeReflectionUniforms: struct {
 } = undefined;
 
 pub var activeFrameBuffer: c_uint = 0;
+var startTimestamp: std.Io.Timestamp = undefined;
 
 pub const reflectionCubeMapSize = 64;
 var reflectionCubeMap: graphics.CubeMapTexture = undefined;
 
 pub fn init() void {
+	startTimestamp = main.timestamp();
 	deferredRenderPassPipeline = graphics.Pipeline.init(
 		"assets/cubyz/shaders/deferred_render_pass.vert",
 		"assets/cubyz/shaders/deferred_render_pass.frag",
@@ -421,14 +424,16 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	// already correctly is. Drawing clouds last composites them over both opaque and transparent geometry
 	// alike, using the same depth test (against the opaque depth buffer, still the only depth transparent
 	// draws leave behind) that already made clouds correctly occlude opaque blocks.
-	if (playerPos[2] <= 2000.0) {
+	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
+	const isSubmerged = blocks.meshes.hasFog(playerBlock);
+
+	if (!isSubmerged and playerPos[2] <= 2000.0) {
 		clouds.draw(ambientLight, skyColor);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 	}
-	// Same depth-test-against-opaque-and-transparent reasoning as clouds.draw() above — drops behind a
-	// wall should be hidden, and transparent blocks don't write depth so this still needs to run after
-	// them, not before.
-	rain.draw();
+	if (!isSubmerged) {
+		rain.draw();
+	}
 
 	c.glDepthRange(0, 0.001);
 	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
@@ -437,8 +442,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	chunk_meshing.endRender();
 
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
-
-	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
 
 	if (settings.bloom) {
 		Bloom.render(lastWidth, lastHeight, playerBlock, game.camera.viewMatrix);
@@ -506,6 +509,9 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	c.glUniform1f(deferredUniforms.zNear, zNear);
 	c.glUniform1f(deferredUniforms.zFar, zFar);
 	c.glUniform2f(deferredUniforms.tanXY, 1.0/game.projectionMatrix.rows[0][0], 1.0/game.projectionMatrix.rows[1][2]);
+	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds)) * 1e-9);
+	c.glUniform1f(deferredUniforms.waterTime, waterTime);
 	{
 		// Sun-colored during the day, moon-colored (near-white, not warm yellow) at night — matches
 		// Skybox.drawCelestial's own tints for the two bodies, so the ray color agrees with whichever

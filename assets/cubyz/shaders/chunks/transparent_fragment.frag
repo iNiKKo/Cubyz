@@ -11,6 +11,7 @@ layout(location = 5) flat in int textureIndex;
 layout(location = 6) flat in int isBackFace;
 layout(location = 7) flat in float distanceForLodCheck;
 layout(location = 8) flat in int opaqueInLod;
+layout(location = 11) in vec3 worldPos;
 
 layout(location = 0, index = 0) out vec4 fragColor;
 layout(location = 0, index = 1) out vec4 blendColor;
@@ -32,6 +33,7 @@ uniform bool reflectionsEnabled;
 // Real elapsed seconds, for the water-reflection ripple below — see chunk_meshing.zig's
 // bindTransparentShaderAndUniforms (same pattern clouds.zig/thin_clouds.zig use for wind animation).
 uniform float waterTime;
+uniform vec3 sunDirection;
 
 struct Fog {
 	vec3 color;
@@ -112,13 +114,13 @@ float calculateFogDistance(float dist, float densityAdjustment, float zStart, fl
 }
 
 void applyFrontfaceFog(float fogDistance, vec3 fogColor) {
-	float fogFactor = exp(fogDistance);
+	float fogFactor = clamp(exp(fogDistance), 0.0, 1.0);
 	fragColor.rgb = fogColor*(1 - fogFactor);
 	fragColor.a = fogFactor;
 }
 
 void applyBackfaceFog(float fogDistance, vec3 fogColor) {
-	float fogFactor = exp(-fogDistance);
+	float fogFactor = clamp(exp(-abs(fogDistance)), 0.0, 1.0);
 	fragColor.rgb = fragColor.rgb*fogFactor + fogColor*(1 - fogFactor);
 	fragColor.a *= fogFactor;
 }
@@ -144,26 +146,15 @@ float sampleSceneDepthAt(vec2 screenUv) {
 	return zFromDepth(texture(depthTexture, screenUv).r);
 }
 
+uniform float waterReflectionDistance;
+
 vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 	if (!reflectionsEnabled) return fallbackColor;
 
 	vec3 dir = normalize(reflDir);
-	// Phase 1 — coarse march: fixed step length (not geometrically growing) so a hit's *approximate*
-	// location is found with roughly even precision at any distance along the ray, rather than the
-	// previous version's step size compounding ~9.6x over its 20 iterations — most of that march's
-	// reach was very low-precision, coarse jumps, which is what produced a warped-looking reflection
-	// that only "locked on" cleanly from angles where an early, still-precise step happened to land
-	// near the real surface (matching the player's own report: "only from a very specific angle...
-	// messed up"). A plain, larger step count at constant length instead gives consistent precision
-	// across the whole search range; the phase-2 refinement below is what actually sharpens the hit,
-	// not a growing step size.
-	// Player-reported "reflection distance is very close" after the coordinate-space fix confirmed the
-	// march itself now works correctly — 0.5*48=24 blocks total reach was simply too short to catch
-	// typical scenery (distant trees, far shoreline). Raised reach to 100 blocks (0.5*200) while keeping
-	// the same per-step length/precision — a longer search costs more worst-case texture samples per
-	// reflective pixel (only paid when a ray doesn't hit early), not a change to precision.
-	const float coarseStepLength = 0.5;
-	const int coarseSteps = 200;
+	float maxDistance = max(32.0, waterReflectionDistance);
+	int coarseSteps = int(clamp(maxDistance * 1.2, 100.0, 300.0));
+	float coarseStepLength = maxDistance / float(coarseSteps);
 
 	vec3 prevPos = viewPos;
 
@@ -171,26 +162,22 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 		vec3 currentPos = viewPos + dir * (coarseStepLength * float(i));
 
 		vec4 clipPos = projectionMatrix * vec4(currentPos, 1.0);
-		if (clipPos.w <= 0.001) break; // Ray went behind the camera — nothing further to test.
+		if (clipPos.w <= 0.001) break;
 		vec3 ndc = clipPos.xyz / clipPos.w;
 		vec2 screenUv = ndc.xy * 0.5 + 0.5;
 
 		if (screenUv.x < 0.01 || screenUv.x > 0.99 || screenUv.y < 0.01 || screenUv.y > 0.99) {
-			break; // Left the screen — nothing further along this ray is visible to reflect.
+			break;
 		}
 
 		float sceneDepth = sampleSceneDepthAt(screenUv);
 		float rayDepth = currentPos.y;
 		float depthDiff = rayDepth - sceneDepth;
 
-		// The ray has crossed from "in front of" (diff < 0) to "behind" (diff > 0) the visible surface
-		// — i.e. it just passed through the surface it should reflect off. Only trust a crossing within
-		// a small absolute tolerance (not the old, ever-loosening one) so distant, unrelated geometry the
-		// ray happens to pass near isn't mistaken for the intended reflection surface.
-		if (depthDiff > 0.0 && depthDiff < 2.0) {
-			// Phase 2 — binary search refinement between prevPos (known in-front) and currentPos (known
-			// behind) to pin down the actual crossing point precisely, instead of accepting this coarse
-			// step's position as the hit directly. Standard SSR refinement technique.
+		// Adaptive depth tolerance scales with distance (max(2.0, rayDepth * 0.035)) so tall, far
+		// mountains and distant scenery are captured reliably without step undershoots.
+		float maxTolerance = max(2.0, rayDepth * 0.035);
+		if (depthDiff > 0.0 && depthDiff < maxTolerance) {
 			vec3 lo = prevPos;
 			vec3 hi = currentPos;
 			vec2 hitUv = screenUv;
@@ -211,13 +198,6 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 			}
 
 			vec3 hitColor = texture(worldColorSampler, hitUv).rgb;
-			// Fades reflections out near the screen edge because a ray that exits the visible frame has no
-			// further information to sample — not because content right at the edge is somehow unreliable.
-			// The old 8%-of-screen fade band was too wide: it visibly blurred away reflections of things
-			// still clearly on-screen near the edge (player-reported: "i can still see the leaf on the edge
-			// of screen but on the water reflection there is like a soft blur removing it"). Narrowed to a
-			// 2% band — just enough to avoid a hard, single-pixel cutoff right at the true screen boundary,
-			// without discarding reflections of content that's still comfortably visible.
 			vec2 edgeFade = smoothstep(vec2(0.0), vec2(0.02), hitUv) * smoothstep(vec2(1.0), vec2(0.98), hitUv);
 			float fade = edgeFade.x * edgeFade.y;
 			return mix(fallbackColor, hitColor, fade);
@@ -230,11 +210,17 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 }
 
 void main() {
+	if (isBackFace == 0 && !gl_FrontFacing) discard;
+	if (isBackFace != 0 && gl_FrontFacing) discard;
+
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 	float normalVariation = lightVariation(normal);
 	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
 	float dist = zFromDepth(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r);
+	float waterSurfaceDepth = mvVertexPos.y;
+	float waterColumnDepth = max(0.0, dist - waterSurfaceDepth);
+	float depthExtinction = exp(-0.16 * waterColumnDepth);
 	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fogData[int(animatedTextureIndex)].fogDensity, 1e10, 1e10);
 	float airFogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 	vec3 fogColor = unpackColor(fogData[int(animatedTextureIndex)].fogColor);
@@ -250,88 +236,56 @@ void main() {
 	// sky-tint contribution (skyRefl below) still applies with reflections off; only the costly per-pixel
 	// SSR search and the full fresnel-boosted specular sheen are skipped.
 	float materialReflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
-	// Subtle ripple: perturbs only the normal used for the REFLECTION direction (not lighting/fresnel's
-	// own `normal`, which should stay based on the true flat surface) so the reflection wobbles gently
-	// instead of being a perfectly flat mirror. A flat mirror reflection of a tall object (e.g. a palm
-	// tree) is inherently ambiguous with "looking through the water surface at the tree's trunk
-	// underwater" from directly above/up close — real water avoids this ambiguity with constant small
-	// surface motion, which a perfectly static SSR reflection has none of. Cheap two-octave sine wave in
-	// world XY (direction.xy — camera-relative, fine for a purely visual ripple pattern that doesn't need
-	// to be pixel-stable across frames) animated by waterTime; small enough amplitude to read as gentle
-	// water motion, not distort the reflection's overall shape/position.
-	vec2 ripplePos = direction.xy * 0.3;
-	float rippleX = sin(ripplePos.x*1.3 + ripplePos.y*0.7 + waterTime*1.1)*0.02
-		+ sin(ripplePos.x*2.9 - ripplePos.y*1.7 + waterTime*1.9)*0.01;
-	float rippleY = sin(ripplePos.y*1.3 - ripplePos.x*0.7 + waterTime*1.3)*0.02
-		+ sin(ripplePos.y*2.9 + ripplePos.x*1.7 + waterTime*2.1)*0.01;
+
+	// Water ripple animation:
+	// Distance-fade out the ripples so close-up water has gentle motion, while distant water stays flat.
+	// This prevents distant ripples from tilting into the dark ground tint (which produced jarring black pixels far away).
+	float waterDist = length(mvVertexPos);
+	float rippleRangeFade = smoothstep(40.0, 10.0, waterDist);
+
+	// World-space organic ocean wave harmonics (no dot patterns, anchored to world coordinates):
+	vec2 wUv = worldPos.xy * 0.4;
+	float wave1 = sin(wUv.x * 0.9 + wUv.y * 0.6 + waterTime * 1.6);
+	float wave2 = cos(wUv.x * 0.5 - wUv.y * 1.2 + waterTime * 1.3);
+	float wave3 = sin(wUv.x * 1.4 + wUv.y * 1.8 - waterTime * 2.1);
+
+	float rippleX = (wave1 * 0.005 + wave2 * 0.003 - wave3 * 0.002) * rippleRangeFade;
+	float rippleY = (wave1 * 0.003 - wave2 * 0.005 + wave3 * 0.003) * rippleRangeFade;
+
 	vec3 rippledNormal = normalize(normal + vec3(rippleX, rippleY, 0.0));
 	vec3 reflDir = reflect(normalize(direction), rippledNormal);
-	// fixedCubeMapLookup (below) samples a static, meaningless procedural noise pattern generated once
-	// at startup (fake_reflection.frag) with no relation to the actual sky/world — whenever SSR (which
-	// only sees on-screen geometry) doesn't find a real hit, every reflective surface fell back to this
-	// noise, which is what read as "water just glowing, nothing reflected." Real sky color (fog.color,
-	// already time-of-day/weather-correct) is a far more sensible fallback for the common "reflection
-	// points at open sky" case — reflDir.z (world-space up, since direction/normal here are both
-	// world-space per chunk_vertex.vert) picks between sky color for upward-pointing reflections and a
-	// darker, desaturated tone for downward ones (reflecting into the ground/water itself, which
-	// shouldn't show sky color at all).
-	vec3 groundReflTint = fog.color * 0.35;
-	vec3 skyRefl = mix(groundReflTint, fog.color, smoothstep(-0.2, 0.3, reflDir.z));
-	// sampleSSR marches from mvVertexPos (VIEW-space) and needs a VIEW-space step direction — reflDir
-	// above is WORLD-space (direction/normal are both world-space per chunk_vertex.vert). Passing the
-	// world-space reflDir straight into a view-space march was a real, previously-undiagnosed bug: adding
-	// a world-space vector directly to a view-space position is meaningless, and the resulting (wrong)
-	// path changes with camera ROTATION specifically — exactly matching the player's report that the
-	// reflection "moves in a random position" when looking up/around, not with camera movement or
-	// distance (which the earlier step-size rework, itself a real but insufficient fix, couldn't touch).
-	// viewMatrix is a pure rotation (no translation — see game.zig's camera.viewMatrix, rotationX*rotationZ
-	// with no translate), so transforming a direction is just viewMatrix * vec4(dir, 0).
+
+	vec3 groundReflTint = fog.color * 0.45;
+	vec3 skyRefl = mix(groundReflTint, fog.color, smoothstep(-0.1, 0.25, reflDir.z));
 	vec3 viewSpaceReflDir = (viewMatrix * vec4(reflDir, 0.0)).xyz;
 	vec3 reflColor = reflectionsEnabled ? sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl) : skyRefl;
 
+	// Add realistic sun specular glint on water surface ripples:
+	vec3 sunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);
+	float sunSpecular = pow(max(0.0, dot(normalize(viewSpaceReflDir), sunDir)), 48.0) * 1.2;
+	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionsEnabled ? 1.0 : 0.4);
+
 	float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
-	// fresnelBoost's floor (the additive term with no fresnel dependence) was 0.5 — even looking
-	// straight down at water (near-zero fresnel, where a reflection should be at its WEAKEST) the
-	// reflection was never less than half strength. Combined with the *1.20 overall multiplier below,
-	// worst case was materialReflectivity * 1.0 * 1.20 — close to fully replacing the water's own base
-	// color with the (now correctly bright, sky-colored) reflection, reported as still-too-much glow even
-	// after removing the pixelLight double-multiplication. Lowered the floor to 0.15 so reflection
-	// strength actually tracks viewing angle the way real water does (near-invisible looking straight
-	// down, strong at grazing angles) instead of always showing at least half strength regardless of
-	// angle.
-	float fresnelBoost = reflectionsEnabled ? (0.15 + 0.55 * fresnel) : 0.15;
+	float fresnelBoost = reflectionsEnabled ? (0.05 + 0.45 * fresnel) : 0.05;
 	float specularReflectivity = materialReflectivity * fresnelBoost;
 
 	textureColor.rgb *= textureColor.a;
 	if (materialReflectivity > 0.01) {
-		// Was `reflColor * pixelLight * specularReflectivity * 1.20` — multiplying the reflection by the
-		// water TILE's own local lighting term (pixelLight) as well as its own brightness compounds two
-		// already-bright values under direct midday sun (pixelLight near its max, and skyRefl/reflColor
-		// also near its brightest), which is what read as "water glows too much during sun" while looking
-		// fine at night (both terms are naturally dim then, so the same formula stayed reasonable). A
-		// mirror reflecting the sky shows the sky's own brightness — it shouldn't ALSO be re-multiplied by
-		// how brightly lit the water surface itself happens to be; that's already accounted for by
-		// specularReflectivity/fresnel controlling how much of the reflection shows through at all.
-		textureColor.rgb += reflColor * specularReflectivity * 1.20;
+		textureColor.rgb += reflColor * specularReflectivity * 0.70;
 	}
 	blendColor.rgb = vec3(1.0 - textureColor.a);
 
 	if(isBackFace == 0) {
 		vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;
-		blendColor.rgb *= absorption;
+		blendColor.rgb *= absorption * vec3(depthExtinction);
 
 		// Fake reflection:
 		// TODO: Change this when it rains.
 		// TODO: Normal mapping.
 		textureColor.rgb += texture(emissionSampler, textureCoords).rgb;
 
-		if(fogData[int(animatedTextureIndex)].fogDensity == 0.0) {
-			// Apply the air fog, compensating for the potentially missing back-face:
-			applyFrontfaceFog(airFogDistance, fog.color);
-		} else {
-			// Apply the block fog:
-			applyFrontfaceFog(fogDistance, fogColor);
-		}
+		// Apply the air fog so frontface water surfaces blend naturally with atmospheric sky fog:
+		applyFrontfaceFog(airFogDistance, fog.color);
 
 		// Apply the texture+absorption
 		fragColor.rgb *= blendColor.rgb;
@@ -340,20 +294,20 @@ void main() {
 		// Apply the air fog:
 		applyBackfaceFog(airFogDistance, fog.color);
 	} else {
-		// Apply the air fog:
-		applyFrontfaceFog(airFogDistance, fog.color);
+		// Water surface underside (backface) viewed from underwater:
+		// Caustic ripple pattern that modulates the sky/outside background color with dark wave lines and bright shimmering highlights.
+		vec2 rippleUv = direction.xy * 0.35 + vec2(waterTime * 0.3);
+		float wave1 = sin(rippleUv.x * 3.2 + rippleUv.y * 2.1 + waterTime * 1.8) * 0.5 + 0.5;
+		float wave2 = cos(rippleUv.x * 4.8 - rippleUv.y * 3.4 - waterTime * 1.4) * 0.5 + 0.5;
+		float backfaceWave = wave1 * wave2;
 
-		// Apply the texture:
-		fragColor.rgb *= blendColor.rgb;
-		fragColor.rgb += textureColor.rgb;
+		// Modulate background: dark wave shadow lines (0.60) and bright shimmering caustic crests (1.30)
+		vec3 waveModulation = mix(vec3(0.55, 0.70, 0.90), vec3(1.15, 1.30, 1.45), backfaceWave);
 
-		// Apply the block fog:
-		if(fogData[int(animatedTextureIndex)].fogDensity == 0.0) {
-			// Apply the air fog, compensating for the above line where I compensated for the potentially missing back-face.
-			applyBackfaceFog(airFogDistance, fog.color);
-		} else {
-			applyBackfaceFog(fogDistance, fogColor);
-		}
+		fragColor.rgb = textureColor.rgb * 0.20;
+		blendColor.rgb = waveModulation;
+		fragColor.a = 1.0;
+		return;
 	}
 	blendColor.rgb *= fragColor.a;
 	fragColor.a = 1;

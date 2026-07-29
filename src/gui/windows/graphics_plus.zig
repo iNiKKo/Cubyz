@@ -37,6 +37,15 @@ fn reflectionsCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn waterReflectionDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
+	return allocator.print("#ffffffWater Reflection Distance: {d:.0}m", .{@round(value)});
+}
+
+fn waterReflectionDistanceCallback(newValue: f32) void {
+	settings.waterReflectionDistance = @round(newValue);
+	settings.save();
+}
+
 fn shadowsCallback(newValue: bool) void {
 	settings.shadows = newValue;
 	settings.save();
@@ -112,6 +121,7 @@ pub fn onOpen() void {
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Reflections", settings.reflections, &reflectionsCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.waterReflectionDistance, &waterReflectionDistanceCallback, &waterReflectionDistanceFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.shadowDarkness, &shadowDarknessCallback, &shadowDarknessFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
