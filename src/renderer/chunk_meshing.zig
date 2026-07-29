@@ -30,7 +30,10 @@ var pipeline: graphics.Pipeline = undefined;
 var transparentPipeline: graphics.Pipeline = undefined;
 /// Reference point for water-reflection ripple animation (transparent_fragment.frag) — same
 /// real-elapsed-time pattern clouds.zig/thin_clouds.zig use for their own wind animation.
-var startTimestamp: std.Io.Timestamp = undefined;
+/// pub: also read by renderer.zig's CascadedShadowMap.update so the shadow depth pass's foliage sway
+/// computes from the exact same time reference as the main color pass — they must produce byte-identical
+/// waterTime values within one frame, or shadow-casting geometry desyncs from what's actually visible.
+pub var startTimestamp: std.Io.Timestamp = undefined;
 const UniformStruct = struct {
 	screenSize: c_int,
 	ambientLight: c_int,
@@ -62,6 +65,7 @@ const UniformStruct = struct {
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
 	csmTexelSize: c_int,         // float at location 50
+	csmActiveCascades: c_int,
 	handLightPositionRelative: c_int,
 	handLightColor: c_int,
 	dropLightPositionRelative: c_int,
@@ -253,6 +257,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 		c.glUniformMatrix4fv(locations.csmLightSpaceMatrix, 3, c.GL_FALSE, @ptrCast(&csm.lightSpaceMatricesGL));
 		c.glUniform1fv(locations.csmCascadeFar, 3, @ptrCast(&csm.cascadeFarDistances));
 		c.glUniform1f(locations.csmTexelSize, 1.0 / @as(f32, @floatFromInt(renderer.CascadedShadowMap.shadowMapSize)));
+		c.glUniform1i(locations.csmActiveCascades, @intCast(csm.activeCascadeCount));
 		// Bind the 3 shadow map textures to bindings 6, 7, 8:
 		c.glActiveTexture(c.GL_TEXTURE6);
 		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[0].depthTexture);

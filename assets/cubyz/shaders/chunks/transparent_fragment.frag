@@ -153,7 +153,16 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 
 	vec3 dir = normalize(reflDir);
 	float maxDistance = max(32.0, waterReflectionDistance);
-	int coarseSteps = int(clamp(maxDistance * 1.2, 100.0, 300.0));
+	// Was `int(clamp(maxDistance * 1.2, 100.0, 300.0))` — up to 153 steps at the default 128-block
+	// waterReflectionDistance, each a full texture sample, plus up to 6 more for the binary-search
+	// refinement below on a hit. With a large body of water on screen (many overlapping reflective
+	// pixels), this collapsed FPS from ~700 to ~200 — a real, severe cost, not just "SSR is expensive in
+	// general." The binary-search refinement already recovers most of the coarse phase's precision
+	// cheaply (6 halvings resolve to roughly maxDistance/64 of the original step spacing), so the coarse
+	// phase doesn't need anywhere near this many linear steps to reliably find the same crossings — a
+	// much smaller, flat cap brings the worst case down by roughly 4-5x while the adaptive depth
+	// tolerance below (already scales with distance) keeps larger per-step jumps from missing hits.
+	int coarseSteps = 32;
 	float coarseStepLength = maxDistance / float(coarseSteps);
 
 	vec3 prevPos = viewPos;
@@ -174,9 +183,13 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 		float rayDepth = currentPos.y;
 		float depthDiff = rayDepth - sceneDepth;
 
-		// Adaptive depth tolerance scales with distance (max(2.0, rayDepth * 0.035)) so tall, far
-		// mountains and distant scenery are captured reliably without step undershoots.
-		float maxTolerance = max(2.0, rayDepth * 0.035);
+		// Adaptive depth tolerance scales with distance so tall, far mountains and distant scenery are
+		// captured reliably without step undershoots. Floor raised from the old fixed 2.0 to
+		// coarseStepLength*1.5 — with the coarse step count now much lower (see coarseStepLength's own
+		// comment above), individual steps are longer, so the tolerance floor needs to stay comfortably
+		// above one step length or a thin/near surface a step could jump clean over would never register
+		// a crossing at all.
+		float maxTolerance = max(coarseStepLength * 1.5, rayDepth * 0.035);
 		if (depthDiff > 0.0 && depthDiff < maxTolerance) {
 			vec3 lo = prevPos;
 			vec3 hi = currentPos;
@@ -258,7 +271,18 @@ void main() {
 	vec3 groundReflTint = fog.color * 0.45;
 	vec3 skyRefl = mix(groundReflTint, fog.color, smoothstep(-0.1, 0.25, reflDir.z));
 	vec3 viewSpaceReflDir = (viewMatrix * vec4(reflDir, 0.0)).xyz;
-	vec3 reflColor = reflectionsEnabled ? sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl) : skyRefl;
+	// waterReflectionDistance previously only controlled how far each SSR ray was allowed to SEARCH
+	// (sampleSSR's maxDistance) — the ray still searches along its own reflected direction, which can
+	// point toward distant scenery (e.g. a tall mountain) regardless of how close the reflecting water
+	// itself is to the player. That meant a low slider value didn't limit "how far away reflections
+	// render" the way the setting is meant to (a mountain at the search-distance edge would still show
+	// fully) — it only affected reflection reach/detail, not visibility radius. Gate the raymarch itself
+	// on this water FRAGMENT's own distance from the player (waterDist, already computed above for the
+	// ripple fade) instead: water beyond waterReflectionDistance skips SSR entirely and falls back to the
+	// flat sky/ground tint, same as the reflectionsEnabled-off path — regardless of what a ray from there
+	// could technically reach.
+	bool withinReflectionDistance = waterDist <= waterReflectionDistance;
+	vec3 reflColor = (reflectionsEnabled && withinReflectionDistance) ? sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl) : skyRefl;
 
 	// Add realistic sun specular glint on water surface ripples:
 	vec3 sunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);

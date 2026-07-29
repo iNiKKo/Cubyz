@@ -13,4 +13,10 @@
 	.mobility = 0.6,
 	.model = "cubyz:cube",
 	.texture = "cubyz:water",
+	.onUpdate = .{
+		.type = .fluid_spread,
+	},
+	.onTick = .{
+		.type = .fluid_spread,
+	},
 }

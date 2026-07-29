@@ -27,6 +27,13 @@ fn antiAliasingCallback(newValue: u16) void {
 	settings.save();
 }
 
+const msaaSampleCounts = [_]u8{2, 4, 8};
+
+fn msaaSamplesCallback(newValue: u16) void {
+	settings.msaaSamples = msaaSampleCounts[newValue];
+	settings.save();
+}
+
 fn bloomCallback(newValue: bool) void {
 	settings.bloom = newValue;
 	settings.save();
@@ -124,6 +131,12 @@ fn shadowDarknessCallback(newValue: f32) void {
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffMSAA Samples: ", "{}x", &msaaSampleCounts, switch (settings.msaaSamples) {
+		2 => 0,
+		4 => 1,
+		8 => 2,
+		else => 1,
+	}, &msaaSamplesCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Reflections", settings.reflections, &reflectionsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.waterReflectionDistance, &waterReflectionDistanceCallback, &waterReflectionDistanceFormatter));

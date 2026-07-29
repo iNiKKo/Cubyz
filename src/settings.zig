@@ -43,6 +43,13 @@ pub var upscalerMode: UpscalerMode = .fsr1;
 
 pub const AntiAliasingMode = enum(u8) { off, fxaa, msaa, taa };
 pub var antiAliasingMode: AntiAliasingMode = .fxaa;
+/// MSAA sample count — a flat, whole-screen setting (OpenGL fixes sample count per-framebuffer, not
+/// per-pixel/per-distance, so this can't vary with distance from the player within one render pass).
+/// Higher costs roughly proportionally more color/depth bandwidth for every opaque fragment.
+/// Default 2 (not 4): a real, meaningful FPS difference for most players (player-reported ~780->650fps
+/// at 4x on their hardware) for a smaller quality delta than the jump from off->2x already provides —
+/// better default trade-off, still adjustable up to 8x in Graphics+ settings for anyone who wants it.
+pub var msaaSamples: u8 = 2;
 
 pub var bloom: bool = true;
 

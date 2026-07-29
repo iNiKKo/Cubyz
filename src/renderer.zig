@@ -581,9 +581,14 @@ const MSAA = struct { // MARK: MSAA
 	var frameBuffer: graphics.MultisampledFrameBuffer = undefined;
 	var width: u31 = std.math.maxInt(u31);
 	var height: u31 = std.math.maxInt(u31);
+	/// 0 (never a valid sample count) forces updateSize's first call to (re-)initialize the framebuffer
+	/// at whatever settings.msaaSamples is at that point, alongside the usual width/height staleness
+	/// check below — same lazy-refresh pattern, just also keyed on this setting.
+	var lastSamples: u8 = 0;
 
 	pub fn init() void {
-		frameBuffer.init(4);
+		frameBuffer.init(main.settings.msaaSamples);
+		lastSamples = main.settings.msaaSamples;
 	}
 
 	pub fn deinit() void {
@@ -591,6 +596,17 @@ const MSAA = struct { // MARK: MSAA
 	}
 
 	fn updateSize(currentWidth: u31, currentHeight: u31) void {
+		// Sample count is fixed per-framebuffer at allocation time in OpenGL (there's no way to change
+		// it on an existing multisampled texture the way updateSize below resizes width/height) — if the
+		// player changes the MSAA quality setting at runtime, the whole framebuffer (not just its size)
+		// needs tearing down and recreating with the new sample count.
+		if (lastSamples != main.settings.msaaSamples) {
+			frameBuffer.deinit();
+			frameBuffer.init(main.settings.msaaSamples);
+			lastSamples = main.settings.msaaSamples;
+			width = std.math.maxInt(u31); // Force the size check below to also run again this frame.
+			height = std.math.maxInt(u31);
+		}
 		if (width != currentWidth or height != currentHeight) {
 			width = currentWidth;
 			height = currentHeight;
@@ -1692,6 +1708,13 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	/// this radius, not a near/far depth slice — see computeLightSpaceMatrix.
 	pub var cascadeFarDistances: [numCascades]f32 = .{ 24.0, 96.0, 512.0 };
 
+	/// How many cascades actually got a fresh light-space matrix/depth-map render this session, driven by
+	/// settings.shadowDistance (see update()'s own activeCascades local). Cascades beyond this count keep
+	/// stale/never-computed baseLightSpaceMatrices — shadow.glsl's cross-cascade blend must not sample
+	/// them, or it mixes in garbage right at the edge of the lowest-numbered active cascade (see the
+	/// dated fix note in this file's memory.md for the exact symptom this was found from).
+	pub var activeCascadeCount: usize = 1;
+
 	/// One depth-only FBO per cascade. Initialised with GL_COMPARE_REF_TO_TEXTURE so sampling returns
 	/// hardware-filtered 0..1 PCF values directly from the fragment shader's sampler2DShadow.
 	pub var shadowFBs: [numCascades]graphics.FrameBuffer = undefined;
@@ -1701,6 +1724,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	var shadowPipeline: graphics.Pipeline = undefined;
 	var shadowPipelineUniforms: struct {
 		lightSpaceMatrix: c_int,
+		waterTime: c_int,
+		foliageSway: c_int,
 	} = undefined;
 
 	/// Light-space VP matrices in the Zig row-major format — used by the cascade frustum computation.
@@ -1846,6 +1871,15 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		shadowPipeline.bind(null);
 		c.glUniform1i(43, @intFromBool(settings.foliageShadows));
 		c.glUniform3fv(37, 1, @ptrCast(&lightDir));
+		// Same time reference chunk_meshing.zig's bindTransparentShaderAndUniforms uses for the main color
+		// pass's foliage sway — must match exactly, or the shadow-casting geometry sways out of phase with
+		// what's actually visible (see shadow_depth.vert's own doc comment for the full "difference in
+		// shading every ~0.2-0.3s" symptom this fixes). Kept in scope for the whole function since the
+		// per-cascade loop below rebinds shadowPipeline after each compute dispatch and must re-upload it.
+		const elapsedNanoseconds = chunk_meshing.startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+		const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+		c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
+		c.glUniform1i(shadowPipelineUniforms.foliageSway, @intFromBool(settings.foliageSway));
 		c.glActiveTexture(c.GL_TEXTURE0);
 		blocks.meshes.blockTextureArray.bind();
 
@@ -1858,6 +1892,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			2
 		else
 			3;
+		activeCascadeCount = activeCascades;
 
 		const maxDistSq: f64 = 2.0 * 2.0; // 2 blocks of player movement
 		const maxFrameAge: u32 = 20; // Refresh all cascades in unison every 20 frames (~0.33s) when standing still
@@ -1917,6 +1952,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 					shadowPipeline.bind(null);
 					c.glUniform1i(43, @intFromBool(settings.foliageShadows));
 					c.glUniform3fv(37, 1, @ptrCast(&lightDir));
+					c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
+					c.glUniform1i(shadowPipelineUniforms.foliageSway, @intFromBool(settings.foliageSway));
 					c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&baseLightSpaceMatrices[i].toGl()));
 					chunk_meshing.vao.bind();
 					c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);

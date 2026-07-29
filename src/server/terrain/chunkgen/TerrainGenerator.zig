@@ -20,6 +20,8 @@ pub const generatorSeed = 0x65c7f9fdc0641f94;
 
 pub const defaultState = .enabled;
 
+const fluid_spread = @import("../../../callbacks/block/server/fluid_spread.zig");
+
 var air: main.blocks.Block = undefined;
 var stone: main.blocks.Block = undefined;
 var water: main.blocks.Block = undefined;
@@ -29,6 +31,7 @@ pub fn init(parameters: ZonElement) void {
 	air = main.blocks.parseBlock("cubyz:air");
 	stone = main.blocks.parseBlock("cubyz:slate/smooth");
 	water = main.blocks.parseBlock("cubyz:water");
+	water.data = fluid_spread.sourceLevel;
 }
 
 pub fn generate(worldSeed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap.CaveMapView, biomeMap: CaveBiomeMap.CaveBiomeMapView) void {

@@ -1343,21 +1343,32 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		return null;
 	}
 	pub fn triggerNeighborBlockUpdates(self: *ServerWorld, wx: i32, wy: i32, wz: i32) void {
-		for (chunk.Neighbor.iterable) |value| {
-			const pos = Vec3i{
+		self.triggerNeighborBlockUpdatesWithDelay(wx, wy, wz, 0);
+	}
+
+	pub fn triggerNeighborBlockUpdatesWithDelay(self: *ServerWorld, wx: i32, wy: i32, wz: i32, delayMs: i64) void {
+		// Includes the changed position itself (not just its 6 neighbors) - a block that just got
+		// placed/replaced needs the same chance to react to its own new state (e.g. water normalizing
+		// a freshly placed source, see fluid_spread.zig) as its neighbors get to react to it changing.
+		// onUpdate is .noop for the overwhelming majority of block types, so this costs nothing for them.
+		var positions: [7]Vec3i = undefined;
+		positions[0] = .{wx, wy, wz};
+		for (chunk.Neighbor.iterable, 1..) |value, i| {
+			positions[i] = Vec3i{
 				wx + value.relX(),
 				wy + value.relY(),
 				wz + value.relZ(),
 			};
-
+		}
+		for (positions) |pos| {
 			var ch = self.getSimulationChunkAndIncreaseRefCount(pos[0], pos[1], pos[2]) orelse continue;
 			defer ch.decreaseRefCount();
 
-			ch.blockUpdateSystem.add(.{
+			ch.blockUpdateSystem.addWithDelay(.{
 				.x = @truncate(@as(u32, @bitCast(pos[0]))),
 				.y = @truncate(@as(u32, @bitCast(pos[1]))),
 				.z = @truncate(@as(u32, @bitCast(pos[2]))),
-			});
+			}, delayMs);
 		}
 	}
 

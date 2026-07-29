@@ -32,6 +32,16 @@ layout(location = 39) uniform float shadowDarkness; // [0.0, 1.0] shadow darknes
 // already elevation-clamped by the time it reaches this shader, keeping abs(sunDirection.z) well outside
 // horizonFade's window even exactly at the crossing).
 layout(location = 51) uniform float shadowTransitionFade;
+// How many cascades actually got a fresh depth-map render/light-space matrix this session — driven by
+// settings.shadowDistance (renderer.zig's CascadedShadowMap.update, "activeCascades"). At low
+// shadowDistance settings only cascade 0 (sometimes 0-1) is genuinely active; csmMap1/csmMap2's textures
+// and csmLightSpaceMatrix[1]/[2] are left stale/uninitialized in that case, NOT continuously updated —
+// sampleSunShadow's cross-cascade blend must never sample a cascade >= this count, or it mixes in
+// garbage from a stale light-space projection right at the edge of the lowest active cascade. This was
+// the actual cause of a player-reported "close-range leaf shadows look noisy" bug that only appeared at
+// low Dynamic Shadow Distance settings — narrowed down by the player noticing it scaled with that
+// specific slider, not shadow quality/resolution as first assumed.
+layout(location = 52) uniform int csmActiveCascades;
 // These cloud uniforms kept at same locations as before to avoid having to change bindCommonUniforms:
 layout(location = 34) uniform vec2 cloudCoverageOrigin;
 layout(location = 35) uniform float cloudCoverageWorldSize;
@@ -61,11 +71,21 @@ const int PCF_SAMPLES = 9;
 // direction slowly changes over the day (and as the camera moves the frustum by whole texels), which
 // reads as a fine sparkling noise on tree/foliage shadows specifically at close range. Averaging over a
 // wider footprint here trades a little bit of contact-shadow sharpness on solid blocks for killing that
-// sparkle, which matters far more for how foliage shadows read. Cascade 1/2 stay tight since distant
-// shadows are naturally soft anyway and don't show this artifact as strongly.
+// sparkle, which matters far more for how foliage shadows read.
+//
+// Cascade 2's old assumption ("distant shadows are naturally soft anyway and don't show this artifact as
+// strongly") turned out to be backwards for foliage specifically — player-reported "shadow on leaves from
+// afar look noisy/pulsing... some too dark, some not dark at all." Cascade 2 covers a much larger
+// world-space area per shadow-map texel than cascade 0 (coarser effective resolution), so each texel
+// represents a bigger chunk of a tree's leaf-cutout pattern — the alpha-cutout noise doesn't get smaller/
+// softer at distance, it gets COARSER (larger, blockier noise clumps), and a narrow 4-tap kernel was
+// nowhere near wide/dense enough to average that out, unlike cascade 0's deliberately wide 9-tap
+// treatment for the same underlying problem at close range. Widened + upgraded to the full 9-tap kernel
+// (was 4-tap) so distant foliage gets the same "blend the alpha-cutout noise into a soft, stable shadow
+// instead of a noisy/pulsing one" treatment cascade 0 already has, rather than the opposite.
 const float PCF_KERNEL_RADIUS_C0 = 2.0;  // cascade 0: wide enough to average out leaf/grass cutout noise
 const float PCF_KERNEL_RADIUS_C1 = 1.2;  // cascade 1: smooth mid-range
-const float PCF_KERNEL_RADIUS_C2 = 1.5;  // cascade 2: smooth far penumbra
+const float PCF_KERNEL_RADIUS_C2 = 3.5;  // cascade 2: wide enough for distant foliage's coarser cutout noise
 
 // Per-fragment interleaved-gradient-noise angle, used to rotate the Poisson disk so its sample pattern
 // isn't screen-aligned. Without this, the fixed sample directions can beat against the shadow map's own
@@ -88,8 +108,22 @@ const vec2 poissonDiskFar[4] = vec2[](
 // Sample the given cascade shadow map with a Poisson-disk PCF kernel.
 // projCoords: [0,1]³ UV.xy + reference depth .z (with normal bias already applied)
 // kernelRadius: PCF spread in texels
-float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius, int samples) {
-	float angle = shadowKernelRotationAngle();
+// noRotation: skips the per-pixel kernel rotation (see below) for foliage self-shadowing specifically.
+float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius, int samples, bool noRotation) {
+	// shadowKernelRotationAngle is a function of gl_FragCoord ALONE — the same screen pixel gets the
+	// exact same rotation angle every single frame, forever (no time/frame dependence at all). For
+	// ordinary solid-ground shadows this successfully turns texel-grid shimmer into unstructured noise
+	// (its intended purpose) — but foliage self-shadowing (leaf-on-leaf occlusion within a canopy) has
+	// much higher per-texel contrast than ground shadows do, and a FIXED per-pixel rotation pattern
+	// applied to that high-contrast signal becomes visible as its own static, regular dot pattern baked
+	// onto the screen — player-reported "screen-door effect... like a CRT filter," worse up close
+	// (cascade 0's higher resolution/larger on-screen size makes the fixed pattern more visible, not the
+	// rotation itself behaving differently there). Foliage samples skip the rotation entirely instead —
+	// an unrotated kernel has no fixed-orientation grid-aliasing risk against the *screen*, only against
+	// the shadow map's own texel grid, which cascade 0's separately-widened kernel radius (see
+	// PCF_KERNEL_RADIUS_C0) already exists to blur past — trading "rotate to fight one artifact" for
+	// "rely on a wide kernel to fight it instead," since the rotation was the thing causing THIS artifact.
+	float angle = noRotation ? 0.0 : shadowKernelRotationAngle();
 	float s = sin(angle);
 	float cAngle = cos(angle);
 	float shadow = 0.0;
@@ -140,8 +174,20 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// always — all grass went dark and flickered). The player asked to revert to this known-good state
 	// rather than keep iterating; if the glow issue is revisited, don't repeat either of those two
 	// approaches — see the item in memory.md for what was tried and ruled out.
+	// isFoliage is also true for solid, axis-aligned cube-shaped leaf blocks (assets/cubyz/models/
+	// cube_leaf.obj, opted in via cube_leaf.zig.zon so the "Foliage Sway" wind animation applies to
+	// them) — NOT just thin cross-quad plants (cross.obj) this block-top snap was designed and verified
+	// for. A leaf block spans a full solid cube, not a single thin plane through the whole block height,
+	// so unlike grass it has no analogous self-occlusion problem to correct for; applying this snap to it
+	// anyway produced a rapid shadow flicker specifically under vertical player movement, since
+	// worldPosRelative.z legitimately varies fragment-to-fragment across a stacked, multi-block-tall
+	// canopy in a way it never does across one grass block. cross.obj's blade quads have diagonal
+	// (+-0.707, +-0.707, 0) normals; cube_leaf.obj (like any ordinary cube face) has axis-aligned normals
+	// — cheap, reliable, purely-geometric way to tell "thin cross-quad plant that needs this snap" apart
+	// from "solid cube-shaped foliage that doesn't," with no new per-quad data needed.
+	bool isCrossQuadFoliage = isFoliage && abs(normal.z) < 0.9;
 	float blockTopRelativeZ = worldPosRelative.z - fract(worldPosRelative.z + playerPositionFraction.z) + 1.0;
-	vec3 shadowTestPos = isFoliage ? vec3(worldPosRelative.xy, blockTopRelativeZ) : worldPosRelative;
+	vec3 shadowTestPos = isCrossQuadFoliage ? vec3(worldPosRelative.xy, blockTopRelativeZ) : worldPosRelative;
 	// Normal-offset bias: offsets position outward along face normal to eliminate self-shadowing acne.
 	// This applies to every non-foliage surface receiving a shadow, not just ground near grass — it's not
 	// grass-specific, so shrinking it trades less peter-panning gap (previously computed at ~0.2-0.4
@@ -151,7 +197,10 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// artifacts show up on steep hills or slanted terrain, raise this back up first before touching
 	// biasBlocks again.
 	const float normalOffsetBase = 0.02;
-	vec3 offsetPos = isFoliage ? shadowTestPos : (worldPosRelative + normal * (normalOffsetBase * (1.0 + float(cascade) * 0.5)));
+	// Gated on isCrossQuadFoliage (not the raw isFoliage) for the same reason as shadowTestPos above —
+	// solid cube-shaped leaf blocks should get the ordinary normal-offset acne bias like any other solid
+	// surface, not skip it the way thin cross-quad plants correctly do.
+	vec3 offsetPos = isCrossQuadFoliage ? shadowTestPos : (worldPosRelative + normal * (normalOffsetBase * (1.0 + float(cascade) * 0.5)));
 	vec4 lightSpacePos = csmLightSpaceMatrix[cascade] * vec4(offsetPos, 1.0);
 	vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 	projCoords = projCoords * 0.5 + 0.5; // clip [-1,1] → UV [0,1]
@@ -174,9 +223,19 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	float bias = biasBlocks/max(cascadeDepthRange, 1.0);
 	projCoords.z -= bias;
 
-	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0, 9);
-	else if (cascade == 1) return sampleCascadePCF(csmMap1, projCoords, PCF_KERNEL_RADIUS_C1, 9);
-	else return sampleCascadePCF(csmMap2, projCoords, PCF_KERNEL_RADIUS_C2, 4);
+	// Foliage self-shadowing (leaf-on-leaf occlusion within a canopy) skips the per-pixel kernel rotation
+	// entirely — see sampleCascadePCF's own doc comment for why (a fixed rotation pattern applied to
+	// foliage's high-contrast alpha-cutout signal reads as a static screen-space dot pattern, "screen-door
+	// effect"). Widened slightly (*1.4) alongside dropping the rotation: the rotation was doing some of
+	// the "spread samples out" work a fixed kernel orientation alone doesn't, so a small radius bump keeps
+	// foliage shadows at least as smooth as before, just without the fixed-pattern artifact.
+	float foliageKernelBoost = isFoliage ? 1.4 : 1.0;
+	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0 * foliageKernelBoost, 9, isFoliage);
+	else if (cascade == 1) return sampleCascadePCF(csmMap1, projCoords, PCF_KERNEL_RADIUS_C1 * foliageKernelBoost, 9, isFoliage);
+	// Was 4 (the coarse poissonDiskFar set) — upgraded to the full 9-tap kernel, matching cascades 0/1,
+	// per PCF_KERNEL_RADIUS_C2's own updated doc comment above (distant foliage needs MORE filtering to
+	// average out its coarser alpha-cutout noise, not less).
+	else return sampleCascadePCF(csmMap2, projCoords, PCF_KERNEL_RADIUS_C2 * foliageKernelBoost, 9, isFoliage);
 }
 
 // Main sun/moon terrain shadow function. Returns a multiplier in [shadowAmbientFloor, 1.0]:
@@ -191,15 +250,31 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 		? mix(1.0, baseAmbientFloor, shadowDarkness * 2.0)
 		: mix(baseAmbientFloor, baseAmbientFloor * 0.2, (shadowDarkness - 0.5) * 2.0);
 
+	// isFoliage is true both for thin cross-quad plants (cross.obj — grass, flowers) AND solid,
+	// axis-aligned cube-shaped leaf blocks (cube_leaf.obj, opted in only so the "Foliage Sway" wind
+	// animation applies — see sampleCascade's own doc comment for the full story and why this caused a
+	// rapid shadow flicker on leaves specifically under vertical movement). Only the former actually needs
+	// this function's foliage-specific self-occlusion handling; a solid cube's back face pointing away
+	// from the sun is exactly the ordinary "skip the shadow map, use the ambient floor" case every other
+	// solid block already gets. isCrossQuadFoliage re-derives the same cheap geometric test
+	// sampleCascade uses (diagonal cross.obj normals vs. axis-aligned cube normals) so this function's
+	// decisions and sampleCascade's stay consistent without needing a second flag threaded through the
+	// whole vertex->fragment pipeline.
+	bool isCrossQuadFoliage = isFoliage && abs(normal.z) < 0.9;
+
 	// Solid faces pointing away from or parallel to the sun (NdotL <= 0.001) receive ambient shadow floor
 	// immediately without sampling the shadow map, preventing grazing-angle depth bias jitter on side faces:
 	float NdotL = dot(normal, lightDir);
-	if (!isFoliage && NdotL <= 0.001) return shadowAmbientFloor;
+	if (!isCrossQuadFoliage && NdotL <= 0.001) return shadowAmbientFloor;
 
-	// Select cascade by camera view depth:
+	// Select cascade by camera view depth, clamped to the highest cascade that's actually active this
+	// session (see csmActiveCascades' own doc comment) — a fragment beyond the active range would
+	// otherwise select an inactive cascade as its PRIMARY sample (not just the cross-cascade blend
+	// fixed above), sampling a stale/never-rendered csmMap+csmLightSpaceMatrix the exact same way.
 	int cascade = 0;
 	if (cameraDepth > csmCascadeFar[0]) cascade = 1;
 	if (cameraDepth > csmCascadeFar[1]) cascade = 2;
+	cascade = min(cascade, csmActiveCascades - 1);
 
 	// Normal bias inputs, shared by every cascade this fragment samples:
 	float absNdotL = max(abs(NdotL), 0.05);
@@ -208,8 +283,14 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 
 	float light = sampleCascade(cascade, worldPosRelative, normal, tanTheta, isFoliage);
 
-	// Cross-fade into the next cascade over the last stretch of this one's range:
-	if (cascade < 2) {
+	// Cross-fade into the next cascade over the last stretch of this one's range — but only if that next
+	// cascade is actually active this session (see csmActiveCascades' own doc comment above). Blending
+	// into an inactive cascade means sampling csmMap[cascade+1] against a stale/never-computed
+	// csmLightSpaceMatrix[cascade+1], which is exactly what produced the player-reported close-range leaf
+	// shadow noise at low Dynamic Shadow Distance settings (that setting drops csmActiveCascades to 1,
+	// making this guard the actual fix — not a PCF/filtering change, which was tried first and mistargeted
+	// cascade 2 instead of this).
+	if (cascade < 2 && cascade + 1 < csmActiveCascades) {
 		float boundary = csmCascadeFar[cascade];
 		float blendWidth = boundary * 0.15;
 		float blendStart = boundary - blendWidth;
