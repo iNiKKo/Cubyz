@@ -30,6 +30,7 @@ pub const Samples = enum(u8) {
 	bloom_first_pass,
 	bloom_second_pass,
 	god_rays,
+	taa_resolve,
 	final_copy,
 	gui,
 };
@@ -52,6 +53,7 @@ const names = [_][]const u8{
 	"Bloom - First Pass",
 	"Bloom - Second Pass",
 	"God Rays",
+	"TAA resolve",
 	"Copy to screen",
 	"GUI Rendering",
 };
@@ -59,6 +61,10 @@ const names = [_][]const u8{
 const buffers = 4;
 var curBuffer: u2 = 0;
 var queryObjects: [buffers][@typeInfo(Samples).@"enum".fields.len]c_uint = undefined;
+// Conditional render passes (MSAA, TAA, bloom, shadows, etc.) do not submit a query every frame. Keep
+// track of which queries were actually issued for each ring-buffer slot so the overlay never presents an
+// old timing as if a currently disabled feature had rendered.
+var submitted: [buffers][@typeInfo(Samples).@"enum".fields.len]bool = @splat(@splat(false));
 
 var activeSample: ?Samples = null;
 
@@ -79,6 +85,7 @@ pub fn deinit() void {
 pub fn startQuery(sample: Samples) void {
 	std.debug.assert(activeSample == null); // There can be at most one active measurement at a time.
 	activeSample = sample;
+	submitted[curBuffer][@intFromEnum(sample)] = true;
 	c.glBeginQuery(c.GL_TIME_ELAPSED, queryObjects[curBuffer][@intFromEnum(sample)]);
 }
 
@@ -105,11 +112,15 @@ pub fn render() void {
 	var sum: isize = 0;
 	var y: f32 = 8;
 	inline for (0..queryObjects[curBuffer].len) |i| {
-		var result: u32 = undefined;
-		c.glGetQueryObjectuiv(queryObjects[curBuffer][i], c.GL_QUERY_RESULT, &result);
+		var result: u32 = 0;
+		if (submitted[curBuffer][i]) {
+			c.glGetQueryObjectuiv(queryObjects[curBuffer][i], c.GL_QUERY_RESULT, &result);
+		}
 		draw.print("{s}: {} µs", .{names[i], @divTrunc(result, 1000)}, 0, y, 8);
 		sum += result;
 		y += 8;
 	}
+	// This slot will receive the next frame's queries after GUI rendering finishes.
+	submitted[curBuffer] = @splat(false);
 	draw.print("Total: {} µs", .{@divTrunc(sum, 1000)}, 0, 0, 8);
 }

@@ -19,7 +19,7 @@ layout(location = 44) uniform mat4 csmLightSpaceMatrix[3];
 // View-space depth at which each cascade ends (where the next cascade takes over).
 layout(location = 47) uniform float csmCascadeFar[3];  // {24, 96, shadowDistance}
 // Resolution of each cascade's depth texture in texels (square).
-layout(location = 50) uniform float csmTexelSize;       // 1.0 / shadowMapSize
+layout(location = 50) uniform vec3 csmTexelSize;        // 1.0 / shadowMapSize, per cascade
 
 // Shared uniforms (explicit locations to avoid collisions with chunk_vertex.vert's locations 0-14):
 layout(location = 33) uniform bool shadowsEnabled;
@@ -97,19 +97,11 @@ float shadowKernelRotationAngle() {
 	return n * 6.2831853;
 }
 
-// 4-tap Poisson disk for distant Cascade 2 (fast & smooth far shadows):
-const vec2 poissonDiskFar[4] = vec2[](
-	vec2(-0.360,  0.933),
-	vec2( 0.408,  0.910),
-	vec2( 0.765, -0.644),
-	vec2(-0.545, -0.723)
-);
-
 // Sample the given cascade shadow map with a Poisson-disk PCF kernel.
 // projCoords: [0,1]³ UV.xy + reference depth .z (with normal bias already applied)
 // kernelRadius: PCF spread in texels
 // noRotation: skips the per-pixel kernel rotation (see below) for foliage self-shadowing specifically.
-float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius, int samples, bool noRotation) {
+float sampleCascadePCF(int cascade, sampler2DShadow shadowMap, vec3 projCoords, float kernelRadius, bool noRotation) {
 	// shadowKernelRotationAngle is a function of gl_FragCoord ALONE — the same screen pixel gets the
 	// exact same rotation angle every single frame, forever (no time/frame dependence at all). For
 	// ordinary solid-ground shadows this successfully turns texel-grid shimmer into unstructured noise
@@ -127,21 +119,12 @@ float sampleCascadePCF(sampler2DShadow shadowMap, vec3 projCoords, float kernelR
 	float s = sin(angle);
 	float cAngle = cos(angle);
 	float shadow = 0.0;
-	if (samples <= 4) {
-		for (int i = 0; i < 4; ++i) {
-			vec2 diskPoint = poissonDiskFar[i];
-			vec2 offset = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle) * kernelRadius * csmTexelSize;
-			shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
-		}
-		return shadow * 0.25;
-	} else {
-		for (int i = 0; i < 9; ++i) {
-			vec2 diskPoint = poissonDisk[i];
-			vec2 offset = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle) * kernelRadius * csmTexelSize;
-			shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
-		}
-		return shadow / 9.0;
+	for (int i = 0; i < 9; ++i) {
+		vec2 diskPoint = poissonDisk[i];
+		vec2 offset = vec2(diskPoint.x*cAngle - diskPoint.y*s, diskPoint.x*s + diskPoint.y*cAngle) * kernelRadius * csmTexelSize[cascade];
+		shadow += texture(shadowMap, vec3(projCoords.xy + offset, projCoords.z));
 	}
+	return shadow / 9.0;
 }
 
 // Samples one cascade's PCF shadow value for a given world position, including its own normal bias.
@@ -234,12 +217,11 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// the "spread samples out" work a fixed kernel orientation alone doesn't, so a small radius bump keeps
 	// foliage shadows at least as smooth as before, just without the fixed-pattern artifact.
 	float foliageKernelBoost = isFoliage ? 1.4 : 1.0;
-	if (cascade == 0) return sampleCascadePCF(csmMap0, projCoords, PCF_KERNEL_RADIUS_C0 * foliageKernelBoost, 9, isFoliage);
-	else if (cascade == 1) return sampleCascadePCF(csmMap1, projCoords, PCF_KERNEL_RADIUS_C1 * foliageKernelBoost, 9, isFoliage);
-	// Was 4 (the coarse poissonDiskFar set) — upgraded to the full 9-tap kernel, matching cascades 0/1,
-	// per PCF_KERNEL_RADIUS_C2's own updated doc comment above (distant foliage needs MORE filtering to
-	// average out its coarser alpha-cutout noise, not less).
-	else return sampleCascadePCF(csmMap2, projCoords, PCF_KERNEL_RADIUS_C2 * foliageKernelBoost, 9, isFoliage);
+	if (cascade == 0) return sampleCascadePCF(0, csmMap0, projCoords, PCF_KERNEL_RADIUS_C0 * foliageKernelBoost, isFoliage);
+	else if (cascade == 1) return sampleCascadePCF(1, csmMap1, projCoords, PCF_KERNEL_RADIUS_C1 * foliageKernelBoost, isFoliage);
+	// Cascade 2 deliberately uses the same full 9-tap kernel: distant foliage needs enough filtering to
+	// average its coarser alpha-cutout coverage into a stable soft shadow.
+	else return sampleCascadePCF(2, csmMap2, projCoords, PCF_KERNEL_RADIUS_C2 * foliageKernelBoost, isFoliage);
 }
 
 // Main sun/moon terrain shadow function. Returns a multiplier in [shadowAmbientFloor, 1.0]:
@@ -248,7 +230,9 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, bool isFoliage) {
 	if (!shadowsEnabled) return 1.0;
 
-	vec3 lightDir = normalize(sunDirection);
+	// getShadowLightDirection() normalizes this before renderer uploads the uniform. Avoid a redundant
+	// per-fragment reciprocal-square-root in terrain, transparent, and entity shaders.
+	vec3 lightDir = sunDirection;
 	float baseAmbientFloor = isSunlight ? shadowAmbientFloorDay : shadowAmbientFloorNight;
 	float shadowAmbientFloor = (shadowDarkness <= 0.5)
 		? mix(1.0, baseAmbientFloor, shadowDarkness * 2.0)

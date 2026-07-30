@@ -82,7 +82,7 @@ const UniformStruct = struct {
 	// CSM uniforms (replacing the old DDA raymarch uniforms):
 	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
 	csmCascadeFar: c_int,       // float[3] at location 47
-	csmTexelSize: c_int,         // float at location 50
+	csmTexelSize: c_int,         // vec3 at location 50 (one texel size per cascade)
 	csmActiveCascades: c_int,
 	handLightPositionRelative: c_int,
 	handLightColor: c_int,
@@ -299,7 +299,12 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 		// Upload flat array of 3×16 floats (column-major mat4 order as GL expects)
 		c.glUniformMatrix4fv(locations.csmLightSpaceMatrix, 3, c.GL_FALSE, @ptrCast(&csm.lightSpaceMatricesGL));
 		c.glUniform1fv(locations.csmCascadeFar, 3, @ptrCast(&csm.cascadeFarDistances));
-		c.glUniform1f(locations.csmTexelSize, 1.0 / @as(f32, @floatFromInt(renderer.CascadedShadowMap.shadowMapSize)));
+		const csmTexelSizes = [3]f32{
+			1.0 / @as(f32, @floatFromInt(csm.shadowMapSizes[0])),
+			1.0 / @as(f32, @floatFromInt(csm.shadowMapSizes[1])),
+			1.0 / @as(f32, @floatFromInt(csm.shadowMapSizes[2])),
+		};
+		c.glUniform3fv(locations.csmTexelSize, 1, @ptrCast(&csmTexelSizes));
 		c.glUniform1i(locations.csmActiveCascades, @intCast(csm.activeCascadeCount));
 		// Bind the 3 shadow map textures to bindings 6, 7, 8:
 		c.glActiveTexture(c.GL_TEXTURE6);

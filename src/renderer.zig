@@ -654,7 +654,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 			// (world->view, no translation — see game.zig's updateViewMatrix), so its transpose (applied
 			// at upload via glUniformMatrix4fv's transpose flag) already equals its inverse (view->world)
 			// for an orthonormal rotation matrix — the actual inversion this technique needs.
+			gpu_performance_measuring.stopQuery();
+			gpu_performance_measuring.startQuery(.taa_resolve);
 			TAA.render(playerPos, jitteredProjection, game.camera.viewMatrix);
+			gpu_performance_measuring.stopQuery();
+			gpu_performance_measuring.startQuery(.final_copy);
 			TAA.endFrame(playerPos, game.camera.viewMatrix, game.projectionMatrix);
 			taaJitterIndex +%= 1;
 		},
@@ -805,7 +809,9 @@ const TAA = struct { // MARK: TAA
 	var currentBuffer: graphics.FrameBuffer = undefined;
 	/// Ping-pong pair holding the actual temporal accumulation: one holds this frame's just-resolved
 	/// (blended-with-history) output, the other holds last frame's, swapping roles every frame — can't
-	/// read and write the same texture within one draw, hence two buffers instead of one.
+	/// read and write the same texture within one draw, hence two buffers instead of one. They are RGB
+	/// only: the resolve never reads or writes alpha, so packed R11G11B10F cuts history bandwidth in half
+	/// versus RGBA16F without discarding any colour data TAA uses.
 	var resolveBuffers: [2]graphics.FrameBuffer = undefined;
 	var resolveIndex: usize = 0;
 	var width: u31 = std.math.maxInt(u31);
@@ -860,7 +866,7 @@ const TAA = struct { // MARK: TAA
 			currentBuffer.updateSize(width, height, c.GL_RGBA8);
 			std.debug.assert(currentBuffer.validate());
 			for (&resolveBuffers) |*buffer| {
-				buffer.updateSize(width, height, c.GL_RGBA16F);
+				buffer.updateSize(width, height, c.GL_R11F_G11F_B10F);
 				std.debug.assert(buffer.validate());
 			}
 			hasHistory = false; // Old resolve buffers are the wrong size/stale — start fresh instead of sampling garbage/stretched history.
@@ -1804,14 +1810,27 @@ pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
 pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	pub const numCascades = 3;
 	pub var baseShadowMapSize: u31 = 2048;
+	/// Near shadows retain the requested map size. The mid/far cascades are intentionally softer and
+	/// cover much larger world areas, so rendering them at 75%/50% resolution avoids spending the same
+	/// fill rate on detail that their PCF filter and distance haze cannot preserve visually.
 	pub var shadowMapSize: u31 = 2048;
+	pub var shadowMapSizes: [numCascades]u31 = .{ 2048, 1536, 1024 };
+
+	fn updateCascadeMapSizes() void {
+		shadowMapSizes = .{
+			shadowMapSize,
+			@max(512, @divFloor(shadowMapSize * 3, 4)),
+			@max(512, @divFloor(shadowMapSize, 2)),
+		};
+	}
 
 	pub fn updateMapSize(scale: f32) void {
 		const newSize: u31 = @intFromFloat(@max(512.0, @trunc(@as(f32, @floatFromInt(baseShadowMapSize)) * scale)));
 		if (shadowMapSize != newSize) {
 			shadowMapSize = newSize;
+			updateCascadeMapSizes();
 			for (0..numCascades) |i| {
-				shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+				shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 			}
 		}
 	}
@@ -1861,8 +1880,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			const border = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
 			c.glBindTexture(c.GL_TEXTURE_2D, shadowFBs[i].depthTexture);
 			c.glTexParameterfv(c.GL_TEXTURE_2D, c.GL_TEXTURE_BORDER_COLOR, &border);
-			// Allocate the depth texture at the initial shadow map resolution.
-			shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+			// Allocate each cascade at its appropriate near/mid/far resolution.
+			shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 		}
 		shadowPipeline = graphics.Pipeline.init(
 			"assets/cubyz/shaders/shadow_depth.vert",
@@ -1900,7 +1919,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	/// getShadowRenderChunks' 360-degree occluder gathering, so coverage no longer depends on which way
 	/// the camera happens to be facing — at the cost of some shadow-map resolution being spent on
 	/// terrain outside the current view that a frustum-fitted cascade would have skipped.
-	fn computeLightSpaceMatrix(cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d, zMargin: f32) Mat4f {
+	fn computeLightSpaceMatrix(cascade: usize, cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d, zMargin: f32) Mat4f {
 		const radius = cascadeFarDepth;
 
 		// Add player's fractional offset in light space so snapping is relative to absolute world origin:
@@ -1916,7 +1935,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		const absZ = playerLightVec4[2];
 
 		const diameter = 2.0 * radius;
-		const texelSize = diameter / @as(f32, @floatFromInt(shadowMapSize));
+		const texelSize = diameter / @as(f32, @floatFromInt(shadowMapSizes[cascade]));
 
 		// Snap absolute world coordinates to exact texel multiples:
 		const snappedAbsX = @floor(absX / texelSize) * texelSize;
@@ -1956,10 +1975,12 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		else
 			4096;
 
-		if (shadowMapSize != desiredSize) {
+		const mapsResized = shadowMapSize != desiredSize;
+		if (mapsResized) {
 			shadowMapSize = desiredSize;
+			updateCascadeMapSizes();
 			for (0..numCascades) |i| {
-				shadowFBs[i].updateSize(shadowMapSize, shadowMapSize, c.GL_R8);
+				shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 			}
 		}
 
@@ -1999,7 +2020,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		blocks.meshes.blockTextureArray.bind();
 
 		c.glColorMask(c.GL_FALSE, c.GL_FALSE, c.GL_FALSE, c.GL_FALSE);
-		c.glViewport(0, 0, shadowMapSize, shadowMapSize);
 
 		const activeCascades: usize = if (settings.shadowDistance <= 24.0)
 			1
@@ -2015,6 +2035,13 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		// Replicated player models are dynamic occluders. Refresh the close cascade while one is nearby so
 		// their shadow follows network interpolation rather than waiting for the normal static 20-frame cache.
 		const refreshNearPlayerShadowEveryFrame = main.entity.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
+		// Refreshing all three cascades on the same cache tick made a regular frametime spike every
+		// `maxFrameAge` frames. The close map is always first; mid/far are allowed to follow during the
+		// next two frames. Their light-space matrices compensate camera translation meanwhile, and their
+		// already-soft distant shadows make the tiny sun-direction delay unnoticeable. During startup or
+		// after resizing, still build every map immediately so no cascade samples a blank depth texture.
+		const forceFullRefresh = shadowFrameCounter <= 2 or mapsResized;
+		var scheduledRefreshes: usize = 0;
 
 		for (0..activeCascades) |i| {
 			// Foliage vertices sway every render frame. Reusing its near CSM map for 20 frames makes its
@@ -2027,11 +2054,17 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
 			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
 			const cascadeMaxFrameAge: u32 = if ((refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame) and i == 0) 1 else maxFrameAge;
-			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or shadowFrameCounter <= 2;
-			if (needsReRender) {
+			const isImmediateNearRefresh = i == 0 and (refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame);
+			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or forceFullRefresh;
+			// A dynamic near map is mandatory every frame. Apart from that, submit only one due cascade per
+			// frame; this turns the former three-map hitch into three small, spread-out updates.
+			const canRefreshThisFrame = forceFullRefresh or isImmediateNearRefresh or scheduledRefreshes == 0;
+			if (needsReRender and canRefreshThisFrame) {
+				if (!isImmediateNearRefresh) scheduledRefreshes += 1;
 				lastRenderedFrame[i] = shadowFrameCounter;
 				renderedPlayerPos[i] = playerPos;
 				baseLightSpaceMatrices[i] = computeLightSpaceMatrix(
+					i,
 					cascadeFarDistances[i],
 					lightView,
 					playerPos,
@@ -2039,6 +2072,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 				);
 
 				shadowFBs[i].bind();
+				c.glViewport(0, 0, shadowMapSizes[i], shadowMapSizes[i]);
 				c.glClear(c.GL_DEPTH_BUFFER_BIT);
 				// The preceding cascade may have drawn avatar depth with its dedicated entity program.
 				// Rebind the terrain program before uploading its matrix for this cascade; otherwise the
