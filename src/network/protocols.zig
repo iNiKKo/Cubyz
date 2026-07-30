@@ -1189,8 +1189,8 @@ pub const heldLight = struct {
 		conn.send(.secure, id, writer.data.items);
 	}
 	pub fn broadcast(entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
-		const users = main.server.getUserListAndIncreaseRefCount(main.stackAllocator);
-		defer main.server.freeUserListAndDecreaseRefCount(main.stackAllocator, users);
+		const users = main.server.getUserList(main.stackAllocator);
+		defer main.stackAllocator.free(users);
 		for (users) |user| sendTo(user.conn, entityId, blockType, transform);
 	}
 	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {

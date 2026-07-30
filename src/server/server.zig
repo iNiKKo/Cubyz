@@ -860,8 +860,8 @@ pub fn connectInternal(user: *User) void {
 	user.conn.handShakeState.store(.complete, .monotonic);
 	// Send this only after the handshake payload: protocol dispatch deliberately rejects non-handshake
 	// packets until the client has completed loading its assets.
-	const heldLightUsers = getUserListAndIncreaseRefCount(main.stackAllocator);
-	defer freeUserListAndDecreaseRefCount(main.stackAllocator, heldLightUsers);
+	const heldLightUsers = getUserList(main.stackAllocator);
+	defer main.stackAllocator.free(heldLightUsers);
 	for (heldLightUsers) |other| {
 		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldLightBlock, other.heldLightTransform);
 	}
