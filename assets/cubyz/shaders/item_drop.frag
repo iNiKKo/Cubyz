@@ -88,13 +88,18 @@ void mainBlockDrop() {
 	}
 
 	vec3 pixelLight = ambientLight*max(vec3(normalVariation), texture(emissionSampler, textureCoords).r*4);
-	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
+	vec4 albedo = texture(textureSampler, textureCoords);
+	// Match foliage/entity alpha coverage under MSAA. The old ordered-dither alpha test produced
+	// dark one-sample outlines on tool icons and other textured item models.
+	float alphaDerivative = fwidth(albedo.a);
+	float coverage = clamp((albedo.a - 0.5) / max(alphaDerivative, 0.0001) + 0.5, 0.0, 1.0);
+	if (coverage < 0.001) discard;
+	fragColor = albedo*vec4(pixelLight, 1);
 	if (rawReflectivity > 0.01) {
 		fragColor.rgb += reflectionColor * pixelLight * specularSheen * 0.40;
 	}
 
-	if(!passDitherTest(fragColor.a)) discard;
-	fragColor.a = 1;
+	fragColor.a = coverage;
 	gl_FragDepth = gl_FragCoord.z;
 }
 

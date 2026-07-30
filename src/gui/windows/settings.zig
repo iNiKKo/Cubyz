@@ -20,6 +20,7 @@ pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 18);
 	list.add(Button.initText(.{0, 0}, 200, "Graphics", .{.onAction = gui.openWindowCallback("graphics")}));
 	list.add(Button.initText(.{0, 0}, 200, "Graphics+", .{.onAction = gui.openWindowCallback("graphics_plus")}));
+	list.add(Button.initText(.{0, 0}, 200, "Held Item Debug", .{.onAction = gui.openWindowCallback("held_item_debug")}));
 	list.add(Button.initText(.{0, 0}, 200, "Audio", .{.onAction = gui.openWindowCallback("audio")}));
 	list.add(Button.initText(.{0, 0}, 200, "Controls", .{.onAction = gui.openWindowCallback("controls")}));
 	list.add(Button.initText(.{0, 0}, 200, "Advanced Controls", .{.onAction = gui.openWindowCallback("advanced_controls")}));

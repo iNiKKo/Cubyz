@@ -76,7 +76,7 @@ pub const client = struct {
 			&.{},
 			.{},
 			.{.depthTest = true},
-			.{.attachments = &.{.alphaBlending}},
+			.{.attachments = &.{.noBlending}},
 		);
 		shadowPipeline = graphics.Pipeline.init(
 			"assets/cubyz/shaders/entity_shadow_depth.vert",
@@ -99,13 +99,13 @@ pub const client = struct {
 	}
 	pub fn clear() void {}
 
-	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, ent: *const main.client.Entity) void {
+	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f) void {
 		const entModel = component.entityModel.get();
 		if (entModel.nodeIndexMap.get("Head")) |headId| {
-			var headRot: f32 = ent.rot[0];
+			var headRot: f32 = rotation[0];
 			if (entModel.nodeIndexMap.get("Eyestalks")) |eyestalksId| {
-				const stalkRot = ent.rot[0]*0.25;
-				headRot = ent.rot[0]*0.75;
+				const stalkRot = rotation[0]*0.25;
+				headRot = rotation[0]*0.75;
 				component.nodes[eyestalksId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, stalkRot);
 			}
 			component.nodes[headId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, headRot);
@@ -126,13 +126,34 @@ pub const client = struct {
 		defer nodeBuffer.endRender();
 		shadowPipeline.bind(null);
 		c.glUniformMatrix4fv(shadowUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatrix.toGl()));
+		// The local avatar is deliberately absent from entity_manager so it is not drawn in first
+		// person. Its model component is still loaded from the handshake, so feed it directly to the
+		// depth-only pass when the client enables its own shadow.
+		if (settings.ownPlayerShadow) {
+			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
+				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
+					const pos = game.Player.getPosBlocking() - playerPos;
+					const rotation = game.camera.rotation;
+					updateNodeMatrices(component, rotation);
+					const entModel = component.entityModel.get();
+					entModel.bind();
+					entModel.defaultTexture.?.bindTo(0);
+					const modelMatrix = Mat4f.identity()
+						.mul(Mat4f.translation(Vec3f{ @floatCast(pos[0]), @floatCast(pos[1]), @floatCast(pos[2] - entModel.height/2) }))
+						.mul(Mat4f.rotationZ(-rotation[2]));
+					c.glUniformMatrix4fv(shadowUniforms.modelMatrix, 1, c.GL_TRUE, @ptrCast(&modelMatrix));
+					c.glUniform1ui(shadowUniforms.nodeBufferOffset, @intCast(component.bufferAllocation.start));
+					c.glDrawElements(c.GL_TRIANGLES, entModel.indexCount, c.GL_UNSIGNED_INT, null);
+				}
+			}
+		}
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |*component, id| {
 			// This pass is deliberately for player avatars only; generic entities keep their current rendering
 			// behaviour until they have their own shadow-quality policy.
 			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
-			if (id == game.Player.id and !settings.ownPlayerShadow) continue;
+			if (id == game.Player.id) continue;
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
-			updateNodeMatrices(component, ent);
+			updateNodeMatrices(component, ent.rot);
 			const entModel = component.entityModel.get();
 			entModel.bind();
 			entModel.defaultTexture.?.bindTo(0);
@@ -149,9 +170,13 @@ pub const client = struct {
 	pub fn hasNearbyPlayerShadowCaster(playerPos: Vec3d, radius: f64) bool {
 		main.client.entity_manager.mutex.lock();
 		defer main.client.entity_manager.mutex.unlock();
+		if (settings.ownPlayerShadow and entity.components.@"cubyz:model".client.get(game.Player.id) != null and entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
+			const offset = game.Player.getPosBlocking() - playerPos;
+			if (offset[0]*offset[0] + offset[1]*offset[1] + offset[2]*offset[2] <= radius*radius) return true;
+		}
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |_, id| {
 			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
-			if (id == game.Player.id and !settings.ownPlayerShadow) continue;
+			if (id == game.Player.id) continue;
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const offset = ent.getRenderPosition() - playerPos;
 			if (offset[0]*offset[0] + offset[1]*offset[1] + offset[2]*offset[2] <= radius*radius) return true;
@@ -217,7 +242,7 @@ pub const client = struct {
 			if (id == game.Player.id) continue; // don't process local player
 
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
-			updateNodeMatrices(component, ent);
+			updateNodeMatrices(component, ent.rot);
 		}
 
 		pipeline.bind(null);

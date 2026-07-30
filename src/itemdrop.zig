@@ -17,6 +17,7 @@ const settings = @import("settings.zig");
 const utils = @import("utils.zig");
 const vec = @import("vec.zig");
 const Mat4f = vec.Mat4f;
+const Vec2f = vec.Vec2f;
 const Vec3d = vec.Vec3d;
 const Vec3f = vec.Vec3f;
 const Vec3i = vec.Vec3i;
@@ -510,26 +511,55 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	pub var dropLightPositionRelative: Vec3f = @splat(0);
 	pub var dropLightColor: Vec3f = @splat(0);
 	pub var handLightRadius: f32 = 12.0;
+	/// Live developer controls for procedural-tool attachment. Kept out of persistent graphics
+	/// settings because they are temporary model-tuning values, but replicated through heldLight.
+	pub var heldToolOffset: Vec3f = .{0.0, 0.25, 0.10};
+	pub var heldToolRotation: Vec3f = .{-110.0, 0.0, 90.0};
+	pub var heldToolScale: f32 = 1.60;
 	const maxReplicatedPlayers = 1024;
 	pub const HeldLightTransform = Vec4f;
 	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
-	const RemoteHeldLight = struct { block: ?u16 = null, transform: HeldLightTransform = defaultHeldLightTransform };
-	var remoteHeldLights: [maxReplicatedPlayers]RemoteHeldLight = @splat(.{});
-	var lastSentHeldLightBlock: ?u16 = null;
+	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0 };
+	var remoteHeldItems: [maxReplicatedPlayers]RemoteHeldItem = @splat(.{});
+	const HeldItemIdentity = union(enum) { none: void, base: items.BaseItemIndex, procedural: *items.ProceduralItem };
+	var lastSentHeldItem: HeldItemIdentity = .{ .none = {} };
 	var lastSentHeldLightTransform: HeldLightTransform = defaultHeldLightTransform;
+	var lastSentHeldToolRotationYZ: Vec2f = .{0.0, 0.0};
+	var lastSentHeldToolScale: f32 = 1.0;
 	var sentInitialHeldLight: bool = false;
 
-	pub fn setRemoteHeldLight(entityId: main.entity.Entity, blockType: ?u16, transform: HeldLightTransform) void {
+	pub fn setRemoteHeldItem(entityId: main.entity.Entity, item: items.Item, transform: HeldLightTransform, toolRotationYZ: Vec2f, toolScale: f32) void {
 		const id = @intFromEnum(entityId);
-		if (id < maxReplicatedPlayers) remoteHeldLights[id] = .{ .block = blockType, .transform = transform };
+		if (id >= maxReplicatedPlayers) {
+			item.deinit();
+			return;
+		}
+		remoteHeldItems[id].item.deinit();
+		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale };
+	}
+	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers) return null;
+		const item = remoteHeldItems[id].item;
+		return if (item == .null) null else item;
 	}
 	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
-		const id = @intFromEnum(entityId);
-		return if (id < maxReplicatedPlayers) remoteHeldLights[id].block else null;
+		const item = remoteHeldItem(entityId) orelse return null;
+		if (item != .baseItem) return null;
+		const blockType = item.baseItem.block() orelse return null;
+		return if ((blocks.Block{ .typ = blockType, .data = 0 }).light() != 0) blockType else null;
 	}
 	pub fn remoteHeldLightTransform(entityId: main.entity.Entity) HeldLightTransform {
 		const id = @intFromEnum(entityId);
-		return if (id < maxReplicatedPlayers) remoteHeldLights[id].transform else defaultHeldLightTransform;
+		return if (id < maxReplicatedPlayers) remoteHeldItems[id].transform else defaultHeldLightTransform;
+	}
+	pub fn remoteHeldToolRotationYZ(entityId: main.entity.Entity) Vec2f {
+		const id = @intFromEnum(entityId);
+		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolRotationYZ else .{0.0, 0.0};
+	}
+	pub fn remoteHeldToolScale(entityId: main.entity.Entity) f32 {
+		const id = @intFromEnum(entityId);
+		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolScale else 1.0;
 	}
 	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
 	/// Keep the dynamic-light budget bounded. The closest remote lantern is the one that can visibly
@@ -576,11 +606,11 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
 		// The held state is replicated for every block item; only its emitted-light colour remains
 		// conditional below. This lets other players see ordinary building blocks in a hand too.
-		var heldLightBlock: ?u16 = null;
+		var heldItemIdentity: HeldItemIdentity = .{ .none = {} };
 		if (item == .baseItem) {
 			const baseItem = item.baseItem;
+			heldItemIdentity = .{ .base = baseItem };
 			if (baseItem.block()) |blockType| {
-				heldLightBlock = blockType;
 				const light = (blocks.Block{.typ = blockType, .data = 0}).light();
 				if (light != 0) {
 					handLightColor = Vec3f{
@@ -593,13 +623,20 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 					handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
 				}
 			}
+		} else if (item == .proceduralItem) {
+			heldItemIdentity = .{ .procedural = item.proceduralItem };
 		}
 		if (game.world) |world| {
-			const transform = defaultHeldLightTransform;
-			if (!sentInitialHeldLight or heldLightBlock != lastSentHeldLightBlock or !std.meta.eql(transform, lastSentHeldLightTransform)) {
-				main.network.protocols.heldLight.send(world.conn, heldLightBlock, transform);
-				lastSentHeldLightBlock = heldLightBlock;
+			const isTool = item == .proceduralItem;
+			const transform: HeldLightTransform = if (isTool) .{ heldToolOffset[0], heldToolOffset[1], heldToolOffset[2], heldToolRotation[0] } else defaultHeldLightTransform;
+			const toolRotationYZ: Vec2f = if (isTool) .{ heldToolRotation[1], heldToolRotation[2] } else .{0.0, 0.0};
+			const toolScale: f32 = if (isTool) heldToolScale else 1.0;
+			if (!sentInitialHeldLight or !std.meta.eql(heldItemIdentity, lastSentHeldItem) or !std.meta.eql(transform, lastSentHeldLightTransform) or !std.meta.eql(toolRotationYZ, lastSentHeldToolRotationYZ) or toolScale != lastSentHeldToolScale) {
+				main.network.protocols.heldLight.send(world.conn, item, transform, toolRotationYZ, toolScale);
+				lastSentHeldItem = heldItemIdentity;
 				lastSentHeldLightTransform = transform;
+				lastSentHeldToolRotationYZ = toolRotationYZ;
+				lastSentHeldToolScale = toolScale;
 				sentInitialHeldLight = true;
 			}
 		} else {
@@ -763,7 +800,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			&.{},
 			.{},
 			.{.depthTest = true},
-			.{.attachments = &.{.alphaBlending}},
+			.{.attachments = &.{.noBlending}},
 		);
 		itemModelSSBO = .init();
 		itemModelSSBO.bufferData(i32, &[3]i32{1, 1, 1});
@@ -863,30 +900,27 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		}
 	}
 
-	/// Render the emissive block that a remote player is carrying. This deliberately uses the exact
-	/// same voxel-item mesh path as dropped/first-person items, so lantern-like blocks keep their
-	/// authored model and emission instead of becoming a generic glowing sprite.
+	/// Render the selected item a remote player is carrying. This uses the same voxel-item mesh path
+	/// as dropped/first-person items, so procedural tools retain their generated artwork while
+	/// torches and lanterns keep their authored placed-block geometry.
 	pub fn renderRemoteHeldLights(ambientLight: Vec3f, playerPos: Vec3d) void {
 		main.client.entity_manager.mutex.lock();
 		defer main.client.entity_manager.mutex.unlock();
 		bindCommonUniforms(ambientLight);
 		for (main.client.entity_manager.entities.items()) |ent| {
 			if (ent.id == game.Player.id) continue;
-			const blockType = ItemDisplayManager.remoteHeldLight(ent.id) orelse continue;
-			const baseItem: items.BaseItemIndex = for (0..items.itemListSize) |index| {
-				const candidate: items.BaseItemIndex = @enumFromInt(index);
-				if (candidate.block() == blockType) break candidate;
-			} else continue;
-			const item: items.Item = .{ .baseItem = baseItem };
-			const emittedLight = (blocks.Block{ .typ = blockType, .data = 0 }).light();
+			const item = ItemDisplayManager.remoteHeldItem(ent.id) orelse continue;
+			const baseItem = if (item == .baseItem) item.baseItem else null;
+			const blockType = if (baseItem) |candidate| candidate.block() else null;
+			const emittedLight = getItemEmittedLight(item);
 			// Crafted/terrain blocks whose item falls back to the block texture read best as a small
 			// 3D held block. Ores/gems supply a dedicated inventory icon, so preserve that flat item
 			// silhouette instead of turning the ore's host-stone block into a cube in the hand. Lights
 			// are an explicit exception: torch/lantern geometry must stay 3D even with custom icons.
-			const useBlockModel = emittedLight != 0 or baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr;
+			const useBlockModel = if (baseItem) |candidate| blockType != null and (emittedLight[0] != 0 or emittedLight[1] != 0 or emittedLight[2] != 0 or candidate.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr) else false;
 			const model = if (useBlockModel) getBlockModel(item) else getModel(item);
 			const vertices: u31 = if (useBlockModel) model.len/2*6 else 36;
-			bindModelUniforms(model.index, if (useBlockModel) blockType else 0);
+			bindModelUniforms(model.index, if (useBlockModel) blockType.? else 0);
 			const blockPos: Vec3i = @floor(ent.pos);
 			const light: [6]u8 = main.renderer.mesh_storage.getLight(blockPos[0], blockPos[1], blockPos[2]) orelse @splat(0);
 			bindLightUniform(light, ambientLight, getItemEmittedLight(item));
@@ -915,14 +949,20 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(@as(f32, std.math.pi / 2.0)));
 			} else {
 				// Torch/ordinary block items use the tuned forward-hand transform.
-				const transform = ItemDisplayManager.remoteHeldLightTransform(ent.id);
-				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
-				modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
+			const transform = ItemDisplayManager.remoteHeldLightTransform(ent.id);
+			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
+			modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
+			if (item == .proceduralItem) {
+				const toolRotationYZ = ItemDisplayManager.remoteHeldToolRotationYZ(ent.id);
+				modelMatrix = modelMatrix.mul(Mat4f.rotationY(std.math.degreesToRadians(toolRotationYZ[0])));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(std.math.degreesToRadians(toolRotationYZ[1])));
+				modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(ItemDisplayManager.remoteHeldToolScale(ent.id))));
+			}
 			}
 			// Full blocks are deliberately half the light/item scale; otherwise a held stone/dirt
 			// cube obscures too much of the avatar. Flat ore/gem icons and custom light models retain
 			// their readable item scale.
-			const heldScale: f32 = if (useBlockModel and emittedLight == 0) 0.154 else 0.308;
+			const heldScale: f32 = if (useBlockModel and emittedLight[0] == 0 and emittedLight[1] == 0 and emittedLight[2] == 0) 0.154 else 0.308;
 			modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(heldScale)));
 			modelMatrix = modelMatrix.mul(Mat4f.translation(@splat(-0.5)));
 			drawItem(vertices, modelMatrix);

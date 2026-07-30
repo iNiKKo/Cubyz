@@ -97,7 +97,11 @@ void main() {
 	vec3 activeLightColor = max(handLightColor, dropLightColor);
 	vec3 selfEmission = (handLightRadius > 0.0) ? activeLightColor * 0.7 : vec3(0.0);
 	vec3 light = min(max(directSunAndShadow + handLight + outBlockLight, selfEmission), vec3(1.0));
-	fragColor = texture(textureSampler, outTexCoord)*vec4(light*lightVariation(normal), 1);
-	if(!passDitherTest(fragColor.a)) discard;
-	fragColor.a = 1;
+	vec4 albedo = texture(textureSampler, outTexCoord);
+	// Entity textures exported by Blockbench are hard alpha-mask assets (not translucent sprites).
+	// Keep their 0/1 coverage exact: partial alpha-to-coverage was blending the transparent black
+	// texels into the pixel-art silhouette and left dark MSAA strings on Snale/Cubert-style models.
+	if (albedo.a < 0.05) discard;
+	fragColor = albedo*vec4(light*lightVariation(normal), 1);
+	fragColor.a = 1.0;
 }

@@ -1158,47 +1158,58 @@ pub const EntityComponentUpdate = struct { // MARK: EntityComponentUpdate
 	}
 };
 
-/// Cosmetic held-light replication. The server remains authoritative for world lighting, but this
-/// small state lets every client render the same dynamic light carried by another player.
+/// Cosmetic held-item replication. The server remains authoritative for world lighting, but this
+/// state lets every client render another player's selected block or procedural tool.
 pub const heldLight = struct {
 	pub const id: u8 = 16;
-	const none: u16 = 0xffff;
 
 	fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
 		const entityId: main.entity.Entity = @enumFromInt(try reader.readVarInt(u32));
-		const blockType = try reader.readInt(u16);
+		const item = (try main.items.ItemStack.fromBytes(reader)).item;
 		const transform = try reader.readVec(main.vec.Vec4f);
-		main.itemdrop.ItemDisplayManager.setRemoteHeldLight(entityId, if (blockType == none) null else blockType, transform);
+		const toolRotationYZ = try reader.readVec(main.vec.Vec2f);
+		const toolScale = try reader.readFloat(f32);
+		main.itemdrop.ItemDisplayManager.setRemoteHeldItem(entityId, item, transform, toolRotationYZ, toolScale);
 	}
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
-		const blockType = try reader.readInt(u16);
+		const item = (try main.items.ItemStack.fromBytes(reader)).item;
 		const transform = try reader.readVec(main.vec.Vec4f);
-		const lightBlock: ?u16 = if (blockType == none) null else blockType;
-		// This is cosmetic held-block state. Actual voxel illumination stays client-side and checks
-		// Block.light(), so a non-emissive block can be visible in a hand without becoming a light.
+		const toolRotationYZ = try reader.readVec(main.vec.Vec2f);
+		const toolScale = try reader.readFloat(f32);
+		// This is cosmetic state. Actual voxel illumination remains client-side and derives only from
+		// a carried block's normal Block.light() value.
 		const user = conn.user.?;
-		user.heldLightBlock = lightBlock;
+		user.heldItem.deinit();
+		user.heldItem = item;
 		user.heldLightTransform = transform;
-		broadcast(user.id, lightBlock, transform);
+		user.heldToolRotationYZ = toolRotationYZ;
+		user.heldToolScale = toolScale;
+		broadcast(user.id, item, transform, toolRotationYZ, toolScale);
 	}
-	pub fn send(conn: *Connection, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
-		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 18);
+	pub fn send(conn: *Connection, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
+		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
-		writer.writeInt(u16, blockType orelse none);
+		var itemStack = main.items.ItemStack{ .item = item, .amount = if (item == .null) 0 else 1 };
+		itemStack.toBytes(&writer);
 		writer.writeVec(main.vec.Vec4f, transform);
+		writer.writeVec(main.vec.Vec2f, toolRotationYZ);
+		writer.writeFloat(f32, toolScale);
 		conn.send(.secure, id, writer.data.items);
 	}
-	pub fn broadcast(entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
+	pub fn broadcast(entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
 		const users = main.server.getUserList(main.stackAllocator);
 		defer main.stackAllocator.free(users);
-		for (users) |user| sendTo(user.conn, entityId, blockType, transform);
+		for (users) |user| sendTo(user.conn, entityId, item, transform, toolRotationYZ, toolScale);
 	}
-	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
-		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 24);
+	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
+		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
 		writer.writeVarInt(u32, @intFromEnum(entityId));
-		writer.writeInt(u16, blockType orelse none);
+		var itemStack = main.items.ItemStack{ .item = item, .amount = if (item == .null) 0 else 1 };
+		itemStack.toBytes(&writer);
 		writer.writeVec(main.vec.Vec4f, transform);
+		writer.writeVec(main.vec.Vec2f, toolRotationYZ);
+		writer.writeFloat(f32, toolScale);
 		conn.send(.secure, id, writer.data.items);
 	}
 };

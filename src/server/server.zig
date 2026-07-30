@@ -116,9 +116,11 @@ pub const User = struct { // MARK: User
 	receivedFirstEntityData: bool = false,
 	isLocal: bool = false,
 	id: main.entity.Entity = .noValue,
-	/// Cosmetic held emissive block, replicated to clients through protocols.heldLight.
-	heldLightBlock: ?u16 = null,
+	/// Cosmetic selected item, replicated to clients through protocols.heldLight.
+	heldItem: main.items.Item = .null,
 	heldLightTransform: main.vec.Vec4f = .{ 0.0, 0.12, 0.0, -90.0 },
+	heldToolRotationYZ: main.vec.Vec2f = .{ 0.0, 0.0 },
+	heldToolScale: f32 = 1.0,
 	// TODO: ipPort: []const u8,
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
@@ -223,6 +225,7 @@ pub const User = struct { // MARK: User
 		}
 
 		self.worldEditData.deinit();
+		self.heldItem.deinit();
 
 		if (self.player().id != .noValue) {
 			self.player().deinit(.server);
@@ -272,7 +275,17 @@ pub const User = struct { // MARK: User
 	pub fn identifyAsLocal(self: *User, name: []const u8) !void {
 		std.debug.assert(self.name.len == 0);
 		self.name = main.globalAllocator.dupe(u8, name);
-		self.playerIndex = world.?.localPlayerIndex;
+		// Upstream's job scheduler uses playerIndex as its live routing key. A testing-mode
+		// singleplayer host may accept a second local connection with the same account, so give
+		// that external test client a fresh temporary identity while preserving the host's saved
+		// local-player identity. This is deliberately scoped to developer testing; normal joins
+		// retain their existing authentication/save behaviour.
+		if (world.?.settings.testingMode and !self.isLocal) {
+			self.playerIndex = world.?.nextPlayerIndex.fetchAdd(1, .monotonic);
+			std.log.info("Assigned temporary testing player index {d} to {s}", .{self.playerIndex, name});
+		} else {
+			self.playerIndex = world.?.localPlayerIndex;
+		}
 	}
 
 	pub fn verifySignatures(self: *User, reader: *BinaryReader) !void {
@@ -863,7 +876,7 @@ pub fn connectInternal(user: *User) void {
 	const heldLightUsers = getUserList(main.stackAllocator);
 	defer main.stackAllocator.free(heldLightUsers);
 	for (heldLightUsers) |other| {
-		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldLightBlock, other.heldLightTransform);
+		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldItem, other.heldLightTransform, other.heldToolRotationYZ, other.heldToolScale);
 	}
 
 	// TODO: addEntity(player);

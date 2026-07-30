@@ -405,12 +405,17 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	}
 
 	gpu_performance_measuring.startQuery(.entity_rendering);
+	// Entity models use hard alpha masks (their Blockbench-exported material mode), while item icons
+	// use coverage smoothing below. Do not apply A2C to entities: it blends transparent black texels
+	// into their silhouettes and causes the MSAA strings visible on Snale/Cubert models.
 	main.entity.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
 	// Entities don't cast shadows: the voxel raymarch (see ShadowRaymarch) only tests against static
 	// terrain occupancy, not entity meshes.
 
+	if (msaaActive) c.glEnable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
 	itemdrop.ItemDropRenderer.renderRemoteHeldLights(ambientLight, playerPos);
+	if (msaaActive) c.glDisable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	gpu_performance_measuring.stopQuery();
 
 	gpu_performance_measuring.startQuery(.block_entity_rendering);
