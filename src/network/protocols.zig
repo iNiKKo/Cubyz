@@ -1169,13 +1169,15 @@ pub const heldLight = struct {
 		const transform = try reader.readVec(main.vec.Vec4f);
 		const toolRotationYZ = try reader.readVec(main.vec.Vec2f);
 		const toolScale = try reader.readFloat(f32);
-		main.itemdrop.ItemDisplayManager.setRemoteHeldItem(entityId, item, transform, toolRotationYZ, toolScale);
+		const miningSwing = try reader.readFloat(f32);
+		main.itemdrop.ItemDisplayManager.setRemoteHeldItem(entityId, item, transform, toolRotationYZ, toolScale, miningSwing);
 	}
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		const item = (try main.items.ItemStack.fromBytes(reader)).item;
 		const transform = try reader.readVec(main.vec.Vec4f);
 		const toolRotationYZ = try reader.readVec(main.vec.Vec2f);
 		const toolScale = try reader.readFloat(f32);
+		const miningSwing = try reader.readFloat(f32);
 		// This is cosmetic state. Actual voxel illumination remains client-side and derives only from
 		// a carried block's normal Block.light() value.
 		const user = conn.user.?;
@@ -1184,9 +1186,10 @@ pub const heldLight = struct {
 		user.heldLightTransform = transform;
 		user.heldToolRotationYZ = toolRotationYZ;
 		user.heldToolScale = toolScale;
-		broadcast(user.id, item, transform, toolRotationYZ, toolScale);
+		user.heldMiningSwing = miningSwing;
+		broadcast(user.id, item, transform, toolRotationYZ, toolScale, miningSwing);
 	}
-	pub fn send(conn: *Connection, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
+	pub fn send(conn: *Connection, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32, miningSwing: f32) void {
 		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
 		var itemStack = main.items.ItemStack{ .item = item, .amount = if (item == .null) 0 else 1 };
@@ -1194,14 +1197,15 @@ pub const heldLight = struct {
 		writer.writeVec(main.vec.Vec4f, transform);
 		writer.writeVec(main.vec.Vec2f, toolRotationYZ);
 		writer.writeFloat(f32, toolScale);
+		writer.writeFloat(f32, miningSwing);
 		conn.send(.secure, id, writer.data.items);
 	}
-	pub fn broadcast(entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
+	pub fn broadcast(entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32, miningSwing: f32) void {
 		const users = main.server.getUserList(main.stackAllocator);
 		defer main.stackAllocator.free(users);
-		for (users) |user| sendTo(user.conn, entityId, item, transform, toolRotationYZ, toolScale);
+		for (users) |user| sendTo(user.conn, entityId, item, transform, toolRotationYZ, toolScale, miningSwing);
 	}
-	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32) void {
+	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32, miningSwing: f32) void {
 		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
 		writer.writeVarInt(u32, @intFromEnum(entityId));
@@ -1210,6 +1214,7 @@ pub const heldLight = struct {
 		writer.writeVec(main.vec.Vec4f, transform);
 		writer.writeVec(main.vec.Vec2f, toolRotationYZ);
 		writer.writeFloat(f32, toolScale);
+		writer.writeFloat(f32, miningSwing);
 		conn.send(.secure, id, writer.data.items);
 	}
 };

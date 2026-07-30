@@ -121,6 +121,7 @@ pub const User = struct { // MARK: User
 	heldLightTransform: main.vec.Vec4f = .{ 0.0, 0.12, 0.0, -90.0 },
 	heldToolRotationYZ: main.vec.Vec2f = .{ 0.0, 0.0 },
 	heldToolScale: f32 = 1.0,
+	heldMiningSwing: f32 = -1.0,
 	// TODO: ipPort: []const u8,
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
@@ -876,7 +877,7 @@ pub fn connectInternal(user: *User) void {
 	const heldLightUsers = getUserList(main.stackAllocator);
 	defer main.stackAllocator.free(heldLightUsers);
 	for (heldLightUsers) |other| {
-		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldItem, other.heldLightTransform, other.heldToolRotationYZ, other.heldToolScale);
+		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldItem, other.heldLightTransform, other.heldToolRotationYZ, other.heldToolScale, other.heldMiningSwing);
 	}
 
 	// TODO: addEntity(player);

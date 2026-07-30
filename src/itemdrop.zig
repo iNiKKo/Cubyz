@@ -536,23 +536,24 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	const maxReplicatedPlayers = 1024;
 	pub const HeldLightTransform = Vec4f;
 	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
-	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0 };
+	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0, miningSwing: f32 = -1.0 };
 	var remoteHeldItems: [maxReplicatedPlayers]RemoteHeldItem = @splat(.{});
 	const HeldItemIdentity = union(enum) { none: void, base: items.BaseItemIndex, procedural: *items.ProceduralItem };
 	var lastSentHeldItem: HeldItemIdentity = .{ .none = {} };
 	var lastSentHeldLightTransform: HeldLightTransform = defaultHeldLightTransform;
 	var lastSentHeldToolRotationYZ: Vec2f = .{0.0, 0.0};
 	var lastSentHeldToolScale: f32 = 1.0;
+	var lastSentMiningSwing: f32 = -1.0;
 	var sentInitialHeldLight: bool = false;
 
-	pub fn setRemoteHeldItem(entityId: main.entity.Entity, item: items.Item, transform: HeldLightTransform, toolRotationYZ: Vec2f, toolScale: f32) void {
+	pub fn setRemoteHeldItem(entityId: main.entity.Entity, item: items.Item, transform: HeldLightTransform, toolRotationYZ: Vec2f, toolScale: f32, miningSwing: f32) void {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) {
 			item.deinit();
 			return;
 		}
 		remoteHeldItems[id].item.deinit();
-		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale };
+		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale, .miningSwing = miningSwing };
 	}
 	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
 		const id = @intFromEnum(entityId);
@@ -578,6 +579,11 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		const id = @intFromEnum(entityId);
 		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolScale else 1.0;
 	}
+	pub fn remoteMiningSwing(entityId: main.entity.Entity) ?f32 {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers or remoteHeldItems[id].miningSwing < 0) return null;
+		return remoteHeldItems[id].miningSwing;
+	}
 	/// Remote held procedural items are deserialized per client and owned by this cache. Release them
 	/// when leaving a world and at renderer shutdown so a remote player holding a tool cannot leak its
 	/// ProceduralItem allocation.
@@ -590,6 +596,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		lastSentHeldLightTransform = defaultHeldLightTransform;
 		lastSentHeldToolRotationYZ = .{0.0, 0.0};
 		lastSentHeldToolScale = 1.0;
+		lastSentMiningSwing = -1.0;
 		sentInitialHeldLight = false;
 	}
 	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
@@ -666,12 +673,14 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 			const transform: HeldLightTransform = if (isTool) .{ heldToolOffset[0], heldToolOffset[1], heldToolOffset[2], heldToolRotation[0] } else defaultHeldLightTransform;
 			const toolRotationYZ: Vec2f = if (isTool) .{ heldToolRotation[1], heldToolRotation[2] } else .{0.0, 0.0};
 			const toolScale: f32 = if (isTool) heldToolScale else 1.0;
-			if (!sentInitialHeldLight or !std.meta.eql(heldItemIdentity, lastSentHeldItem) or !std.meta.eql(transform, lastSentHeldLightTransform) or !std.meta.eql(toolRotationYZ, lastSentHeldToolRotationYZ) or toolScale != lastSentHeldToolScale) {
-				main.network.protocols.heldLight.send(world.conn, item, transform, toolRotationYZ, toolScale);
+			const miningSwing = main.renderer.MeshSelection.heldItemSwingProgress() orelse -1.0;
+			if (!sentInitialHeldLight or !std.meta.eql(heldItemIdentity, lastSentHeldItem) or !std.meta.eql(transform, lastSentHeldLightTransform) or !std.meta.eql(toolRotationYZ, lastSentHeldToolRotationYZ) or toolScale != lastSentHeldToolScale or miningSwing != lastSentMiningSwing) {
+				main.network.protocols.heldLight.send(world.conn, item, transform, toolRotationYZ, toolScale, miningSwing);
 				lastSentHeldItem = heldItemIdentity;
 				lastSentHeldLightTransform = transform;
 				lastSentHeldToolRotationYZ = toolRotationYZ;
 				lastSentHeldToolScale = toolScale;
+				lastSentMiningSwing = miningSwing;
 				sentInitialHeldLight = true;
 			}
 		} else {

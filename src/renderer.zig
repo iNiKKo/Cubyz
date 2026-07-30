@@ -2217,6 +2217,14 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 	var currentBlockProgress: f32 = 0;
 	var currentSwingProgress: f32 = 0;
 	var currentSwingTime: f32 = 0;
+	var lastMiningInputTime: std.Io.Timestamp = .fromNanoseconds(0);
+	/// Normalized current mining swing for cosmetic model animation. Null means the player is not
+	/// actively breaking a block; keep the authoritative mining logic above independent from rendering.
+	pub fn heldItemSwingProgress() ?f32 {
+		const elapsedSinceInput = lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds();
+		if (currentSwingTime <= 0 or elapsedSinceInput > 150_000_000) return null;
+		return std.math.clamp(currentSwingProgress/currentSwingTime, 0.0, 1.0);
+	}
 	var selectionMin: Vec3f = undefined;
 	var selectionMax: Vec3f = undefined;
 	var selectionNormal: Vec3f = undefined;
@@ -2358,6 +2366,14 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 	}
 
 	pub fn breakBlock(inventory: main.items.Inventory.ClientInventory, slot: u32, deltaTime: f64) void {
+		const now = main.timestamp();
+		// Releasing the mining control leaves the old damage timer intact until the next click. Reset
+		// its cosmetic phase after a short input gap, otherwise the rendered arm freezes mid-swing.
+		if (lastMiningInputTime.durationTo(now).toNanoseconds() > 150_000_000) {
+			currentSwingProgress = 0;
+			currentSwingTime = 0;
+		}
+		lastMiningInputTime = now;
 		if (selectedBlockPos) |selectedPos| {
 			const stack = inventory.getStack(slot);
 			const isSelectionWand = stack.item == .baseItem and std.mem.eql(u8, stack.item.baseItem.id(), "cubyz:selection_wand");

@@ -113,12 +113,59 @@ pub const client = struct {
 	}
 	pub fn clear() void {}
 
-	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f) void {
+	/// Phase 1 animation: a deliberately subtle procedural idle pose. Resetting from the model's rest
+	/// nodes every update keeps this independent from later imported keyframe clips.
+	fn nodeHasAncestor(entModel: *const main.entityModel.EntityModel, nodeId: u16, ancestorId: u16) bool {
+		var current = entModel.nodeParents[nodeId];
+		while (current) |parent| {
+			if (parent == ancestorId) return true;
+			current = entModel.nodeParents[parent];
+		}
+		return false;
+	}
+
+	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f, isHoldingItem: bool, miningSwing: ?f32) void {
 		const entModel = component.entityModel.get();
+		@memcpy(component.nodes, entModel.nodes);
+		const elapsedNanoseconds = main.renderer.chunk_meshing.startTimestamp.durationTo(main.timestamp()).toNanoseconds();
+		const time: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
+		const phase = @as(f32, @floatFromInt(component.entityModel.index % 17)) * 0.73;
+		const breathe = @sin(time * 1.35 + phase);
+		const sway = @sin(time * 0.72 + phase);
+		const torsoId = entModel.nodeIndexMap.get("Torso");
+		if (torsoId) |id| {
+			component.nodes[id].pos[2] += breathe * 0.012;
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, sway * 0.018);
+		}
+		// Snale/Snela export Head and arms as separate roots; Cubert parents them under Torso.
+		// Make both layouts breathe as one upper body, without applying the offset twice to children.
+		inline for ([_][]const u8{"Head", "Eyestalks", "LeftArm", "RightArm"}) |name| {
+			if (entModel.nodeIndexMap.get(name)) |id| {
+				if (torsoId == null or !nodeHasAncestor(entModel, id, torsoId.?)) component.nodes[id].pos[2] += breathe * 0.012;
+			}
+		}
+		// Legs are planted rather than drifting with the breathing torso. This is a lightweight
+		// root-lock for the existing hierarchy; proper IK can replace it when locomotion arrives.
+		if (torsoId) |torso| {
+			inline for ([_][]const u8{"LeftLeg", "RightLeg"}) |name| {
+				if (entModel.nodeIndexMap.get(name)) |id| {
+					if (nodeHasAncestor(entModel, id, torso)) component.nodes[id].pos[2] -= breathe * 0.012;
+				}
+			}
+		}
+		// Every current player model places RightArm's node origin at the shoulder, so rotating this
+		// single existing arm node gives a clean shoulder-pivoted "present item" pose. A future
+		// UpperArm/Forearm rig can replace this with a real elbow bend without changing held-item logic.
+		if (isHoldingItem) {
+			if (entModel.nodeIndexMap.get("RightArm")) |id| {
+				const swing = if (miningSwing) |progress| @sin(progress * std.math.pi) * 0.80 else 0.0;
+				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -0.52 - swing);
+			}
+		}
 		if (entModel.nodeIndexMap.get("Head")) |headId| {
 			var headRot: f32 = rotation[0];
 			if (entModel.nodeIndexMap.get("Eyestalks")) |eyestalksId| {
-				const stalkRot = rotation[0]*0.25;
+				const stalkRot = rotation[0]*0.75;
 				headRot = rotation[0]*0.75;
 				component.nodes[eyestalksId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, stalkRot);
 			}
@@ -148,7 +195,7 @@ pub const client = struct {
 				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
 					const pos = game.Player.getPosBlocking() - playerPos;
 					const rotation = game.camera.rotation;
-					updateNodeMatrices(component, rotation);
+					updateNodeMatrices(component, rotation, game.Player.inventory.getItem(game.Player.selectedSlot) != .null, renderer.MeshSelection.heldItemSwingProgress());
 					const entModel = component.entityModel.get();
 					entModel.bind();
 					entModel.defaultTexture.?.bindTo(0);
@@ -167,7 +214,7 @@ pub const client = struct {
 			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
 			if (id == game.Player.id) continue;
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
-			updateNodeMatrices(component, ent.rot);
+			updateNodeMatrices(component, ent.rot, main.itemdrop.ItemDisplayManager.remoteHeldItem(id) != null, main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
 			const entModel = component.entityModel.get();
 			entModel.bind();
 			entModel.defaultTexture.?.bindTo(0);
@@ -256,7 +303,7 @@ pub const client = struct {
 			if (id == game.Player.id) continue; // don't process local player
 
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
-			updateNodeMatrices(component, ent.rot);
+			updateNodeMatrices(component, ent.rot, main.itemdrop.ItemDisplayManager.remoteHeldItem(id) != null, main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
 		}
 
 		pipeline.bind(null);
