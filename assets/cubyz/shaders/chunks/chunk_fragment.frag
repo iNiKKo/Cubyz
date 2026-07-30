@@ -126,10 +126,19 @@ void main() {
 	vec3 reflectionColor = vec3(0.0);
 	float specularSheen = 0.0;
 	if (rawReflectivity > 0.01) {
+		// A neutral sky/cubemap reflection on a saturated gem reads as flat chalk-white rather than as a
+		// polished material. Colour the broad reflected lobe from the material's albedo: ruby remains
+		// deep red, diamond/jade retain their cool hue, gold stays warm, while iron/silver naturally stay
+		// close to neutral because their base textures are nearly grey. Gamma lifting avoids crushing
+		// highlights in dark texture details.
+		vec3 materialTint = pow(texture(textureSampler, textureCoords).rgb, vec3(0.55));
 		vec3 reflDir = reflect(normalize(direction), normal);
-		reflectionColor = fixedCubeMapLookup(reflDir).rgb;
+		reflectionColor = fixedCubeMapLookup(reflDir).rgb * mix(vec3(1.0), materialTint, 0.82);
 		float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
-		specularSheen = rawReflectivity * (0.35 + 0.65 * fresnel);
+		// The texture maps already encode material class and roughness: coal/sulfur are zero, ore host
+		// stone stays black, raw veins are sparse/low, and crafted metals/cut gems are substantially
+		// brighter. Give those authored values enough response to be visibly distinguishable in play.
+		specularSheen = rawReflectivity * (0.28 + 0.72 * fresnel);
 	}
 
 	// isFoliage (the vertex-attribute int) is a real per-model flag set by models.zig from each model's
@@ -202,7 +211,10 @@ void main() {
 	vec3 pixelLight = max(totalLight*normalVariation, texture(emissionSampler, textureCoords).r*4);
 	fragColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
 	if (rawReflectivity > 0.01) {
-		fragColor.rgb += reflectionColor * pixelLight * specularSheen * 0.40;
+		// This is deliberately stronger than the old almost imperceptible 0.40 multiplier. It leaves
+		// truly matte maps at exactly zero, keeps raw ore as small glints, and makes polished metal/gem
+		// blocks and bars visibly read as a different material under normal daylight.
+		fragColor.rgb += reflectionColor * pixelLight * specularSheen * 0.95;
 	}
 
 	if(!passDitherTest(fragColor.a)) discard;

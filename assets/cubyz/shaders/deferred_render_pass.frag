@@ -16,6 +16,9 @@ layout(binding = 5) uniform sampler2D bloomColor;
 layout(binding = 10) uniform sampler2D godRayColor;
 // Premultiplied translucent cloud RGB + alpha, rendered separately from opaque terrain depth.
 layout(binding = 11) uniform sampler2D cloudColor;
+// Premultiplied water ceiling, rendered into a separate depth-writing target only while underwater.
+// This must be composited after underwater fog, which otherwise has no transparent-water depth to use.
+layout(binding = 12) uniform sampler2D waterSurfaceColor;
 
 layout(location = 1) uniform vec2 tanXY;
 layout(location = 2) uniform float zNear;
@@ -145,10 +148,47 @@ void main() {
 		float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
 		float fogDistance = calculateFogDistance(dist, densityAdjustment, playerWorldZ, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 		fragColor.rgb = applyFrontfaceFog(fogDistance, fog.color, fragColor.rgb);
+		if (fog.fogLower > 1e9) {
+			vec3 underwaterRay = normalize(direction);
+			float underwaterLookingUp = smoothstep(-0.15, 0.75, underwaterRay.z);
+			// Underwater distance is absorption-dominated here. A bright sky-coloured fog made the
+			// far band clearer than nearby terrain; this darker target is also used for open pixels.
+			// Looking upward retains a restrained orientation gradient, while the horizon/floor stays deep.
+			vec3 underwaterBackground = fog.color*mix(0.22, 0.72, underwaterLookingUp);
+			// Water needs a true visual end to visibility, not an indefinitely faint terrain
+			// silhouette. Once ordinary exponential fog has reduced transmission below about
+			// 55%, smoothly converge fully to water colour by 20% transmission.
+			float underwaterTransmission = exp(fogDistance);
+			float silhouetteFade = 1.0 - smoothstep(0.20, 0.55, underwaterTransmission);
+			fragColor.rgb = mix(fragColor.rgb, underwaterBackground, silhouetteFade);
+			// renderer.zig deliberately stops submitting terrain at 56 horizontal blocks underwater so
+			// distant LOD silhouettes cannot leak through the water. Fade fully into this exact water hue
+			// *before* that submission boundary; otherwise the last rendered chunk makes a crisp artificial
+			// ocean-floor/ceiling outline even though the terrain itself has been correctly culled.
+			// `dist` is camera/depth distance, while the CPU submission cap is horizontal world distance.
+			// At a steep downward/upward view these differ substantially, which left floor chunks outside
+			// the 56-block horizontal cap insufficiently fogged. Reconstruct the ray's horizontal range
+			// and fade earlier than the cap, making the visual transition use the same metric as culling.
+			float eyeDistance = dist*densityAdjustment;
+			float horizontalDistance = eyeDistance*length(underwaterRay.xy);
+			float underwaterDrawCapFade = smoothstep(36.0, 64.0, horizontalDistance);
+			// Must match the raw-depth underwater-sky branch below exactly. Fading to plain fog.color
+			// still leaves a dark/bright floor-shaped seam because the open-water background is darker
+			// looking down and brighter looking up.
+			fragColor.rgb = mix(fragColor.rgb, underwaterBackground, underwaterDrawCapFade);
+		}
 	} else {
 		if (fog.fogLower > 1e9) {
-			// Submerged underwater: smooth water tint for sky without circular mask shapes
-			fragColor.rgb = mix(fragColor.rgb, fog.color, 0.35);
+			// Submerged underwater: leaving most of the dark star/sky background visible makes
+			// every fogged terrain ridge read as a hard black outline. Converge sky pixels into
+			// the same water haze as terrain, with a subtle upward brightness gradient that
+			// helps orient the player toward the surface.
+			vec3 underwaterDirection = normalize(direction);
+			float lookingUp = smoothstep(-0.15, 0.75, underwaterDirection.z);
+			// Same absorption target as fogged terrain above. If these differ, the geometry cutoff
+			// becomes a visible bright horizon even when its own fade reaches 100%.
+			vec3 underwaterSky = fog.color * mix(0.22, 0.72, lookingUp);
+			fragColor.rgb = mix(fragColor.rgb, underwaterSky, 0.90);
 		} else {
 			// Loaded terrain forms a sphere around the player (see mesh_storage.zig's isInRenderDistance),
 			// not a cylinder: vertical chunk coverage shrinks toward zero right at the horizontal edge of
@@ -198,6 +238,8 @@ void main() {
 		float skyHaze = (1.0 - exp(-8.0*weatherFogStrength))*mix(0.65, 1.0, upwardness);
 		fragColor.rgb = mix(fragColor.rgb, fog.color, skyHaze);
 	}
+	vec4 waterSurface = texture(waterSurfaceColor, sampleCoords);
+	fragColor.rgb = waterSurface.rgb + fragColor.rgb*(1.0 - waterSurface.a);
 	float maxColor = max(1.0, max(fragColor.r, max(fragColor.g, fragColor.b)));
 	fragColor.rgb = fragColor.rgb/maxColor;
 }

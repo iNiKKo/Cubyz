@@ -1,5 +1,5 @@
 .{
-	.fogDensity = 0.010,
+	.fogDensity = 0.025,
 	.fogColor = 0x082858,
 	.frames = 16,
 	.time = 400,

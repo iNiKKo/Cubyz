@@ -236,9 +236,14 @@ void main() {
 	float normalVariation = lightVariation(normal);
 	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
 	float dist = zFromDepth(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r);
+	float waterDist = length(mvVertexPos);
 	float waterSurfaceDepth = mvVertexPos.y;
 	float waterColumnDepth = isWater ? max(0.0, dist - waterSurfaceDepth) : 0.0;
-	float depthExtinction = isWater ? exp(-0.16 * waterColumnDepth) : 1.0;
+	// The depth-buffer difference alone becomes near-zero when a shallow lake is viewed at a
+	// grazing angle, even though the line of sight travels a long way through water. Add a modest
+	// view-distance optical path so distant lake/ocean beds fade out rather than becoming clearer.
+	float waterOpticalDepth = waterColumnDepth + waterDist * 0.12;
+	float depthExtinction = isWater ? exp(-0.16 * waterOpticalDepth) : 1.0;
 	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fogData[int(animatedTextureIndex)].fogDensity, 1e10, 1e10);
 	float airFogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 	vec3 fogColor = unpackColor(fogData[int(animatedTextureIndex)].fogColor);
@@ -257,11 +262,18 @@ void main() {
 	// sky-tint contribution (skyRefl below) still applies with reflections off; only the costly per-pixel
 	// SSR search and the full fresnel-boosted specular sheen are skipped.
 	float materialReflectivity = texture(reflectivityAndAbsorptionSampler, textureCoords).a;
+	// Above a water surface, distant shallow bottoms need to disappear even when the depth buffer
+	// cannot provide a reliable water-column thickness at a grazing angle. Deliberately restrict this
+	// artistic surface opacity to upward-facing water viewed from above; underwater/side rendering is
+	// unchanged.
+	float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
+	bool aboveWaterSurface = isWater && normal.z > 0.9 && playerWorldZ > worldPos.z + 0.05;
+	bool belowWaterSurface = isWater && normal.z > 0.9 && playerWorldZ < worldPos.z - 0.05;
+	float surfaceDistanceFade = aboveWaterSurface ? 1.0 - exp(-waterDist * 0.035) : 0.0;
 
 	// Water ripple animation:
 	// Distance-fade out the ripples so close-up water has gentle motion, while distant water stays flat.
 	// This prevents distant ripples from tilting into the dark ground tint (which produced jarring black pixels far away).
-	float waterDist = length(mvVertexPos);
 	float rippleRangeFade = smoothstep(40.0, 10.0, waterDist);
 
 	// World-space organic ocean wave harmonics (no dot patterns, anchored to world coordinates):
@@ -306,6 +318,34 @@ void main() {
 		textureColor.rgb += reflColor * specularReflectivity * 0.70;
 	}
 	blendColor.rgb = vec3(1.0 - textureColor.a);
+	if (aboveWaterSurface) {
+		// As the surface recedes, transition toward deep water and strongly attenuate the
+		// scene already behind it. This is separate from underwater fog/caustics.
+		vec3 deepWater = vec3(0.015, 0.075, 0.11) * max(pixelLight, vec3(0.25)) * textureColor.a;
+		textureColor.rgb = mix(textureColor.rgb, deepWater, surfaceDistanceFade * 0.75);
+		blendColor.rgb *= 1.0 - surfaceDistanceFade * 0.90;
+	}
+	// Atmospheric sky fog is appropriate for ice/glass and for the world beyond water, but applying
+	// its bright sky colour *inside the water blend* makes a distant lake bed lighter and clearer.
+	// Above a water surface, replace that contribution with a deep-water extinction colour instead.
+	vec3 transparentFogColor = aboveWaterSurface ? vec3(0.012, 0.055, 0.085) : fog.color;
+
+	// Render the water ceiling through one dedicated path before the regular front/back-face split.
+	// Depending on the face's generated winding, the top surface can arrive through either path;
+	// tying the effect to `isBackFace` therefore left it invisible in practice. This is intentionally
+	// unlit enough to remain legible at night, and more opaque than ordinary water so it gives a
+	// reliable visual route toward air.
+	if (belowWaterSurface) {
+		float surfaceDepth = worldPos.z - playerWorldZ;
+		float surfaceProximity = exp(-surfaceDepth * 0.08);
+		vec3 undersideTextureCoords = vec3(vec2(1.0 - uv.x, uv.y), animatedTextureIndex);
+		vec3 undersidePattern = texture(textureSampler, undersideTextureCoords).rgb * (0.32 + 0.42 * surfaceProximity);
+		vec3 surfaceGlow = vec3(0.055, 0.24, 0.42) * (0.50 + 0.50 * surfaceProximity);
+		fragColor.rgb = undersidePattern + surfaceGlow;
+		blendColor.rgb = mix(vec3(0.34, 0.48, 0.62), vec3(0.12, 0.22, 0.34), surfaceProximity);
+		fragColor.a = 1.0;
+		return;
+	}
 
 	if(isBackFace == 0) {
 		vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;
@@ -317,14 +357,14 @@ void main() {
 		textureColor.rgb += texture(emissionSampler, textureCoords).rgb;
 
 		// Apply the air fog so frontface water surfaces blend naturally with atmospheric sky fog:
-		applyFrontfaceFog(airFogDistance, fog.color);
+		applyFrontfaceFog(airFogDistance, transparentFogColor);
 
 		// Apply the texture+absorption
 		fragColor.rgb *= blendColor.rgb;
 		fragColor.rgb += textureColor.rgb;
 
 		// Apply the air fog:
-		applyBackfaceFog(airFogDistance, fog.color);
+		applyBackfaceFog(airFogDistance, transparentFogColor);
 	} else if (isWater) {
 		// Water surface underside (backface) viewed from underwater:
 		// Caustic ripple pattern that modulates the sky/outside background color with dark wave lines and bright shimmering highlights.

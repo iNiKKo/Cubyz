@@ -40,6 +40,24 @@ const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
 pub const zNear = 0.1;
 pub const zFar = 65536.0; // TODO: Fix z-fighting problems.
 
+/// Underwater fog deliberately becomes fully opaque around this range. Do not submit more distant
+/// terrain while submerged: even a tiny remaining silhouette is much more noticeable underwater than
+/// the same terrain on land. Meshes remain loaded, so the ordinary full range returns in the first frame
+/// after the player reaches air.
+// Keep a meaningful underwater view when looking down, while still restricting the range enough for
+// dense water fog to hide distant LOD silhouettes. All underwater shader fades finish before this cap.
+const submergedTerrainRenderDistance: f64 = 72.0;
+
+fn isWithinSubmergedTerrainRenderRange(mesh: *const chunk_meshing.ChunkMesh, playerPos: Vec3d) bool {
+	const chunkSize: f64 = @floatFromInt(chunk.chunkSize * mesh.pos.voxelSize);
+	const halfSize = chunkSize * 0.5;
+	const centerX = @as(f64, @floatFromInt(mesh.pos.wx)) + halfSize;
+	const centerY = @as(f64, @floatFromInt(mesh.pos.wy)) + halfSize;
+	const nearX = @max(@abs(centerX - playerPos[0]) - halfSize, 0.0);
+	const nearY = @max(@abs(centerY - playerPos[1]) - halfSize, 0.0);
+	return nearX*nearX + nearY*nearY <= submergedTerrainRenderDistance*submergedTerrainRenderDistance;
+}
+
 var deferredRenderPassPipeline: graphics.Pipeline = undefined;
 var deferredUniforms: struct {
 	@"fog.color": c_int,
@@ -99,6 +117,8 @@ pub fn init() void {
 	worldFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
 	cloudFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
 	cloudFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGBA16F);
+	waterSurfaceFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
+	waterSurfaceFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGBA16F);
 	MSAA.init();
 	FXAA.init();
 	TAA.init();
@@ -126,6 +146,7 @@ pub fn deinit() void {
 	fakeReflectionPipeline.deinit();
 	worldFrameBuffer.deinit();
 	cloudFrameBuffer.deinit();
+	waterSurfaceFrameBuffer.deinit();
 	MSAA.deinit();
 	FXAA.deinit();
 	TAA.deinit();
@@ -169,6 +190,9 @@ var worldFrameBuffer: graphics.FrameBuffer = undefined;
 /// Premultiplied translucent cloud colour/alpha with a private per-frame depth copy. It receives opaque
 /// terrain depth before clouds render, then may add cloud depth without changing the terrain fog depth.
 var cloudFrameBuffer: graphics.FrameBuffer = undefined;
+/// Private premultiplied colour mask for the water surface as seen from underwater. It deliberately
+/// has its own depth copy: the normal transparent water target must remain depth-write-free.
+var waterSurfaceFrameBuffer: graphics.FrameBuffer = undefined;
 
 /// Standard TAA sub-pixel jitter sequence (Halton(2,3), 8 samples) covering the pixel footprint before
 /// repeating. Applied to a copy of game.projectionMatrix uploaded to frame_uniforms — see
@@ -216,6 +240,7 @@ pub fn updateViewport(width: u31, height: u31) void {
 	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
 	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
 	cloudFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
+	waterSurfaceFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
 	worldFrameBuffer.unbind();
 	fsr.updateSize(lastWidth, lastHeight, width, height);
 	CascadedShadowMap.updateMapSize(main.settings.resolutionScale);
@@ -330,6 +355,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	chunk_meshing.quadsDrawn = 0;
 	chunk_meshing.transparentQuadsDrawn = 0;
+	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
+	const isSubmerged = blocks.meshes.hasFog(playerBlock);
 	const meshes = mesh_storage.updateAndGetRenderChunks(world.conn, &frustum, playerPos, settings.renderDistance);
 
 	gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
@@ -355,6 +382,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
 	defer for (chunkLists) |list| list.deinit();
 	for (meshes) |mesh| {
+		if (isSubmerged and !isWithinSubmergedTerrainRenderRange(mesh, playerPos)) continue;
 		mesh.prepareRendering(&chunkLists);
 	}
 	gpu_performance_measuring.stopQuery();
@@ -419,6 +447,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		while (true) {
 			if (i == 0) break;
 			i -= 1;
+			if (isSubmerged and !isWithinSubmergedTerrainRenderRange(meshes[i], playerPos)) continue;
 			meshes[i].prepareTransparentRendering(playerPos, &chunkLists);
 		}
 		gpu_performance_measuring.stopQuery();
@@ -427,6 +456,21 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
+	// Transparent water is intentionally absent from worldFrameBuffer's depth texture, so its normal
+	// outside-facing draw cannot survive the deferred underwater-sky fog. Render a second, depth-writing
+	// mask only while submerged; it contains just top water faces above the camera and is composited after
+	// that fog, giving the player a reliable visible water ceiling without affecting ordinary water.
+	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
+	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, waterSurfaceFrameBuffer.frameBuffer);
+	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+	waterSurfaceFrameBuffer.bind();
+	c.glClearColor(0, 0, 0, 0);
+	c.glClear(c.GL_COLOR_BUFFER_BIT);
+	if (isSubmerged) {
+		chunk_meshing.drawUnderwaterSurfaceMask(&chunkLists, ambientLight);
+	}
+	worldFrameBuffer.bind();
+
 	// Drawn after transparent blocks (ice, glass, water, ...), not before: those don't write depth (see
 	// transparentPipeline's .depthWrite = false), so a cloud in front of one couldn't otherwise occlude
 	// it — the transparent block would draw right over the cloud regardless of which was actually closer
@@ -434,9 +478,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	// already correctly is. Drawing clouds last composites them over both opaque and transparent geometry
 	// alike, using the same depth test (against the opaque depth buffer, still the only depth transparent
 	// draws leave behind) that already made clouds correctly occlude opaque blocks.
-	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
-	const isSubmerged = blocks.meshes.hasFog(playerBlock);
-
 	// Clear every frame (including underwater/high-altitude frames) so a previous frame's cloud layer can
 	// never be composited after clouds are intentionally skipped. Copy opaque terrain depth into the cloud
 	// target first: clouds can depth-test against terrain and against each other, but terrain fog continues
@@ -483,6 +524,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
 	cloudFrameBuffer.bindTexture(c.GL_TEXTURE11);
+	waterSurfaceFrameBuffer.bindTexture(c.GL_TEXTURE12);
 	worldFrameBuffer.unbind();
 	deferredRenderPassPipeline.bind(null);
 	if (clouds.isPlayerInsideCloud(playerPos)) {

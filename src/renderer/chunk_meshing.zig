@@ -28,6 +28,9 @@ const mesh_storage = @import("mesh_storage.zig");
 
 var pipeline: graphics.Pipeline = undefined;
 var transparentPipeline: graphics.Pipeline = undefined;
+/// A dedicated, opaque mask of water surfaces viewed from below.  Regular transparent water cannot
+/// carry this information through the deferred fog pass because it deliberately does not write depth.
+var waterSurfacePipeline: graphics.Pipeline = undefined;
 /// Reference point for water-reflection ripple animation (transparent_fragment.frag) — same
 /// real-elapsed-time pattern clouds.zig/thin_clouds.zig use for their own wind animation.
 /// pub: also read by renderer.zig's CascadedShadowMap.update so the shadow depth pass's foliage sway
@@ -83,6 +86,7 @@ const UniformStruct = struct {
 };
 pub var uniforms: UniformStruct = undefined;
 pub var transparentUniforms: UniformStruct = undefined;
+var waterSurfaceUniforms: UniformStruct = undefined;
 
 pub var commandPipeline: graphics.ComputePipeline = undefined;
 pub var commandUniforms: struct {
@@ -143,6 +147,17 @@ pub fn init() void {
 			.alphaBlendOp = .add,
 		}}},
 	);
+	waterSurfacePipeline = graphics.Pipeline.init(
+		"assets/cubyz/shaders/chunks/chunk_vertex.vert",
+		"assets/cubyz/shaders/chunks/water_surface_fragment.frag",
+		"",
+		&waterSurfaceUniforms,
+		graphics.VertexArray.EmptyVertex,
+		&.{},
+		.{ .cullMode = .none },
+		.{.depthTest = true, .depthWrite = true, .depthCompare = .lessOrEqual},
+		.{.attachments = &.{.noBlending}},
+	);
 	commandPipeline = graphics.ComputePipeline.init("assets/cubyz/shaders/chunks/fillIndirectBuffer.comp", "", &commandUniforms);
 	occlusionTestPipeline = graphics.Pipeline.init(
 		"assets/cubyz/shaders/chunks/occlusionTestVertex.vert",
@@ -186,6 +201,7 @@ pub fn init() void {
 pub fn deinit() void {
 	pipeline.deinit();
 	transparentPipeline.deinit();
+	waterSurfacePipeline.deinit();
 	occlusionTestPipeline.deinit();
 	commandPipeline.deinit();
 	vao.deinit();
@@ -319,6 +335,12 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	vao.bind();
 }
 
+fn bindWaterSurfaceShaderAndUniforms(ambient: Vec3f) void {
+	waterSurfacePipeline.bind(null);
+	bindCommonUniforms(&waterSurfaceUniforms, ambient);
+	vao.bind();
+}
+
 pub fn bindBuffers(lod: usize) void {
 	faceBuffers[lod].ssbo.bind(faceBuffers[lod].binding);
 	lightBuffers[lod].ssbo.bind(lightBuffers[lod].binding);
@@ -330,6 +352,41 @@ pub fn drawChunksIndirect(chunkIds: *const [main.settings.highestSupportedLod + 
 		bindBuffers(lod);
 		drawChunksOfLod(chunkIds[lod].items, ambient, transparent);
 	}
+}
+
+/// Replays the already prepared transparent mesh into a private target while submerged. The fragment
+/// shader discards every face except a water top face above the camera, making an explicit inside-facing
+/// water ceiling without changing ordinary water blending or its depth behaviour.
+pub fn drawUnderwaterSurfaceMask(chunkIds: *const [main.settings.highestSupportedLod + 1]main.ListManaged(u32), ambient: Vec3f) void {
+	for (0..chunkIds.len) |i| {
+		const lod = main.settings.highestSupportedLod - i;
+		bindBuffers(lod);
+		drawUnderwaterSurfaceMaskOfLod(chunkIds[lod].items, ambient);
+	}
+}
+
+fn drawUnderwaterSurfaceMaskOfLod(chunkIDs: []const u32, ambient: Vec3f) void {
+	if (chunkIDs.len == 0) return;
+	const drawCallsEstimate: u31 = @intCast(chunkIDs.len);
+	var chunkIDAllocation: main.graphics.SubAllocation = .{.start = 0, .len = 0};
+	chunkIDBuffer.uploadData(chunkIDs, &chunkIDAllocation);
+	defer chunkIDBuffer.free(chunkIDAllocation);
+	const allocation = commandBuffer.rawAlloc(drawCallsEstimate);
+	defer commandBuffer.free(allocation);
+	commandPipeline.bind();
+	c.glUniform1f(commandUniforms.lodDistance, main.settings.@"lod0.5Distance");
+	c.glUniform1ui(commandUniforms.chunkIDIndex, chunkIDAllocation.start);
+	c.glUniform1ui(commandUniforms.commandIndexStart, allocation.start);
+	c.glUniform1ui(commandUniforms.size, @intCast(chunkIDs.len));
+	c.glUniform1i(commandUniforms.isTransparent, 1);
+	c.glUniform1i(commandUniforms.forceAllVisible, 1);
+	c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 0);
+	c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
+	c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
+
+	bindWaterSurfaceShaderAndUniforms(ambient);
+	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
+	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 }
 
 fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) void {
