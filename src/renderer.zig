@@ -410,6 +410,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	// terrain occupancy, not entity meshes.
 
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
+	itemdrop.ItemDropRenderer.renderRemoteHeldLights(ambientLight, playerPos);
 	gpu_performance_measuring.stopQuery();
 
 	gpu_performance_measuring.startQuery(.block_entity_rendering);
@@ -464,18 +465,18 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
-	// Transparent water is intentionally absent from worldFrameBuffer's depth texture, so its normal
-	// outside-facing draw cannot survive the deferred underwater-sky fog. Render a second, depth-writing
-	// mask only while submerged; it contains just top water faces above the camera and is composited after
-	// that fog, giving the player a reliable visible water ceiling without affecting ordinary water.
+	// Transparent water is intentionally absent from worldFrameBuffer's depth texture. Render a second,
+	// depth-writing mask after terrain: underwater it provides the visible ceiling, and during weather it
+	// prevents deferred terrain fog from revealing a far lake bed through a faded transparent surface.
 	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
 	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, waterSurfaceFrameBuffer.frameBuffer);
 	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
 	waterSurfaceFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
-	if (isSubmerged) {
-		chunk_meshing.drawUnderwaterSurfaceMask(&chunkLists, ambientLight);
+	const weatherWaterMask = !isSubmerged and world.dayTime.weatherVisibility > 0.001 and playerPos[2] < 6000.0;
+	if (isSubmerged or weatherWaterMask) {
+		chunk_meshing.drawWaterSurfaceMask(&chunkLists, ambientLight, weatherWaterMask);
 	}
 	worldFrameBuffer.bind();
 
@@ -2011,6 +2012,9 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		const maxDistSq: f64 = 2.0 * 2.0; // 2 blocks of player movement
 		const maxFrameAge: u32 = 20; // Far/static cascades remain cached while standing still.
 		const refreshNearFoliageShadowEveryFrame = settings.foliageSway and settings.foliageShadows;
+		// Replicated player models are dynamic occluders. Refresh the close cascade while one is nearby so
+		// their shadow follows network interpolation rather than waiting for the normal static 20-frame cache.
+		const refreshNearPlayerShadowEveryFrame = main.entity.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
 
 		for (0..activeCascades) |i| {
 			// Foliage vertices sway every render frame. Reusing its near CSM map for 20 frames makes its
@@ -2022,7 +2026,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
 			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
 			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
-			const cascadeMaxFrameAge: u32 = if (refreshNearFoliageShadowEveryFrame and i == 0) 1 else maxFrameAge;
+			const cascadeMaxFrameAge: u32 = if ((refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame) and i == 0) 1 else maxFrameAge;
 			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or shadowFrameCounter <= 2;
 			if (needsReRender) {
 				lastRenderedFrame[i] = shadowFrameCounter;
@@ -2036,6 +2040,15 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 
 				shadowFBs[i].bind();
 				c.glClear(c.GL_DEPTH_BUFFER_BIT);
+				// The preceding cascade may have drawn avatar depth with its dedicated entity program.
+				// Rebind the terrain program before uploading its matrix for this cascade; otherwise the
+				// terrain uniform location is interpreted against the entity program (GL_INVALID_OPERATION).
+				shadowPipeline.bind(null);
+				c.glUniform1i(43, @intFromBool(settings.foliageShadows));
+				c.glUniform3fv(37, 1, @ptrCast(&lightDir));
+				c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
+				c.glUniform1i(shadowPipelineUniforms.foliageSway, @intFromBool(settings.foliageSway));
+				c.glUniform2fv(shadowPipelineUniforms.weatherWind, 1, @ptrCast(&weatherWind));
 				c.glUniformMatrix4fv(shadowPipelineUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&baseLightSpaceMatrices[i].toGl()));
 
 				const meshes = mesh_storage.getShadowRenderChunks(playerPos, cascadeFarDistances[i], lightDir, occluderSunDists[i]);
@@ -2078,6 +2091,9 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 					c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);
 					c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
 				}
+				// Draw player avatar depth after terrain into the same cascade. Their normal position/rotation
+				// replication is enough; no server-side shadow state is required.
+				main.entity.systems.modelRenderer.client.renderShadows(&baseLightSpaceMatrices[i], playerPos);
 			}
 
 			// Compensate for player movement delta dynamically in lightSpaceMatricesGL[i]:

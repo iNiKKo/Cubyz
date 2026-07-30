@@ -33,6 +33,9 @@ uniform bool reflectionsEnabled;
 // Texture-handle identity, supplied by the block registry. Transparency and material reflectivity
 // are deliberately not used as water tests: ice, glass, and transparent foliage must stay still.
 uniform int waterTextureIndex;
+// Matches deferred-render terrain weather fog. This is deliberately explicit rather than inferred
+// from density, since ordinary short render-distance fog must not make clear-weather lakes opaque.
+uniform float weatherFogStrength;
 // Real elapsed seconds, for the water-reflection ripple below — see chunk_meshing.zig's
 // bindTransparentShaderAndUniforms (same pattern clouds.zig/thin_clouds.zig use for wind animation).
 uniform float waterTime;
@@ -273,6 +276,13 @@ void main() {
 	bool aboveWaterSurface = isWater && normal.z > 0.9 && playerWorldZ > worldPos.z + 0.05;
 	bool belowWaterSurface = isWater && normal.z > 0.9 && playerWorldZ < worldPos.z - 0.05;
 	float surfaceDistanceFade = aboveWaterSurface ? 1.0 - exp(-waterDist * 0.035) : 0.0;
+	// Rain/snow turns the otherwise sharp sky/SSR reflection into diffuse overcast light. This also
+	// removes the conspicuous bright reflective disc directly around the player while weather haze is on.
+	float weatherWaterReflectionFade = aboveWaterSurface ? smoothstep(0.02, 0.25, weatherFogStrength) : 0.0;
+	// In weather, transparent water must disappear into the same atmosphere before the already-fogged
+	// lakebed behind it. Otherwise the bed remains visible while the far surface effectively vanishes.
+	// This is only for water viewed from above: ice/glass and all underwater views retain their normal path.
+	float weatherWaterHaze = aboveWaterSurface ? weatherFogStrength*smoothstep(18.0, 120.0, waterDist) : 0.0;
 
 	// Water ripple animation:
 	// Distance-fade out the ripples so close-up water has gentle motion, while distant water stays flat.
@@ -310,7 +320,7 @@ void main() {
 	// Add realistic sun specular glint on water surface ripples:
 	vec3 sunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);
 	float sunSpecular = isWater ? pow(max(0.0, dot(normalize(viewSpaceReflDir), sunDir)), 48.0) * 1.2 : 0.0;
-	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionsEnabled ? 1.0 : 0.4);
+	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionsEnabled ? 1.0 : 0.4) * (1.0 - weatherWaterReflectionFade);
 
 	float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
 	float fresnelBoost = reflectionsEnabled ? (0.05 + 0.45 * fresnel) : 0.05;
@@ -318,7 +328,7 @@ void main() {
 
 	textureColor.rgb *= textureColor.a;
 	if (isWater && materialReflectivity > 0.01) {
-		textureColor.rgb += reflColor * specularReflectivity * 0.70;
+		textureColor.rgb += reflColor * specularReflectivity * mix(0.70, 0.12, weatherWaterReflectionFade);
 	}
 	blendColor.rgb = vec3(1.0 - textureColor.a);
 	if (aboveWaterSurface) {
@@ -327,11 +337,20 @@ void main() {
 		vec3 deepWater = vec3(0.015, 0.075, 0.11) * max(pixelLight, vec3(0.25)) * textureColor.a;
 		textureColor.rgb = mix(textureColor.rgb, deepWater, surfaceDistanceFade * 0.75);
 		blendColor.rgb *= 1.0 - surfaceDistanceFade * 0.90;
+		// Close the transparent blend progressively into a deep, rain-tinted water volume. The source
+		// colour still receives normal air fog below, so this transitions smoothly rather than forming a
+		// dark opaque water wall at the weather range.
+		blendColor.rgb *= 1.0 - weatherWaterHaze * 0.98;
 	}
 	// Atmospheric sky fog is appropriate for ice/glass and for the world beyond water, but applying
 	// its bright sky colour *inside the water blend* makes a distant lake bed lighter and clearer.
 	// Above a water surface, replace that contribution with a deep-water extinction colour instead.
 	vec3 transparentFogColor = aboveWaterSurface ? vec3(0.012, 0.055, 0.085) : fog.color;
+	if (weatherWaterHaze > 0.0) {
+		// Fog this surface by its own distance, not the opaque terrain depth sampled behind it. The latter
+		// is precisely what made a far shallow lake look as though its water had been removed in rain.
+		airFogDistance = -waterDist*fog.density*mix(5.0, 11.0, weatherFogStrength);
+	}
 
 	// Render the water ceiling through one dedicated path before the regular front/back-face split.
 	// Depending on the face's generated winding, the top surface can arrive through either path;

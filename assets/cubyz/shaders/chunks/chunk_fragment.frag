@@ -31,6 +31,8 @@ uniform vec3 handLightColor;
 uniform vec3 dropLightPositionRelative;
 uniform vec3 dropLightColor;
 uniform float handLightRadius;
+uniform vec3 remoteHandLightPositionRelative;
+uniform vec3 remoteHandLightColor;
 uniform bool reflectionsEnabled;
 // Supplied by the block registry. Snow uses a material-local shadow softening so its high albedo
 // does not create disproportionately harsh dark patches.
@@ -77,6 +79,13 @@ vec3 handLightContribution() {
 		float atten = (1.0 - normDist) * (1.0 - normDist);
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
 		totalLight += dropLightColor * atten * peakHighlight;
+	}
+	if (remoteHandLightColor != vec3(0.0)) {
+		float dist = length(direction - remoteHandLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += remoteHandLightColor * atten * peakHighlight;
 	}
 	return totalLight;
 }

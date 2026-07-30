@@ -1159,3 +1159,48 @@ pub const EntityComponentUpdate = struct { // MARK: EntityComponentUpdate
 		conn.send(.secure, id, writer.data.items);
 	}
 };
+
+/// Cosmetic held-light replication. The server remains authoritative for world lighting, but this
+/// small state lets every client render the same dynamic light carried by another player.
+pub const heldLight = struct {
+	pub const id: u8 = 16;
+	const none: u16 = 0xffff;
+
+	fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
+		const entityId: main.entity.Entity = @enumFromInt(try reader.readVarInt(u32));
+		const blockType = try reader.readInt(u16);
+		const transform = try reader.readVec(main.vec.Vec4f);
+		main.itemdrop.ItemDisplayManager.setRemoteHeldLight(entityId, if (blockType == none) null else blockType, transform);
+	}
+	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
+		const blockType = try reader.readInt(u16);
+		const transform = try reader.readVec(main.vec.Vec4f);
+		const lightBlock: ?u16 = if (blockType == none) null else blockType;
+		// This is cosmetic held-block state. Actual voxel illumination stays client-side and checks
+		// Block.light(), so a non-emissive block can be visible in a hand without becoming a light.
+		const user = conn.user.?;
+		user.heldLightBlock = lightBlock;
+		user.heldLightTransform = transform;
+		broadcast(user.id, lightBlock, transform);
+	}
+	pub fn send(conn: *Connection, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 18);
+		defer writer.deinit();
+		writer.writeInt(u16, blockType orelse none);
+		writer.writeVec(main.vec.Vec4f, transform);
+		conn.send(.secure, id, writer.data.items);
+	}
+	pub fn broadcast(entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
+		const users = main.server.getUserListAndIncreaseRefCount(main.stackAllocator);
+		defer main.server.freeUserListAndDecreaseRefCount(main.stackAllocator, users);
+		for (users) |user| sendTo(user.conn, entityId, blockType, transform);
+	}
+	pub fn sendTo(conn: *Connection, entityId: main.entity.Entity, blockType: ?u16, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 24);
+		defer writer.deinit();
+		writer.writeVarInt(u32, @intFromEnum(entityId));
+		writer.writeInt(u16, blockType orelse none);
+		writer.writeVec(main.vec.Vec4f, transform);
+		conn.send(.secure, id, writer.data.items);
+	}
+};

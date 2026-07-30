@@ -31,6 +31,7 @@ const c = @import("c");
 // ############################# Client only stuff ################################
 pub const client = struct {
 	var pipeline: graphics.Pipeline = undefined;
+	var shadowPipeline: graphics.Pipeline = undefined;
 	pub var nodeBuffer: graphics.LargeBuffer(Mat4f) = undefined;
 
 	var uniforms: struct {
@@ -56,6 +57,13 @@ pub const client = struct {
 		dropLightPositionRelative: c_int,
 		dropLightColor: c_int,
 		handLightRadius: c_int,
+		remoteHandLightPositionRelative: c_int,
+		remoteHandLightColor: c_int,
+	} = undefined;
+	var shadowUniforms: struct {
+		lightSpaceMatrix: c_int,
+		modelMatrix: c_int,
+		nodeBufferOffset: c_int,
 	} = undefined;
 
 	pub fn init() void {
@@ -70,14 +78,86 @@ pub const client = struct {
 			.{.depthTest = true},
 			.{.attachments = &.{.alphaBlending}},
 		);
+		shadowPipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/entity_shadow_depth.vert",
+			"assets/cubyz/shaders/entity_shadow_depth.frag",
+			"",
+			&shadowUniforms,
+			main.entityModel.EntityModel.Vertex,
+			&.{},
+			.{ .cullMode = .none, .depthBias = .{ .constantFactor = 2.0, .clamp = 0.0, .slopeFactor = 4.0 } },
+			.{ .depthTest = true, .depthWrite = true },
+			.{ .attachments = &.{.{ .enabled = false, .srcColorBlendFactor = .zero, .dstColorBlendFactor = .zero, .colorBlendOp = .add, .srcAlphaBlendFactor = .zero, .dstAlphaBlendFactor = .zero, .alphaBlendOp = .add, .colorWriteMask = .none }} },
+		);
 
 		nodeBuffer.init(main.globalAllocator, 1 << 20, 15);
 	}
 	pub fn deinit() void {
 		pipeline.deinit();
+		shadowPipeline.deinit();
 		nodeBuffer.deinit();
 	}
 	pub fn clear() void {}
+
+	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, ent: *const main.client.Entity) void {
+		const entModel = component.entityModel.get();
+		if (entModel.nodeIndexMap.get("Head")) |headId| {
+			var headRot: f32 = ent.rot[0];
+			if (entModel.nodeIndexMap.get("Eyestalks")) |eyestalksId| {
+				const stalkRot = ent.rot[0]*0.25;
+				headRot = ent.rot[0]*0.75;
+				component.nodes[eyestalksId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, stalkRot);
+			}
+			component.nodes[headId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, headRot);
+		}
+		for (component.nodes, 0..) |*node, i| {
+			const parentMat = if (entModel.nodeParents[i]) |p| component.matrices[p].transpose() else Mat4f.identity();
+			component.matrices[i] = parentMat.mul(node.recalc(entModel.nodePivots[i])).transpose();
+		}
+		nodeBuffer.uploadData(component.matrices, &component.bufferAllocation);
+	}
+
+	/// Used by CSM update. Entity positions/rotations are already replicated normally, so rendering their
+	/// depth locally is deterministic from the receiving client's perspective and needs no shadow packets.
+	pub fn renderShadows(lightSpaceMatrix: *const Mat4f, playerPos: Vec3d) void {
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		nodeBuffer.beginRender();
+		defer nodeBuffer.endRender();
+		shadowPipeline.bind(null);
+		c.glUniformMatrix4fv(shadowUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatrix.toGl()));
+		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |*component, id| {
+			// This pass is deliberately for player avatars only; generic entities keep their current rendering
+			// behaviour until they have their own shadow-quality policy.
+			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
+			if (id == game.Player.id and !settings.ownPlayerShadow) continue;
+			const ent = main.client.entity_manager.getEntity(id) orelse continue;
+			updateNodeMatrices(component, ent);
+			const entModel = component.entityModel.get();
+			entModel.bind();
+			entModel.defaultTexture.?.bindTo(0);
+			const pos = ent.getRenderPosition() - playerPos;
+			const modelMatrix = Mat4f.identity()
+				.mul(Mat4f.translation(Vec3f{ @floatCast(pos[0]), @floatCast(pos[1]), @floatCast(pos[2] - entModel.height/2) }))
+				.mul(Mat4f.rotationZ(-ent.rot[2]));
+			c.glUniformMatrix4fv(shadowUniforms.modelMatrix, 1, c.GL_TRUE, @ptrCast(&modelMatrix));
+			c.glUniform1ui(shadowUniforms.nodeBufferOffset, @intCast(component.bufferAllocation.start));
+			c.glDrawElements(c.GL_TRIANGLES, entModel.indexCount, c.GL_UNSIGNED_INT, null);
+		}
+	}
+
+	pub fn hasNearbyPlayerShadowCaster(playerPos: Vec3d, radius: f64) bool {
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |_, id| {
+			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
+			if (id == game.Player.id and !settings.ownPlayerShadow) continue;
+			const ent = main.client.entity_manager.getEntity(id) orelse continue;
+			const offset = ent.getRenderPosition() - playerPos;
+			if (offset[0]*offset[0] + offset[1]*offset[1] + offset[2]*offset[2] <= radius*radius) return true;
+		}
+		return false;
+	}
 
 	pub fn renderHud(_: Vec3f, playerPos: Vec3d) void {
 		main.client.entity_manager.mutex.lock();
@@ -136,26 +216,8 @@ pub const client = struct {
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |*component, id| {
 			if (id == game.Player.id) continue; // don't process local player
 
-			const entModel = component.entityModel.get();
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
-
-			const head = entModel.nodeIndexMap.get("Head");
-			if (head) |headId| {
-				var headRot: f32 = ent.rot[0];
-				if (entModel.nodeIndexMap.get("Eyestalks")) |eyestalksId| {
-					const stalkRot = ent.rot[0]*0.25;
-					headRot = ent.rot[0]*0.75;
-					component.nodes[eyestalksId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, stalkRot);
-				}
-				component.nodes[headId].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, headRot);
-			}
-
-			for (component.nodes, 0..) |*node, i| {
-				const parentMat = if (entModel.nodeParents[i]) |p| component.matrices[p].transpose() else Mat4f.identity();
-
-				component.matrices[i] = parentMat.mul(node.recalc(entModel.nodePivots[i])).transpose();
-			}
-			main.entity.systems.modelRenderer.client.nodeBuffer.uploadData(component.matrices, &component.bufferAllocation);
+			updateNodeMatrices(component, ent);
 		}
 
 		pipeline.bind(null);
@@ -182,6 +244,25 @@ pub const client = struct {
 		c.glUniform3fv(uniforms.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
 		c.glUniform3fv(uniforms.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
 		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
+		// entity_manager is already locked by this render pass, so compute the closest remote light
+		// directly here instead of calling ItemDisplayManager.closestRemoteLight (which locks it).
+		var nearestRemoteLightPos: Vec3f = @splat(0);
+		var nearestRemoteLightColor: Vec3f = @splat(0);
+		var nearestRemoteLightDistance: f32 = std.math.inf(f32);
+		for (main.client.entity_manager.entities.items()) |ent| {
+			if (ent.id == game.Player.id) continue;
+			const blockType = main.itemdrop.ItemDisplayManager.remoteHeldLight(ent.id) orelse continue;
+			const rel: Vec3f = @floatCast(ent.getRenderPosition() - playerPos + Vec3d{0.35, 0.0, 0.1});
+			const dist = vec.lengthSquare(rel);
+			if (dist < nearestRemoteLightDistance) {
+				nearestRemoteLightDistance = dist;
+				nearestRemoteLightPos = rel;
+				const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
+				nearestRemoteLightColor = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0));
+			}
+		}
+		c.glUniform3fv(uniforms.remoteHandLightPositionRelative, 1, @ptrCast(&nearestRemoteLightPos));
+		c.glUniform3fv(uniforms.remoteHandLightColor, 1, @ptrCast(&nearestRemoteLightColor));
 
 		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();
 

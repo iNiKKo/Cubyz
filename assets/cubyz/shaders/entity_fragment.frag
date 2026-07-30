@@ -20,6 +20,8 @@ uniform vec3 handLightColor;
 uniform vec3 dropLightPositionRelative;
 uniform vec3 dropLightColor;
 uniform float handLightRadius;
+uniform vec3 remoteHandLightPositionRelative;
+uniform vec3 remoteHandLightColor;
 
 // Real-time point light following the player's held item or dropped item — see chunk_fragment.frag's
 // identical function for the full explanation.
@@ -40,6 +42,13 @@ vec3 handLightContribution(vec3 worldPosRelative) {
 		float atten = (1.0 - normDist) * (1.0 - normDist);
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
 		totalLight += dropLightColor * atten * peakHighlight;
+	}
+	if (remoteHandLightColor != vec3(0.0)) {
+		float dist = length(worldPosRelative - remoteHandLightPositionRelative);
+		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
+		float atten = (1.0 - normDist) * (1.0 - normDist);
+		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
+		totalLight += remoteHandLightColor * atten * peakHighlight;
 	}
 	return totalLight;
 }

@@ -41,6 +41,12 @@ const UniformStruct = struct {
 	screenSize: c_int,
 	ambientLight: c_int,
 	weatherShadowFade: c_int,
+	/// Used only by transparent water to turn strong atmospheric haze into water-surface extinction.
+	weatherFogStrength: c_int,
+	/// Water-surface post-fog mask controls. These are intentionally separate from ordinary transparent
+	/// water: the mask is only drawn for underwater orientation or weather-distance occlusion.
+	weatherWaterSurfaceMask: c_int,
+	weatherFogColor: c_int,
 	contrast: c_int,
 	@"fog.color": c_int,
 	@"fog.density": c_int,
@@ -83,6 +89,8 @@ const UniformStruct = struct {
 	dropLightPositionRelative: c_int,
 	dropLightColor: c_int,
 	handLightRadius: c_int,
+	remoteHandLightPositionRelative: c_int,
+	remoteHandLightColor: c_int,
 };
 pub var uniforms: UniformStruct = undefined;
 pub var transparentUniforms: UniformStruct = undefined;
@@ -308,6 +316,9 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform3fv(locations.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
 	c.glUniform3fv(locations.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
 	c.glUniform1f(locations.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
+	const remoteLight = main.itemdrop.ItemDisplayManager.closestRemoteLight(game.Player.getPosBlocking());
+	c.glUniform3fv(locations.remoteHandLightPositionRelative, 1, @ptrCast(&remoteLight.positionRelative));
+	c.glUniform3fv(locations.remoteHandLightColor, 1, @ptrCast(&remoteLight.color));
 }
 
 pub fn bindShaderAndUniforms(ambient: Vec3f) void {
@@ -327,10 +338,15 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	const playerPos = game.Player.getEyePosBlocking();
 	const skyIslandAir = playerPos[2] > 2000.0;
 	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
-	const aerialFogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
-	c.glUniform1f(transparentUniforms.@"fog.density", if (skyIslandAir) aerialFogDensity else game.world.?.dayTime.fog.density);
+	var fogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
+	// Match deferred terrain fog's weather-density floor. Without it, distant transparent water stayed
+	// clear while the opaque lake bed behind it was already strongly fogged, visually erasing the water.
+	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
+	fogDensity = @max(fogDensity, weatherVisibility/game.world.?.dayTime.weatherFogRange);
+	c.glUniform1f(transparentUniforms.@"fog.density", fogDensity);
 	c.glUniform1f(transparentUniforms.@"fog.fogLower", if (skyIslandAir) -1e5 else game.world.?.dayTime.fog.fogLower);
 	c.glUniform1f(transparentUniforms.@"fog.fogHigher", if (skyIslandAir) 1e5 else game.world.?.dayTime.fog.fogHigher);
+	c.glUniform1f(transparentUniforms.weatherFogStrength, weatherVisibility);
 
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
@@ -343,6 +359,16 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 
 fn bindWaterSurfaceShaderAndUniforms(ambient: Vec3f) void {
 	waterSurfacePipeline.bind(null);
+	const playerPos = game.Player.getEyePosBlocking();
+	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
+	c.glUniform1f(waterSurfaceUniforms.weatherFogStrength, weatherVisibility);
+	// Must exactly follow the deferred terrain weather fog tint. The raw biome fog colour can be very
+	// pale, which made the weather-water mask show up as a separate white sheet rather than dissolve
+	// into the blue-grey atmospheric haze.
+	var weatherFogColor = game.world.?.dayTime.fog.skyColor;
+	const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
+	weatherFogColor += (game.world.?.dayTime.fog.fogColor - weatherFogColor) * @as(Vec3f, @splat(weatherFogTint));
+	c.glUniform3fv(waterSurfaceUniforms.weatherFogColor, 1, @ptrCast(&weatherFogColor));
 	bindCommonUniforms(&waterSurfaceUniforms, ambient);
 	vao.bind();
 }
@@ -363,15 +389,15 @@ pub fn drawChunksIndirect(chunkIds: *const [main.settings.highestSupportedLod + 
 /// Replays the already prepared transparent mesh into a private target while submerged. The fragment
 /// shader discards every face except a water top face above the camera, making an explicit inside-facing
 /// water ceiling without changing ordinary water blending or its depth behaviour.
-pub fn drawUnderwaterSurfaceMask(chunkIds: *const [main.settings.highestSupportedLod + 1]main.ListManaged(u32), ambient: Vec3f) void {
+pub fn drawWaterSurfaceMask(chunkIds: *const [main.settings.highestSupportedLod + 1]main.ListManaged(u32), ambient: Vec3f, weatherMask: bool) void {
 	for (0..chunkIds.len) |i| {
 		const lod = main.settings.highestSupportedLod - i;
 		bindBuffers(lod);
-		drawUnderwaterSurfaceMaskOfLod(chunkIds[lod].items, ambient);
+		drawWaterSurfaceMaskOfLod(chunkIds[lod].items, ambient, weatherMask);
 	}
 }
 
-fn drawUnderwaterSurfaceMaskOfLod(chunkIDs: []const u32, ambient: Vec3f) void {
+fn drawWaterSurfaceMaskOfLod(chunkIDs: []const u32, ambient: Vec3f, weatherMask: bool) void {
 	if (chunkIDs.len == 0) return;
 	const drawCallsEstimate: u31 = @intCast(chunkIDs.len);
 	var chunkIDAllocation: main.graphics.SubAllocation = .{.start = 0, .len = 0};
@@ -391,6 +417,7 @@ fn drawUnderwaterSurfaceMaskOfLod(chunkIDs: []const u32, ambient: Vec3f) void {
 	c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT | c.GL_COMMAND_BARRIER_BIT);
 
 	bindWaterSurfaceShaderAndUniforms(ambient);
+	c.glUniform1f(waterSurfaceUniforms.weatherWaterSurfaceMask, @floatFromInt(@intFromBool(weatherMask)));
 	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
 	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 }

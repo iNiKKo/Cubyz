@@ -25,7 +25,7 @@ pub const entityComponentVersion = 0;
 
 // ############################# Client only stuff ################################
 pub const client = struct {
-	const Component = struct {
+	pub const Component = struct {
 		entityModel: main.entityModel.EntityModelIndex,
 
 		bufferAllocation: graphics.SubAllocation = .{.len = 0, .start = 0},

@@ -510,6 +510,48 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	pub var dropLightPositionRelative: Vec3f = @splat(0);
 	pub var dropLightColor: Vec3f = @splat(0);
 	pub var handLightRadius: f32 = 12.0;
+	const maxReplicatedPlayers = 1024;
+	pub const HeldLightTransform = Vec4f;
+	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
+	const RemoteHeldLight = struct { block: ?u16 = null, transform: HeldLightTransform = defaultHeldLightTransform };
+	var remoteHeldLights: [maxReplicatedPlayers]RemoteHeldLight = @splat(.{});
+	var lastSentHeldLightBlock: ?u16 = null;
+	var lastSentHeldLightTransform: HeldLightTransform = defaultHeldLightTransform;
+	var sentInitialHeldLight: bool = false;
+
+	pub fn setRemoteHeldLight(entityId: main.entity.Entity, blockType: ?u16, transform: HeldLightTransform) void {
+		const id = @intFromEnum(entityId);
+		if (id < maxReplicatedPlayers) remoteHeldLights[id] = .{ .block = blockType, .transform = transform };
+	}
+	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
+		const id = @intFromEnum(entityId);
+		return if (id < maxReplicatedPlayers) remoteHeldLights[id].block else null;
+	}
+	pub fn remoteHeldLightTransform(entityId: main.entity.Entity) HeldLightTransform {
+		const id = @intFromEnum(entityId);
+		return if (id < maxReplicatedPlayers) remoteHeldLights[id].transform else defaultHeldLightTransform;
+	}
+	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
+	/// Keep the dynamic-light budget bounded. The closest remote lantern is the one that can visibly
+	/// affect this client, while every avatar still renders its own held light model.
+	pub fn closestRemoteLight(playerPos: Vec3d) RemoteLight {
+		var result: RemoteLight = .{};
+		var bestDistance = std.math.inf(f32);
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		for (main.client.entity_manager.entities.items()) |ent| {
+			if (ent.id == game.Player.id) continue;
+			const blockType = remoteHeldLight(ent.id) orelse continue;
+			const rel: Vec3f = @floatCast(ent.getRenderPosition() - playerPos + Vec3d{0.35, 0.0, 0.1});
+			const distance = vec.lengthSquare(rel);
+			if (distance >= bestDistance) continue;
+			const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
+			bestDistance = distance;
+			result.positionRelative = rel;
+			result.color = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0));
+		}
+		return result;
+	}
 
 	pub fn update(deltaTime: f64) void {
 		if (deltaTime == 0) return;
@@ -532,9 +574,13 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		dropLightColor = @splat(0);
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
+		// The held state is replicated for every block item; only its emitted-light colour remains
+		// conditional below. This lets other players see ordinary building blocks in a hand too.
+		var heldLightBlock: ?u16 = null;
 		if (item == .baseItem) {
 			const baseItem = item.baseItem;
 			if (baseItem.block()) |blockType| {
+				heldLightBlock = blockType;
 				const light = (blocks.Block{.typ = blockType, .data = 0}).light();
 				if (light != 0) {
 					handLightColor = Vec3f{
@@ -547,6 +593,17 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 					handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
 				}
 			}
+		}
+		if (game.world) |world| {
+			const transform = defaultHeldLightTransform;
+			if (!sentInitialHeldLight or heldLightBlock != lastSentHeldLightBlock or !std.meta.eql(transform, lastSentHeldLightTransform)) {
+				main.network.protocols.heldLight.send(world.conn, heldLightBlock, transform);
+				lastSentHeldLightBlock = heldLightBlock;
+				lastSentHeldLightTransform = transform;
+				sentInitialHeldLight = true;
+			}
+		} else {
+			sentInitialHeldLight = false;
 		}
 
 		var dropStrength: f32 = 0.0;
@@ -610,6 +667,8 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		index: u31 = undefined,
 		len: u31 = undefined,
 		item: items.Item,
+		/// Inventory icons are normally flat; a held block must instead use its placed-block mesh.
+		forceBlockModel: bool = false,
 
 		fn getSlot(len: u31) u31 {
 			for (freeSlots.items, 0..) |potentialSlot, i| {
@@ -629,8 +688,9 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			const self = main.globalAllocator.create(ItemVoxelModel);
 			self.* = ItemVoxelModel{
 				.item = template.item,
+				.forceBlockModel = template.forceBlockModel,
 			};
-			if (self.item == .baseItem and self.item.baseItem.block() != null and self.item.baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr) {
+			if (self.item == .baseItem and self.item.baseItem.block() != null and (self.forceBlockModel or self.item.baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr)) {
 				// Find sizes and free index:
 				var block = blocks.Block{.typ = self.item.baseItem.block().?, .data = 0};
 				block.data = block.mode().naturalStandard;
@@ -686,7 +746,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 
 		pub fn equals(self: ItemVoxelModel, other: ?*ItemVoxelModel) bool {
 			if (other == null) return false;
-			return std.meta.eql(self.item, other.?.item);
+			return self.forceBlockModel == other.?.forceBlockModel and std.meta.eql(self.item, other.?.item);
 		}
 
 		pub fn hashCode(self: ItemVoxelModel) u32 {
@@ -736,6 +796,10 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 
 	fn getModel(item: items.Item) *ItemVoxelModel {
 		const compareObject = ItemVoxelModel{.item = item};
+		return voxelModels.findOrCreate(compareObject, ItemVoxelModel.init, null);
+	}
+	fn getBlockModel(item: items.Item) *ItemVoxelModel {
+		const compareObject = ItemVoxelModel{ .item = item, .forceBlockModel = true };
 		return voxelModels.findOrCreate(compareObject, ItemVoxelModel.init, null);
 	}
 
@@ -804,6 +868,72 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				modelMatrix = modelMatrix.mul(Mat4f.translation(@splat(-0.5)));
 				drawItem(vertices, modelMatrix);
 			}
+		}
+	}
+
+	/// Render the emissive block that a remote player is carrying. This deliberately uses the exact
+	/// same voxel-item mesh path as dropped/first-person items, so lantern-like blocks keep their
+	/// authored model and emission instead of becoming a generic glowing sprite.
+	pub fn renderRemoteHeldLights(ambientLight: Vec3f, playerPos: Vec3d) void {
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		bindCommonUniforms(ambientLight);
+		for (main.client.entity_manager.entities.items()) |ent| {
+			if (ent.id == game.Player.id) continue;
+			const blockType = ItemDisplayManager.remoteHeldLight(ent.id) orelse continue;
+			const baseItem: items.BaseItemIndex = for (0..items.itemListSize) |index| {
+				const candidate: items.BaseItemIndex = @enumFromInt(index);
+				if (candidate.block() == blockType) break candidate;
+			} else continue;
+			const item: items.Item = .{ .baseItem = baseItem };
+			const emittedLight = (blocks.Block{ .typ = blockType, .data = 0 }).light();
+			// Crafted/terrain blocks whose item falls back to the block texture read best as a small
+			// 3D held block. Ores/gems supply a dedicated inventory icon, so preserve that flat item
+			// silhouette instead of turning the ore's host-stone block into a cube in the hand. Lights
+			// are an explicit exception: torch/lantern geometry must stay 3D even with custom icons.
+			const useBlockModel = emittedLight != 0 or baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr;
+			const model = if (useBlockModel) getBlockModel(item) else getModel(item);
+			const vertices: u31 = if (useBlockModel) model.len/2*6 else 36;
+			bindModelUniforms(model.index, if (useBlockModel) blockType else 0);
+			const blockPos: Vec3i = @floor(ent.pos);
+			const light: [6]u8 = main.renderer.mesh_storage.getLight(blockPos[0], blockPos[1], blockPos[2]) orelse @splat(0);
+			bindLightUniform(light, ambientLight, getItemEmittedLight(item));
+			const position: Vec3f = @floatCast(ent.getRenderPosition() - playerPos);
+			const modelComponent = main.entity.components.@"cubyz:model".client.get(ent.id);
+			const entityModel = if (modelComponent) |component| component.entityModel.get() else null;
+			// Entity-model origins are half a model-height above the player position. Use the same
+			// origin transform as modelRenderer, then append the authored RightItem node. Every bundled
+			// player model supplies this attachment; the fallback remains useful for custom models.
+			var modelMatrix = Mat4f.translation(position + Vec3f{ 0, 0, if (entityModel) |avatarModel| -avatarModel.height/2 else 0 });
+			modelMatrix = modelMatrix.mul(Mat4f.rotationZ(-ent.rot[2]));
+			if (modelComponent) |component| {
+				if (component.entityModel.get().nodeIndexMap.get("RightItem")) |nodeId| {
+					modelMatrix = modelMatrix.mul(component.matrices[nodeId].transpose());
+				} else {
+					modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.34, 0, 0.05 }));
+				}
+			} else {
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.34, 0, 0.05 }));
+			}
+			const isLantern = blockType == blocks.getTypeById("cubyz:lantern/coal") or blockType == blocks.getTypeById("cubyz:lantern/sulfur");
+			if (isLantern) {
+				// Lantern models are upright with the handle on top. Leave them upright and lower the
+				// body from RightItem so the handle appears gripped and the lantern dangles below.
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ 0.0, 0.04, -0.12 }));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(@as(f32, std.math.pi / 2.0)));
+			} else {
+				// Torch/ordinary block items use the tuned forward-hand transform.
+				const transform = ItemDisplayManager.remoteHeldLightTransform(ent.id);
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
+			}
+			// Full blocks are deliberately half the light/item scale; otherwise a held stone/dirt
+			// cube obscures too much of the avatar. Flat ore/gem icons and custom light models retain
+			// their readable item scale.
+			const heldScale: f32 = if (useBlockModel and emittedLight == 0) 0.154 else 0.308;
+			modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(heldScale)));
+			modelMatrix = modelMatrix.mul(Mat4f.translation(@splat(-0.5)));
+			drawItem(vertices, modelMatrix);
 		}
 	}
 

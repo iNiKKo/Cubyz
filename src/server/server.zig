@@ -114,6 +114,9 @@ pub const User = struct { // MARK: User
 	receivedFirstEntityData: bool = false,
 	isLocal: bool = false,
 	id: main.entity.Entity = .noValue,
+	/// Cosmetic held emissive block, replicated to clients through protocols.heldLight.
+	heldLightBlock: ?u16 = null,
+	heldLightTransform: main.vec.Vec4f = .{ 0.0, 0.12, 0.0, -90.0 },
 	// TODO: ipPort: []const u8,
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
@@ -892,6 +895,13 @@ pub fn connectInternal(user: *User) void {
 	user.initPlayer();
 	main.network.protocols.handShake.sendServerPlayerData(user.conn);
 	user.conn.handShakeState.store(.complete, .monotonic);
+	// Send this only after the handshake payload: protocol dispatch deliberately rejects non-handshake
+	// packets until the client has completed loading its assets.
+	const heldLightUsers = getUserListAndIncreaseRefCount(main.stackAllocator);
+	defer freeUserListAndDecreaseRefCount(main.stackAllocator, heldLightUsers);
+	for (heldLightUsers) |other| {
+		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldLightBlock, other.heldLightTransform);
+	}
 
 	// TODO: addEntity(player);
 	const userList = getUserListAndIncreaseRefCount(main.stackAllocator);

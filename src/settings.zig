@@ -62,6 +62,10 @@ pub var waterReflectionDistance: f32 = 128.0;
 
 pub var shadows: bool = true;
 
+/// Whether this client contributes its own (normally first-person-invisible) avatar to the shadow map.
+/// Other players' shadows remain visible whenever dynamic shadows are enabled.
+pub var ownPlayerShadow: bool = true;
+
 /// Controls how dark terrain shadows are (0.0 = no shadows/fully lit, 0.50 = normal default shadows, 1.0 = extra dark shadows).
 pub var shadowDarkness: f32 = 0.50;
 

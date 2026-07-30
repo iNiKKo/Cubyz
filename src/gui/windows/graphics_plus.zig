@@ -58,6 +58,11 @@ fn shadowsCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn ownPlayerShadowCallback(newValue: bool) void {
+	settings.ownPlayerShadow = newValue;
+	settings.save();
+}
+
 fn shadowDistanceFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
 	return allocator.print("#ffffffDynamic Shadow Distance: {d:.0}m", .{@round(value)});
 }
@@ -141,6 +146,7 @@ pub fn onOpen() void {
 	list.add(CheckBox.init(.{0, 0}, 200, "Reflections", settings.reflections, &reflectionsCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.waterReflectionDistance, &waterReflectionDistanceCallback, &waterReflectionDistanceFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
+	list.add(CheckBox.init(.{0, 0}, 200, "Own Player Shadow", settings.ownPlayerShadow, &ownPlayerShadowCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.shadowDarkness, &shadowDarknessCallback, &shadowDarknessFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.shadowDistance, &shadowDistanceCallback, &shadowDistanceFormatter));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, @floatFromInt(settings.shadowRaySteps), &shadowRayStepsCallback, &shadowRayStepsFormatter));
