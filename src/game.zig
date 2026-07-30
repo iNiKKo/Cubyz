@@ -451,6 +451,7 @@ pub const World = struct { // MARK: World
 		main.gui.inventory.deinit();
 		main.gui.deinit();
 		main.gui.init();
+		main.itemdrop.ItemDisplayManager.clearRemoteHeldItems();
 		Player.inventory.deinit(main.globalAllocator);
 		main.sync.client.reset();
 

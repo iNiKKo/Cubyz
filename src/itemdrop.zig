@@ -561,6 +561,20 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		const id = @intFromEnum(entityId);
 		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolScale else 1.0;
 	}
+	/// Remote held procedural items are deserialized per client and owned by this cache. Release them
+	/// when leaving a world and at renderer shutdown so a remote player holding a tool cannot leak its
+	/// ProceduralItem allocation.
+	pub fn clearRemoteHeldItems() void {
+		for (&remoteHeldItems) |*held| {
+			held.item.deinit();
+			held.* = .{};
+		}
+		lastSentHeldItem = .{ .none = {} };
+		lastSentHeldLightTransform = defaultHeldLightTransform;
+		lastSentHeldToolRotationYZ = .{0.0, 0.0};
+		lastSentHeldToolScale = 1.0;
+		sentInitialHeldLight = false;
+	}
 	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
 	/// Keep the dynamic-light budget bounded. The closest remote lantern is the one that can visibly
 	/// affect this client, while every avatar still renders its own held light model.
@@ -819,6 +833,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			main.globalAllocator.destroy(freeSlot);
 		}
 		freeSlots.deinit();
+		ItemDisplayManager.clearRemoteHeldItems();
 	}
 
 	var voxelModels: utils.Cache(ItemVoxelModel, 32, 32, ItemVoxelModel.deinit) = .{};

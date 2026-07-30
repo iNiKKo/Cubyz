@@ -1878,6 +1878,12 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	var lastSunDir: Vec3f = .{ 0, 0, 0 };
 
 	fn init() void {
+		// Depth-only maps have GL_COMPARE_REF_TO_TEXTURE enabled and may only be sampled through
+		// sampler2DShadow. FrameBuffer.initDepthOnly binds its new texture on the *currently active*
+		// unit, so pin initialisation to unit 0 and explicitly unbind it afterwards. Otherwise a menu
+		// or UI shader using sampler2D at unit 0 can accidentally sample this compare-enabled depth
+		// texture, which NVIDIA correctly reports as undefined behaviour.
+		c.glActiveTexture(c.GL_TEXTURE0);
 		for (0..numCascades) |i| {
 			shadowFBs[i].initDepthOnly(c.GL_LINEAR, c.GL_CLAMP_TO_BORDER);
 			// For out-of-frustum samples (UV outside [0,1]): treat as fully lit (1.0) so the
@@ -1888,6 +1894,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			// Allocate each cascade at its appropriate near/mid/far resolution.
 			shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 		}
+		c.glBindTexture(c.GL_TEXTURE_2D, 0);
 		shadowPipeline = graphics.Pipeline.init(
 			"assets/cubyz/shaders/shadow_depth.vert",
 			"assets/cubyz/shaders/shadow_depth.frag",
@@ -1984,9 +1991,14 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		if (mapsResized) {
 			shadowMapSize = desiredSize;
 			updateCascadeMapSizes();
+			// updateSize likewise binds the texture it reallocates. Keep that temporary binding out
+			// of the terrain/UI sampler units; the maps are explicitly rebound to shadow-only units
+			// 6..8 by bindCommonUniforms before any shader samples them.
+			c.glActiveTexture(c.GL_TEXTURE0);
 			for (0..numCascades) |i| {
 				shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 			}
+			c.glBindTexture(c.GL_TEXTURE_2D, 0);
 		}
 
 		// Keep Cascade 0 locked to 24 blocks so nearby tree shadows and leaf texture cutouts stay sharp
