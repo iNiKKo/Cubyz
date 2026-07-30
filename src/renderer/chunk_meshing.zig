@@ -322,9 +322,15 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	transparentPipeline.bind(null);
 
 	c.glUniform3fv(transparentUniforms.@"fog.color", 1, @ptrCast(&game.world.?.dayTime.fog.fogColor));
-	c.glUniform1f(transparentUniforms.@"fog.density", game.world.?.dayTime.fog.density);
-	c.glUniform1f(transparentUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
-	c.glUniform1f(transparentUniforms.@"fog.fogHigher", game.world.?.dayTime.fog.fogHigher);
+	// The deferred renderer has a dedicated ground-only aerial fade above 6k. Do not let this separate
+	// transparent-material fog path reintroduce the old dense world mist over nearby sky islands.
+	const playerPos = game.Player.getEyePosBlocking();
+	const skyIslandAir = playerPos[2] > 2000.0;
+	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
+	const aerialFogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
+	c.glUniform1f(transparentUniforms.@"fog.density", if (skyIslandAir) aerialFogDensity else game.world.?.dayTime.fog.density);
+	c.glUniform1f(transparentUniforms.@"fog.fogLower", if (skyIslandAir) -1e5 else game.world.?.dayTime.fog.fogLower);
+	c.glUniform1f(transparentUniforms.@"fog.fogHigher", if (skyIslandAir) 1e5 else game.world.?.dayTime.fog.fogHigher);
 
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);

@@ -76,7 +76,10 @@ bool passDitherTest(float alpha) {
 
 void main() {
 	vec3 worldPosRelative = transpose(mat3(viewMatrix))*mvVertexPos;
-	float shadowFactor = sampleSunShadow(worldPosRelative, normal, length(mvVertexPos), false)*sampleCloudShadow(worldPosRelative);
+	float shadowFactor = combineSunAndCloudShadow(
+		sampleSunShadow(worldPosRelative, normal, length(mvVertexPos), false),
+		sampleCloudShadow(worldPosRelative)
+	);
 	vec3 handLight = handLightContribution(worldPosRelative);
 	float handIntensity = max(handLight.r, max(handLight.g, handLight.b));
 	float effectiveShadow = mix(shadowFactor, 1.0, clamp(handIntensity * 3.0, 0.0, 1.0));

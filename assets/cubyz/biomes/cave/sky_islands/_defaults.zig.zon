@@ -2,9 +2,12 @@
 	.isCave = true,
 	.tags = .{.sky_island_layer, .cirrus},
 	.fogColor = 0xbbebff,
-	.fogDensity = 5.0,
-	.fogLower = 1e10,
-	.fogHigher = 1e10,
+	// `fogLower/fogHigher = 1e10` is the renderer's underwater sentinel. Sky islands are open air,
+	// so they must never use it: it activates water refraction, absorption, and the underwater sky path.
+	// The dedicated aerial ground fade handles the distant world below; nearby islands use clear air.
+	.fogDensity = 0.0,
+	.fogLower = -1e5,
+	.fogHigher = 1e5,
 
 	.music = "cubyz:mischol/sunshower",
 	.stoneBlock = "cubyz:nimbusite/smooth",

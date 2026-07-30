@@ -42,6 +42,11 @@ var lastPx: i32 = 0;
 var lastPy: i32 = 0;
 var lastPz: i32 = 0;
 var lastRD: u16 = 0;
+
+/// Ground chunks are no longer useful once the player is in the sky-island layer. renderer.zig fades low
+/// ground during the 2k-to-6k ascent, so this later 8k cull remains visually hidden instead of popping.
+const skyIslandGroundCullHeight: f64 = 8000.0;
+const skyIslandGroundMaxHeight: i32 = 2000;
 var mutex: main.utils.Mutex = .{};
 
 pub const BlockUpdate = struct {
@@ -704,9 +709,9 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{node.pos.wx, node.pos.wy, node.pos.wz})) - playerPos);
 			const chunkSizeVector: Vec3f = @splat(@floatFromInt(chunk.chunkSize * node.pos.voxelSize));
 			if (frustum.testAAB(relPosFloat, chunkSizeVector)) {
-				// Sky Islands High-Altitude Culling:
-				// When player is high up at Sky Islands (playerPos[2] > 2000.0), do not render ground-level chunks far below (wz < 2000):
-				if (playerPos[2] > 2000.0 and node.pos.wz < 2000) continue;
+				// Low ground has already faded through the 2k-to-6k ascent transition. Only now remove it;
+				// sky-island chunks above the ground band remain renderable.
+				if (playerPos[2] >= skyIslandGroundCullHeight and node.pos.wz < skyIslandGroundMaxHeight) continue;
 
 				meshList.append(main.globalAllocator, mesh);
 			}

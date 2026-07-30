@@ -57,22 +57,18 @@ void main() {
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
 
-	// Match chunk_vertex.vert's "Foliage Sway" wind animation exactly (same formula, same waterTime/
-	// foliageSway uniforms) — this shadow depth pass previously had NO sway at all, so the shadow map was
-	// always baked from foliage's rest position while the visible leaves swayed continuously every frame.
-	// Combined with the shadow map only re-rendering every ~20 frames (~0.33s) while the player is mostly
-	// still, this meant the shadow would re-bake from rest position, drift out of sync with the still-
-	// swaying visible leaves, then snap back into alignment on the next re-render — a repeating ~0.3s
-	// mismatch cycle. Player-reported: "too much motion happening, like difference in shading every 0.2s."
-	// Applying the identical sway here means the shadow-casting geometry and the visible geometry are
-	// always at the same sway phase whenever the shadow map IS re-rendered, eliminating the mismatch at
-	// its source rather than trying to hide it with a faster refresh rate (which would only shrink the
-	// mismatch window, not remove it, and cost more shadow-map re-renders per second).
+	// Shadow foliage moves in the same time/direction family as visible foliage, but is intentionally a
+	// slightly reduced-amplitude version of visible foliage motion. Copying every leaf's full sway into a
+	// depth map makes alpha-cutout coverage hop between individual shadow texels every frame; reducing the
+	// depth-only amplitude lets PCF average that detail. Keep the exact world-position phase, otherwise
+	// grouped wind origins make a visible canopy appear to lead or lag its own shadow.
 	if (quads[quadIndex].isFoliage != 0 && foliageSway) {
 		vec3 worldPos = vec3(chunks[chunkID].position.xyz) + position*voxelSize;
 		bool isLilyPad = abs(quads[quadIndex].normal.z) > 0.8;
+		bool isThinPetalPlane = isLilyPad && quads[quadIndex].opaqueInLod == 0;
 		float heightMask = isLilyPad ? 1.0 : clamp(quads[quadIndex].corners[vertexID][2] + 0.2, 0.0, 1.0);
-		float scale = isLilyPad ? 0.060 : 0.030;
+		float scale = (isLilyPad ? 0.060 : 0.030)*0.75;
+		if (isThinPetalPlane) scale *= 0.35;
 
 		float windWave = sin(worldPos.x * 1.1 + worldPos.y * 0.7 + waterTime * 2.0) * scale;
 		windWave += cos(worldPos.x * 0.5 - worldPos.y * 1.3 + waterTime * 1.4) * (scale * 0.6);
@@ -84,7 +80,10 @@ void main() {
 		position.xy += (windDir * windWave * heightMask) / float(voxelSize);
 	}
 
-	if (quads[quadIndex].isFoliage != 0) {
+	// The forward shift closes the grass-blade-to-ground gap, but on a horizontal raised petal plane it
+	// moves the caster over its own visible surface and creates the dark stamp reported by the player.
+	// Keep it for vertical foliage only; horizontal petals cast from their real position.
+	if (quads[quadIndex].isFoliage != 0 && abs(quads[quadIndex].normal.z) < 0.55) {
 		// Shift foliage's recorded shadow-map position toward the sun before writing depth. This is what
 		// actually closes the gap between a grass blade's base and where its ground shadow starts — every
 		// bias tried on the *sampling* side (shadow.glsl) only adjusts how tolerant the read-back is, it

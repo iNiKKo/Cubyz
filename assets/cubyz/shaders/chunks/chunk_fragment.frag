@@ -146,7 +146,8 @@ void main() {
 	// non-face-aligned procedural geometry (branches, ore veins), which used to wrongly get grass's
 	// SSS/root-AO/shadow self-occlusion handling below just because it isn't flat on a block boundary.
 	bool shadedAsFoliage = isFoliage != 0;
-	float shadowFactor = sampleSunShadow(direction, normal, length(mvVertexPos), shadedAsFoliage)*sampleCloudShadow(direction);
+	float directionalShadow = sampleSunShadow(direction, normal, length(mvVertexPos), shadedAsFoliage);
+	float shadowFactor = combineSunAndCloudShadow(directionalShadow, sampleCloudShadow(direction));
 	// Dense alpha-cutout cube leaves otherwise shadow their neighbouring leaf cubes very aggressively,
 	// producing dark canopy patches. Keep this leaf-only softening off grass/plant quads so they retain
 	// their normal, visible shadow response.

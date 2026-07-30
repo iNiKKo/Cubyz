@@ -104,8 +104,12 @@ void main() {
 
 	if (quads[quadIndex].isFoliage != 0 && foliageSway) {
 		bool isLilyPad = abs(quads[quadIndex].normal.z) > 0.8;
+		bool isThinPetalPlane = isLilyPad && quads[quadIndex].opaqueInLod == 0;
 		float heightMask = isLilyPad ? 1.0 : clamp(quads[quadIndex].corners[vertexID][2] + 0.2, 0.0, 1.0);
 		float scale = isLilyPad ? 0.060 : 0.030;
+		// Carpet flowers/petal piles are thin raised horizontal planes, not floating lily pads. Keep
+		// their lateral motion subtle so they cannot visibly skate across the ground.
+		if (isThinPetalPlane) scale *= 0.35;
 
 		float windWave = sin(worldPos.x * 1.1 + worldPos.y * 0.7 + waterTime * 2.0) * scale;
 		windWave += cos(worldPos.x * 0.5 - worldPos.y * 1.3 + waterTime * 1.4) * (scale * 0.6);

@@ -19,10 +19,10 @@ const c = @import("c");
 
 /// World-space size of one grid cell, along both horizontal axes.
 const planeHalfSize: f32 = 4096.0;
-/// World Z — Layer 3: high-altitude thin cloud plane above 3D clouds (288).
-const planeHeight: f32 = 480.0;
-/// World Z — Layer 4: top of all cloud layers (above Layer 3 at 480.0).
-const stormPlaneHeight: f32 = 520.0;
+/// World Z — Layer 3: high-altitude thin cloud plane above the raised 3D cloud deck.
+const planeHeight: f32 = 640.0;
+/// World Z — Layer 4: top of all cloud layers.
+const stormPlaneHeight: f32 = 680.0;
 
 /// blocks/second, deliberately different from clouds.zig's windVelocity (2.0, 0.8) so the layers
 /// visibly drift apart instead of moving in lockstep.
@@ -84,6 +84,8 @@ pub fn deinit() void {
 
 pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	if (!settings.clouds) return;
+	const aerialFade = 1.0 - std.math.clamp(@as(f32, @floatCast((playerPos[2] - 2000.0)/4000.0)), 0.0, 1.0);
+	if (aerialFade <= 0.001) return;
 
 	pipeline.bind(null);
 
@@ -114,7 +116,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 		c.glUniform1f(uniforms.planeHeightRelative, planeHeightRelative);
 		c.glUniform3fv(uniforms.tint, 1, @ptrCast(&tint));
 		c.glUniform1f(uniforms.coverageThreshold, 0.55);
-		c.glUniform1f(uniforms.maxAlpha, 0.25);
+		c.glUniform1f(uniforms.maxAlpha, 0.25*aerialFade);
 		c.glUniform2fv(uniforms.noiseOrigin, 1, @ptrCast(&noiseOrigin));
 		c.glUniform3fv(uniforms.fogColor, 1, @ptrCast(&fogColor));
 		c.glUniform1f(uniforms.fogDensity, fogDensity);
@@ -127,7 +129,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	// Layer 4: Top-of-all-layers Storm 2D Planar Cloud Layer — darker, heavy sky coverage, spawns during rain (Z = 520)
 	const rainIntensity: f32 = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
 	if (rainIntensity > 0.02) {
-		const stormAlpha = rainIntensity * 0.85;
+		const stormAlpha = rainIntensity * 0.85*aerialFade;
 		if (stormAlpha > 0.01) {
 			const stormPlaneHeightRelative: f32 = @floatCast(@as(f64, stormPlaneHeight) - playerPos[2]);
 			c.glUniform1f(uniforms.planeHeightRelative, stormPlaneHeightRelative);

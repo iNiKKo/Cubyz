@@ -66,6 +66,10 @@ var deferredUniforms: struct {
 	@"fog.fogHigher": c_int,
 	fogWhitening: c_int,
 	weatherFogStrength: c_int,
+	/// Dedicated aerial transition, applied in the deferred shader only to low-altitude ground.
+	skyIslandGroundFade: c_int,
+	skyIslandMistStrength: c_int,
+	skyIslandFogColor: c_int,
 	cloudColor: c_int,
 	tanXY: c_int,
 	zNear: c_int,
@@ -355,7 +359,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	chunk_meshing.quadsDrawn = 0;
 	chunk_meshing.transparentQuadsDrawn = 0;
-	const playerBlock = mesh_storage.getBlockFromAnyLodFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2]));
+	// Submersion is a camera-local physical state, so it must use the exact LOD0 voxel. The previous
+	// any-LOD fallback could sample a coarse terrain voxel thousands of blocks tall while flying at a sky
+	// island; if that coarse voxel contained water down at ground level it incorrectly enabled every
+	// underwater post-process and render-distance path despite the camera being in open air.
+	const playerBlock = mesh_storage.getBlockFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2])) orelse blocks.Block{.typ = 0, .data = 0};
 	const isSubmerged = blocks.meshes.hasFog(playerBlock);
 	const meshes = mesh_storage.updateAndGetRenderChunks(world.conn, &frustum, playerPos, settings.renderDistance);
 
@@ -488,7 +496,9 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	cloudFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
-	if (!isSubmerged and playerPos[2] <= 2000.0) {
+	// Cloud layers fade over the same aerial transition as sky-island mist instead of disappearing at
+	// the old 2k boundary.
+	if (!isSubmerged and playerPos[2] < 6000.0) {
 		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 	}
@@ -527,6 +537,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	waterSurfaceFrameBuffer.bindTexture(c.GL_TEXTURE12);
 	worldFrameBuffer.unbind();
 	deferredRenderPassPipeline.bind(null);
+	// This is deliberately independent of block/underwater fog. It fades only low ground during the
+	// ascent from the ordinary world; sky islands do not exist until roughly Z=10k.
+	const skyIslandGroundFade = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 2000.0)/4000.0)), 0.0, 1.0);
+	c.glUniform1f(deferredUniforms.skyIslandGroundFade, skyIslandGroundFade);
+	const skyIslandMistStrength = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
+	c.glUniform1f(deferredUniforms.skyIslandMistStrength, skyIslandMistStrength);
+	c.glUniform3f(deferredUniforms.skyIslandFogColor, 0.0, 0.0, 0.0);
 	if (clouds.isPlayerInsideCloud(playerPos)) {
 		const cloudFogColor = Vec3f{0.92, 0.95, 1.0} * game.world.?.dayTime.fog.fogColor;
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&cloudFogColor));
@@ -538,35 +555,37 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	} else if (!blocks.meshes.hasFog(playerBlock)) {
 		const skyColorVal = game.world.?.dayTime.fog.skyColor;
 		const baseFogColor = game.world.?.dayTime.fog.fogColor;
+		// The aerial fade uses the ordinary clear-sky haze colour, not water's absorption colour.
+		c.glUniform3fv(deferredUniforms.skyIslandFogColor, 1, @ptrCast(&skyColorVal));
 		var fogColor = skyColorVal;
 		var fogDensity = game.world.?.dayTime.fog.density;
 		const playerZ: f32 = @floatCast(playerPos[2]);
 
-		// Calculate smooth cloud altitude factor (1.0 near cloud layer Z=268..318, 0.0 at ground level):
-		const cloudAltDist = @abs(playerZ - 295.5);
+		// Calculate smooth cloud altitude factor around the raised low 3D deck (Z=448..458).
+		const cloudAltDist = @abs(playerZ - 453.0);
 		const cloudAltFactor = 1.0 - std.math.clamp((cloudAltDist - 10.0) / 40.0, 0.0, 1.0);
 
 		// Calculate total maximum distance of all loaded LOD chunks combined (HQ LOD0 + low-res LODs):
 		const lodScale: f32 = @floatFromInt(@as(u32, 1) << main.settings.highestLod);
 		const totalMaxLodDist: f32 = @as(f32, @floatFromInt(@as(u32, main.settings.renderDistance) * 32)) * lodScale;
+		// Clear-air visibility normally comes from the loaded LOD range.
+		if (totalMaxLodDist > 0) fogDensity = 1.0 / totalMaxLodDist;
+		// Sky islands begin around Z=10k. Their own distinct distance mist ramps in only as that layer is
+		// approached, so it hides far islands without incorrectly fogging the entire 2k-to-6k ascent.
+		const skyIslandMist = std.math.clamp((playerZ - 8000.0)/2000.0, 0.0, 1.0);
+		const skyIslandFogRange: f32 = 750.0;
+		fogDensity = std.math.lerp(fogDensity, 1.0/skyIslandFogRange, skyIslandMist);
 
-		if (playerZ > 1000.0) {
-			const highAltFactor = std.math.clamp((playerZ - 1000.0) / 1000.0, 0.0, 1.0);
-			fogColor += (skyColorVal - fogColor) * @as(Vec3f, @splat(highAltFactor));
-			fogDensity += ((1.0 / @max(1.0, totalMaxLodDist)) - fogDensity) * highAltFactor;
-		} else {
-			// Near cloud altitude (Z ~ 288), smoothly blend fogColor away from sky blue toward soft cloud fog color:
+		if (playerZ <= 2000.0) {
+			// Near the raised cloud altitude (Z ~ 448), smoothly blend toward the soft cloud fog colour.
 			fogColor = skyColorVal + (baseFogColor - skyColorVal) * @as(Vec3f, @splat(cloudAltFactor));
-			if (totalMaxLodDist > 0) {
-				fogDensity = 1.0 / totalMaxLodDist;
-			}
 		}
 		// Ground-level rendering deliberately derives its base fog from LOD range above. Weather haze
 		// needs an independent density floor, not a multiplier of that base: otherwise its range changes
 		// with the player's LOD/render-distance setting. During weather, use DayTime's locally tinted haze
 		// instead of sky blue: this prevents clouds from bleaching white and makes the horizon wall merge
 		// with fog rather than tracing distant mountain silhouettes.
-		const weatherVisibility = game.world.?.dayTime.weatherVisibility;
+		const weatherVisibility = if (playerZ > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
 		if (weatherVisibility > 0.001) {
 			const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
 			fogColor += (baseFogColor - fogColor) * @as(Vec3f, @splat(weatherFogTint));
@@ -575,11 +594,16 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&fogColor));
 		c.glUniform1f(deferredUniforms.@"fog.density", fogDensity);
-		c.glUniform1f(deferredUniforms.@"fog.fogLower", game.world.?.dayTime.fog.fogLower);
-		c.glUniform1f(deferredUniforms.@"fog.fogHigher", game.world.?.dayTime.fog.fogHigher);
+		// Existing worlds may still have the old sky-islands biome data until their assets reload. Never
+		// pass that biome's former 1e10 underwater sentinel into the deferred shader at sky-island height.
+		c.glUniform1f(deferredUniforms.@"fog.fogLower", if (playerZ > 2000.0) -1e5 else game.world.?.dayTime.fog.fogLower);
+		c.glUniform1f(deferredUniforms.@"fog.fogHigher", if (playerZ > 2000.0) 1e5 else game.world.?.dayTime.fog.fogHigher);
 		// The clear-weather LOD horizon benefits from a pale atmospheric fade. Weather haze must retain
 		// its blue-grey tint instead; whitening it is what made rainy cloud undersides read pure white.
-		c.glUniform1f(deferredUniforms.fogWhitening, if (weatherVisibility > 0.001) 0.0 else 0.7);
+		// Aerial mist must converge to the real sky hue. The ordinary LOD-fog whitening is useful near
+		// ground, but at sky-island height it turns the mist grey/white and leaves dark island silhouettes
+		// reading as sharp cut-outs instead of being absorbed into the blue atmosphere.
+		c.glUniform1f(deferredUniforms.fogWhitening, if (weatherVisibility > 0.001 or skyIslandMist > 0.001) 0.0 else 0.7);
 		c.glUniform1f(deferredUniforms.weatherFogStrength, weatherVisibility);
 	} else {
 		const fogColor = blocks.meshes.fogColor(playerBlock);
@@ -1429,6 +1453,7 @@ pub const Skybox = struct {
 		billboardSize: c_int,
 		color: c_int,
 		opacity: c_int,
+		cloudAttenuation: c_int,
 	} = undefined;
 	var celestialVao: graphics.VertexArray = undefined;
 
@@ -1596,7 +1621,7 @@ pub const Skybox = struct {
 		return .{.right = right, .up = up};
 	}
 
-	fn drawCelestial(worldCenter: Vec3f, billboardRight: Vec3f, billboardUp: Vec3f, size: f32, color: Vec3f, opacity: f32) void {
+	fn drawCelestial(worldCenter: Vec3f, billboardRight: Vec3f, billboardUp: Vec3f, size: f32, color: Vec3f, opacity: f32, cloudAttenuation: f32) void {
 		if (opacity <= 0) return;
 		c.glUniform3fv(celestialUniforms.worldCenter, 1, @ptrCast(&worldCenter));
 		c.glUniform3fv(celestialUniforms.billboardRight, 1, @ptrCast(&billboardRight));
@@ -1604,6 +1629,7 @@ pub const Skybox = struct {
 		c.glUniform1f(celestialUniforms.billboardSize, size);
 		c.glUniform3fv(celestialUniforms.color, 1, @ptrCast(&color));
 		c.glUniform1f(celestialUniforms.opacity, opacity);
+		c.glUniform1f(celestialUniforms.cloudAttenuation, cloudAttenuation);
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
@@ -1642,8 +1668,8 @@ pub const Skybox = struct {
 			const sunCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, sunDir);
 			const moonCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, moonDir);
 
-			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten);
-			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten);
+			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten, sunCloudAtten);
+			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten, moonCloudAtten);
 		}
 	}
 };
@@ -1983,17 +2009,21 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		activeCascadeCount = activeCascades;
 
 		const maxDistSq: f64 = 2.0 * 2.0; // 2 blocks of player movement
-		const maxFrameAge: u32 = 20; // Refresh all cascades in unison every 20 frames (~0.33s) when standing still
-
-		const diffX = playerPos[0] - renderedPlayerPos[0][0];
-		const diffY = playerPos[1] - renderedPlayerPos[0][1];
-		const diffZ = playerPos[2] - renderedPlayerPos[0][2];
-		const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
-		const frameAge = shadowFrameCounter -% lastRenderedFrame[0];
-
-		const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= maxFrameAge or shadowFrameCounter <= 2;
+		const maxFrameAge: u32 = 20; // Far/static cascades remain cached while standing still.
+		const refreshNearFoliageShadowEveryFrame = settings.foliageSway and settings.foliageShadows;
 
 		for (0..activeCascades) |i| {
+			// Foliage vertices sway every render frame. Reusing its near CSM map for 20 frames makes its
+			// ground shadows hold still then snap to a new phase, which reads as noisy/jittery motion.
+			// Cascade 0 is the only close-detail map and refreshes each frame during foliage sway; the much
+			// larger mid/far cascades retain the existing cache cadence for a bounded performance cost.
+			const diffX = playerPos[0] - renderedPlayerPos[i][0];
+			const diffY = playerPos[1] - renderedPlayerPos[i][1];
+			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
+			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
+			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
+			const cascadeMaxFrameAge: u32 = if (refreshNearFoliageShadowEveryFrame and i == 0) 1 else maxFrameAge;
+			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or shadowFrameCounter <= 2;
 			if (needsReRender) {
 				lastRenderedFrame[i] = shadowFrameCounter;
 				renderedPlayerPos[i] = playerPos;

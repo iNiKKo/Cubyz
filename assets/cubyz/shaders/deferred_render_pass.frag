@@ -29,6 +29,11 @@ uniform float waterTime;
 uniform float fogWhitening;
 // 0 = ordinary LOD fog; weather increases both near-range haze and distant falloff.
 uniform float weatherFogStrength;
+// Aerial ground transition is intentionally separate from Fog / underwater absorption. It only hides
+// the old low-altitude world beneath the sky islands and never affects nearby high-altitude terrain.
+uniform float skyIslandGroundFade;
+uniform float skyIslandMistStrength;
+uniform vec3 skyIslandFogColor;
 
 struct Fog {
 	vec3 color;
@@ -148,6 +153,24 @@ void main() {
 		float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
 		float fogDistance = calculateFogDistance(dist, densityAdjustment, playerWorldZ, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 		fragColor.rgb = applyFrontfaceFog(fogDistance, fog.color, fragColor.rgb);
+		if (fog.fogLower < 1e9 && skyIslandGroundFade > 0.0) {
+			// Reconstruct the fragment's absolute Z. The transition targets the ordinary ground band only;
+			// islands around 10k therefore retain their separate distance mist while the distant ground below
+			// has already faded during the 2k-to-6k ascent transition.
+			float eyeDistance = dist*densityAdjustment;
+			float fragmentWorldZ = playerWorldZ + normalize(direction).z*eyeDistance;
+			float lowGroundMask = 1.0 - smoothstep(1800.0, 3200.0, fragmentWorldZ);
+			float aerialFade = skyIslandGroundFade*lowGroundMask;
+			fragColor.rgb = mix(fragColor.rgb, skyIslandFogColor, aerialFade);
+		}
+		if (fog.fogLower < 1e9 && skyIslandMistStrength > 0.0) {
+			// A second, explicitly sky-coloured aerial veil removes the dark, pixel-stepped outlines left
+			// by distant voxel LOD transitions. It is depth-based (not a fullscreen wash), so nearby islands
+			// stay fully detailed while geometry beyond the mist range smoothly becomes the background sky.
+			float eyeDistance = dist*densityAdjustment;
+			float silhouetteAbsorption = smoothstep(460.0, 1050.0, eyeDistance)*skyIslandMistStrength;
+			fragColor.rgb = mix(fragColor.rgb, skyIslandFogColor, silhouetteAbsorption);
+		}
 		if (fog.fogLower > 1e9) {
 			vec3 underwaterRay = normalize(direction);
 			float underwaterLookingUp = smoothstep(-0.15, 0.75, underwaterRay.z);
@@ -178,6 +201,17 @@ void main() {
 			fragColor.rgb = mix(fragColor.rgb, underwaterBackground, underwaterDrawCapFade);
 		}
 	} else {
+		if (skyIslandMistStrength > 0.0) {
+			// An MSAA colour resolve averages terrain and sky samples at a polygon edge, while the
+			// required nearest-sample depth resolve can select the sky sample. In that one-pixel
+			// disagreement `rawDepth` says "sky", so the geometry branch above cannot fog the
+			// dark, partially-resolved terrain colour. Absorb only pixels darker than the local
+			// sky colour: this removes the black stair-step fringe without washing out the sun,
+			// clouds, or normal open sky.
+			vec3 darkerThanSky = max(skyIslandFogColor - fragColor.rgb, vec3(0.0));
+			float msaaDarkEdge = clamp(max(darkerThanSky.r, max(darkerThanSky.g, darkerThanSky.b))*3.0, 0.0, 1.0);
+			fragColor.rgb = mix(fragColor.rgb, skyIslandFogColor, msaaDarkEdge*skyIslandMistStrength);
+		}
 		if (fog.fogLower > 1e9) {
 			// Submerged underwater: leaving most of the dark star/sky background visible makes
 			// every fogged terrain ridge read as a hard black outline. Converge sky pixels into

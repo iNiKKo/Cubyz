@@ -336,6 +336,36 @@ pub const WeatherGrid = struct {
 	}
 };
 
+/// Weather precipitation and its local atmosphere live below the low storm deck. Keep this shared with
+/// the rain renderer so climbing/flying above the deck never leaves rain, haze, storm dimming, or
+/// disabled god rays active in otherwise clear air.
+pub const weatherCloudBaseHeight: f64 = 448.0;
+
+/// Smooth only the last few blocks below the cloud base, then fully disable local weather above it.
+/// The short fade avoids a one-frame fog/light pop when crossing the deck in flight.
+pub fn weatherExposureAtAltitude(z: f64) f32 {
+	return std.math.clamp(@as(f32, @floatCast((weatherCloudBaseHeight - z)/8.0)), 0.0, 1.0);
+}
+
+/// Weather is an outdoor effect. The propagated sunlight field is present in open air (including at
+/// night, because it represents sky exposure rather than the current time-of-day brightness) but falls
+/// away under solid roofs and into caves. Requiring a strong local sky-light value prevents miners from
+/// receiving rain, storm fog, dim daylight, or other surface weather merely because their X/Y lies in a
+/// rainy weather cell.
+pub fn weatherExposureAtPosition(pos: Vec3d) f32 {
+	const altitudeExposure = weatherExposureAtAltitude(pos[2]);
+	if (altitudeExposure <= 0.0) return 0.0;
+	const x: i32 = @intFromFloat(@floor(pos[0]));
+	const y: i32 = @intFromFloat(@floor(pos[1]));
+	const z: i32 = @intFromFloat(@floor(pos[2]));
+	const light = renderer.mesh_storage.getLight(x, y, z) orelse return 0.0;
+	const skyLight: u8 = @max(light[0], @max(light[1], light[2]));
+	// A brief fade at cave mouths avoids a hard fog wall, while normal shaded terrain and foliage remain
+	// weather-exposed. Direct outdoor sky light is 255.
+	const skyExposure = std.math.clamp((@as(f32, @floatFromInt(skyLight)) - 96.0)/128.0, 0.0, 1.0);
+	return altitudeExposure*skyExposure;
+}
+
 pub const World = struct { // MARK: World
 	conn: *Connection,
 	manager: *ConnectionManager,
@@ -688,8 +718,12 @@ pub const World = struct { // MARK: World
 			// It must not tint/fog a player standing in a neighbouring clear biome.
 			const playerPos = Player.getPosBlocking();
 			const localWeather = world.?.weatherGrid.sampleAt(playerPos[0], playerPos[1]);
-			const dust = localWeather.dust;
-			const precipitationVisibility = if (localWeather.kind == 1 or localWeather.kind == 2) localWeather.precipitation else 0.0;
+			// Local cells still retain their server weather above the cloud deck so players below can see
+			// the same storm, but this camera is in clear air: weather particles are already altitude-gated
+			// in rain.zig, and its fog/dimming counterpart must use the identical gate here.
+			const weatherExposure = weatherExposureAtPosition(playerPos);
+			const dust = localWeather.dust*weatherExposure;
+			const precipitationVisibility = if (localWeather.kind == 1 or localWeather.kind == 2) localWeather.precipitation*weatherExposure else 0.0;
 			// WeatherMap commonly produces gentle rain in the 0.05-0.15 range. A linear response made
 			// that visually indistinguishable from clear weather, so use a square-root perceptual curve:
 			// light rain gains a readable haze while full storms still remain substantially stronger.
@@ -708,11 +742,11 @@ pub const World = struct { // MARK: World
 				self.fog.skyColor += (dustColor - self.fog.skyColor)*@as(Vec3f, @splat(dust*0.35));
 				self.fog.density *= std.math.lerp(1.0, 6.0, dust);
 			}
-			if (localWeather.precipitation > 0.01 and (localWeather.kind == 1 or localWeather.kind == 2)) {
+			if (precipitationVisibility > 0.01 and (localWeather.kind == 1 or localWeather.kind == 2)) {
 				const precipitationFog = if (localWeather.kind == 2) Vec3f{0.88, 0.92, 0.97} else Vec3f{0.58, 0.65, 0.74};
-				self.fog.fogColor += (precipitationFog - self.fog.fogColor)*@as(Vec3f, @splat(localWeather.precipitation*0.35));
-				self.fog.skyColor += (precipitationFog - self.fog.skyColor)*@as(Vec3f, @splat(localWeather.precipitation*0.18));
-				self.fog.density *= std.math.lerp(1.0, 2.2, localWeather.precipitation);
+				self.fog.fogColor += (precipitationFog - self.fog.fogColor)*@as(Vec3f, @splat(precipitationVisibility*0.35));
+				self.fog.skyColor += (precipitationFog - self.fog.skyColor)*@as(Vec3f, @splat(precipitationVisibility*0.18));
+				self.fog.density *= std.math.lerp(1.0, 2.2, precipitationVisibility);
 			}
 			if (self.weatherVisibility > 0.01) {
 				// Weather needs a dedicated atmospheric colour rather than a lightly tinted version of the

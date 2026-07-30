@@ -15,7 +15,7 @@ const c = @import("c");
 const cellSize: f32 = 40.0;
 const cellSizeD: f64 = cellSize;
 const maxGridDim: u32 = 208;
-const cloudBaseHeight: f32 = 288.0;
+const cloudBaseHeight: f32 = 448.0;
 const cloudThickness: f32 = 10.0;
 const cloudScale: f32 = 160.0;
 const detailScale: f32 = 103.0;
@@ -592,11 +592,11 @@ pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
 	const relZ = cloudBaseHeight - playerPos[2];
 	if (relZ > 0) {
 		const t = relZ / dir[2];
-		const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
-		const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
-		const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
-		const hitX = playerPos[0] + @as(f64, dir[0])*@as(f64, t) - @as(f64, windOffset[0]);
-		const hitY = playerPos[1] + @as(f64, dir[1])*@as(f64, t) - @as(f64, windOffset[1]);
+		// Visible voxel coverage is currently world-stationary (draw/update use a zero cloud wind
+		// offset). Applying a real-time wind offset only here made the sun test slide through a cloud
+		// that was visually still, causing unstable bright/dark flicker at a cloud boundary.
+		const hitX = playerPos[0] + @as(f64, dir[0])*@as(f64, t);
+		const hitY = playerPos[1] + @as(f64, dir[1])*@as(f64, t);
 		
 		if (sampleCoverage(hitX, hitY)) {
 			atten *= 0.30;
@@ -758,11 +758,18 @@ fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f
 pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	if (!settings.clouds) return;
 	if (indexCount == 0 and stormIndexCount == 0) return;
+	// Clouds recede with altitude rather than vanishing at a fixed flight ceiling. This shares the
+	// sky-island atmosphere's 2k-to-6k transition and avoids a visible horizontal cutoff.
+	const aerialFade = 1.0 - std.math.clamp(@as(f32, @floatCast((playerPos[2] - 2000.0)/4000.0)), 0.0, 1.0);
+	if (aerialFade <= 0.001) return;
 
 	pipeline.bind(null);
 
 	const neutralWhite: Vec3f = .{1, 1, 1};
-	const cloudBase = neutralWhite * @as(Vec3f, @splat(0.875)) + skyColor * @as(Vec3f, @splat(0.125));
+	// The lower voxel deck needs substantial atmospheric uptake: a near-neutral colour stayed too bright
+	// against a black night sky and too dark against the bright daytime sky. 35% is still below a full sky
+	// tint, so cloud shape/light remains readable rather than becoming a solid slice of sky.
+	const cloudBase = neutralWhite * @as(Vec3f, @splat(0.65)) + skyColor * @as(Vec3f, @splat(0.35));
 	// Clouds are an atmosphere-lit volume, not terrain. Multiplying them directly by the terrain ambient
 	// makes their pale albedo clip white at noon and collapse almost black at night. Keep a cool skylight
 	// floor and compress the daylight contribution so both ends of the day/night cycle stay readable.
@@ -805,7 +812,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	// Base layer: fixed alpha, completely unaffected by weather.
 	// The dedicated cloud target owns a private depth copy, so restore the depth prepass there. It keeps
 	// voxel cloud faces and the thin layer correctly ordered without ever contaminating terrain fog depth.
-	drawLayer(&vao, indexCount, tint, baseAlpha, baseMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
+	drawLayer(&vao, indexCount, tint, baseAlpha*aerialFade, baseMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
 
 	// Storm coverage is already gated per world position by the server weather snapshot in update().
 	// It must not be gated again by the player's own rain value, or a jungle storm visible from a dry
@@ -817,7 +824,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 			@floatCast(originY - playerPos[1] + @as(f64, windOffset[1])),
 			@floatCast(@as(f64, cloudBaseHeight + stormGap) - playerPos[2]),
 		};
-		drawLayer(&stormVao, stormIndexCount, stormTint, baseAlpha, stormMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
+		drawLayer(&stormVao, stormIndexCount, stormTint, baseAlpha*aerialFade, stormMeshOriginRel, true, fogColor, fogDensity, weatherFogStrength);
 	}
 
 	c.glDisable(c.GL_POLYGON_OFFSET_FILL);

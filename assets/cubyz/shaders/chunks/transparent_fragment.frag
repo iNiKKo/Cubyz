@@ -249,7 +249,10 @@ void main() {
 	vec3 fogColor = unpackColor(fogData[int(animatedTextureIndex)].fogColor);
 	// Water has its own deliberately stylised surface lighting below. Other transparent solids such
 	// as ice must participate in ordinary sun/cloud shadows or they read as self-illuminated.
-	float materialShadow = isWater ? 1.0 : sampleSunShadow(direction, normal, length(mvVertexPos), false)*sampleCloudShadow(direction);
+	float materialShadow = isWater ? 1.0 : combineSunAndCloudShadow(
+		sampleSunShadow(direction, normal, length(mvVertexPos), false),
+		sampleCloudShadow(direction)
+	);
 	vec3 pixelLight = max(light*normalVariation*materialShadow, texture(emissionSampler, textureCoords).r*4);
 	vec4 textureColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
 

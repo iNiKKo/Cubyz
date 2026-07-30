@@ -83,9 +83,9 @@ const int PCF_SAMPLES = 9;
 // treatment for the same underlying problem at close range. Widened + upgraded to the full 9-tap kernel
 // (was 4-tap) so distant foliage gets the same "blend the alpha-cutout noise into a soft, stable shadow
 // instead of a noisy/pulsing one" treatment cascade 0 already has, rather than the opposite.
-const float PCF_KERNEL_RADIUS_C0 = 2.0;  // cascade 0: wide enough to average out leaf/grass cutout noise
-const float PCF_KERNEL_RADIUS_C1 = 1.2;  // cascade 1: smooth mid-range
-const float PCF_KERNEL_RADIUS_C2 = 3.5;  // cascade 2: wide enough for distant foliage's coarser cutout noise
+const float PCF_KERNEL_RADIUS_C0 = 4.2;  // cascade 0: soft near-field terrain/tree penumbra
+const float PCF_KERNEL_RADIUS_C1 = 2.0;  // cascade 1: avoid a hard mid-range cascade edge
+const float PCF_KERNEL_RADIUS_C2 = 4.2;  // cascade 2: broad distant terrain/foliage blend
 
 // Per-fragment interleaved-gradient-noise angle, used to rotate the Poisson disk so its sample pattern
 // isn't screen-aligned. Without this, the fixed sample directions can beat against the shadow map's own
@@ -186,6 +186,7 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// — cheap, reliable, purely-geometric way to tell "thin cross-quad plant that needs this snap" apart
 	// from "solid cube-shaped foliage that doesn't," with no new per-quad data needed.
 	bool isCrossQuadFoliage = isFoliage && abs(normal.z) < 0.9;
+	bool isThinHorizontalFoliage = isFoliage && abs(normal.z) > 0.55;
 	float blockTopRelativeZ = worldPosRelative.z - fract(worldPosRelative.z + playerPositionFraction.z) + 1.0;
 	vec3 shadowTestPos = isCrossQuadFoliage ? vec3(worldPosRelative.xy, blockTopRelativeZ) : worldPosRelative;
 	// Normal-offset bias: offsets position outward along face normal to eliminate self-shadowing acne.
@@ -201,6 +202,9 @@ float sampleCascade(int cascade, vec3 worldPosRelative, vec3 normal, float tanTh
 	// solid cube-shaped leaf blocks should get the ordinary normal-offset acne bias like any other solid
 	// surface, not skip it the way thin cross-quad plants correctly do.
 	vec3 offsetPos = isCrossQuadFoliage ? shadowTestPos : (worldPosRelative + normal * (normalOffsetBase * (1.0 + float(cascade) * 0.5)));
+	// Raised carpet petals/leaf piles must still receive a genuine tree/terrain shadow. Give only their
+	// extremely close own depth a little extra separation instead of flattening *all* received shadows.
+	if (isThinHorizontalFoliage) offsetPos += normal*0.055;
 	vec4 lightSpacePos = csmLightSpaceMatrix[cascade] * vec4(offsetPos, 1.0);
 	vec3 projCoords = lightSpacePos.xyz / lightSpacePos.w;
 	projCoords = projCoords * 0.5 + 0.5; // clip [-1,1] → UV [0,1]
@@ -343,4 +347,17 @@ float sampleCloudShadow(vec3 worldPosRelative) {
 	float coverage = texture(cloudCoverageTex, uv).r;
 	float shadow = 1.0 - smoothstep(0.45, 0.65, coverage)*cloudShadowStrength*distanceFade;
 	return shadow;
+}
+
+// A cloud shadow is broad atmospheric occlusion, not a second hard directional blocker. Under a thick
+// cloud, remaining sunlight is diffuse, so sharp tree/block CSM shadows must lose contrast while the
+// cloud's own overall darkening remains. Keep the no-cloud result exact and progressively relax only
+// the direct-sun shadow as cloud coverage increases.
+float combineSunAndCloudShadow(float sunShadow, float cloudShadow) {
+	// cloudShadowStrength is 0.3, so raw (1-cloudShadow) only reaches 0.3 under complete coverage.
+	// Normalize it before using it as a diffusion amount; otherwise a fully clouded scene only softened
+	// hard terrain shadows by ~25%, which was visually indistinguishable from clear sunlight.
+	float cloudCoverage = clamp((1.0 - cloudShadow)/cloudShadowStrength, 0.0, 1.0);
+	float diffusedSunShadow = mix(sunShadow, 1.0, cloudCoverage*0.70);
+	return diffusedSunShadow*cloudShadow;
 }

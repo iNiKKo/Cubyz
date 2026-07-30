@@ -141,9 +141,8 @@ fn findGroundZ(worldX: f64, worldY: f64, anchorZ: f64) f64 {
 
 /// Rebuilds the raindrop-quad mesh every frame with per-voxel light sampling.
 pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
-	const cloudBaseHeight: f64 = 288.0;
-	// Hard cap: If player is standing at or above clouds (Z >= 286), no rain spawns!
-	if (!settings.rain or playerPos[2] >= cloudBaseHeight - 2.0) {
+	// Above the low storm deck this camera is in clear air, so no local precipitation spawns.
+	if (!settings.rain or game.weatherExposureAtPosition(playerPos) <= 0.0) {
 		indexCount = 0;
 		return;
 	}
@@ -196,8 +195,8 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const edgeDist = @sqrt(dx*dx + dy*dy)/gridRadius;
 			if (edgeDist >= 1.0) continue;
 
-			// Hard cap topZ under cloudBaseHeight (288.0)
-			const topZ: f64 = @min(anchorZ + fallRangeAbovePlayer, cloudBaseHeight - 1.0);
+			// Keep the particle source below the low storm deck.
+			const topZ: f64 = @min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 			const groundZ: f64 = findGroundZ(worldX, worldY, anchorZ);
 			if (topZ <= groundZ) continue;
 			const range: f32 = @max(@as(f32, @floatCast(topZ - groundZ)), 1.0);
@@ -247,7 +246,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 	// A sparse distant tier makes a rain/snow cell readable from outside its biome. It deliberately uses
 	// only a few long-lived streaks per 512-block weather cell; the dense, ground-aware grid above remains
 	// the close-range effect and prevents a distant weather cell from becoming a solid square curtain.
-	const farTopZ: f64 = @min(anchorZ + fallRangeAbovePlayer, cloudBaseHeight - 1.0);
+	const farTopZ: f64 = @min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 	const farGroundZ: f64 = anchorZ - 4.0;
 	const farRange: f32 = @max(@as(f32, @floatCast(farTopZ - farGroundZ)), 1.0);
 	for (weatherSnapshot.cells, 0..) |weatherCell, weatherIndex| {
