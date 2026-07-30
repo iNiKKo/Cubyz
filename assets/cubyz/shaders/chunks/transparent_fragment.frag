@@ -30,10 +30,12 @@ layout(location = 8) uniform float zNear;
 layout(location = 9) uniform float zFar;
 
 uniform bool reflectionsEnabled;
+// Texture-handle identity, supplied by the block registry. Transparency and material reflectivity
+// are deliberately not used as water tests: ice, glass, and transparent foliage must stay still.
+uniform int waterTextureIndex;
 // Real elapsed seconds, for the water-reflection ripple below — see chunk_meshing.zig's
 // bindTransparentShaderAndUniforms (same pattern clouds.zig/thin_clouds.zig use for wind animation).
 uniform float waterTime;
-uniform vec3 sunDirection;
 
 struct Fog {
 	vec3 color;
@@ -58,6 +60,8 @@ layout(std430, binding = 7) buffer _fogData
 {
 	FogData fogData[];
 };
+
+#include "shadow.glsl"
 
 float lightVariation(vec3 normal) {
 	const vec3 directionalPart = vec3(0, contrast/2, contrast);
@@ -227,17 +231,21 @@ void main() {
 	if (isBackFace != 0 && gl_FrontFacing) discard;
 
 	float animatedTextureIndex = animatedTexture[textureIndex];
+	bool isWater = textureIndex == waterTextureIndex;
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 	float normalVariation = lightVariation(normal);
 	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
 	float dist = zFromDepth(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r);
 	float waterSurfaceDepth = mvVertexPos.y;
-	float waterColumnDepth = max(0.0, dist - waterSurfaceDepth);
-	float depthExtinction = exp(-0.16 * waterColumnDepth);
+	float waterColumnDepth = isWater ? max(0.0, dist - waterSurfaceDepth) : 0.0;
+	float depthExtinction = isWater ? exp(-0.16 * waterColumnDepth) : 1.0;
 	float fogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fogData[int(animatedTextureIndex)].fogDensity, 1e10, 1e10);
 	float airFogDistance = calculateFogDistance(dist, densityAdjustment, playerPositionFraction.z, normalize(direction).z, fog.density, fog.fogLower - playerPositionInteger.z, fog.fogHigher - playerPositionInteger.z);
 	vec3 fogColor = unpackColor(fogData[int(animatedTextureIndex)].fogColor);
-	vec3 pixelLight = max(light*normalVariation, texture(emissionSampler, textureCoords).r*4);
+	// Water has its own deliberately stylised surface lighting below. Other transparent solids such
+	// as ice must participate in ordinary sun/cloud shadows or they read as self-illuminated.
+	float materialShadow = isWater ? 1.0 : sampleSunShadow(direction, normal, length(mvVertexPos), false)*sampleCloudShadow(direction);
+	vec3 pixelLight = max(light*normalVariation*materialShadow, texture(emissionSampler, textureCoords).r*4);
 	vec4 textureColor = texture(textureSampler, textureCoords)*vec4(pixelLight, 1);
 
 	// Material reflectivity (from the block's own texture) is read regardless of settings.reflections —
@@ -262,8 +270,8 @@ void main() {
 	float wave2 = cos(wUv.x * 0.5 - wUv.y * 1.2 + waterTime * 1.3);
 	float wave3 = sin(wUv.x * 1.4 + wUv.y * 1.8 - waterTime * 2.1);
 
-	float rippleX = (wave1 * 0.005 + wave2 * 0.003 - wave3 * 0.002) * rippleRangeFade;
-	float rippleY = (wave1 * 0.003 - wave2 * 0.005 + wave3 * 0.003) * rippleRangeFade;
+	float rippleX = isWater ? (wave1 * 0.005 + wave2 * 0.003 - wave3 * 0.002) * rippleRangeFade : 0.0;
+	float rippleY = isWater ? (wave1 * 0.003 - wave2 * 0.005 + wave3 * 0.003) * rippleRangeFade : 0.0;
 
 	vec3 rippledNormal = normalize(normal + vec3(rippleX, rippleY, 0.0));
 	vec3 reflDir = reflect(normalize(direction), rippledNormal);
@@ -281,12 +289,12 @@ void main() {
 	// ripple fade) instead: water beyond waterReflectionDistance skips SSR entirely and falls back to the
 	// flat sky/ground tint, same as the reflectionsEnabled-off path — regardless of what a ray from there
 	// could technically reach.
-	bool withinReflectionDistance = waterDist <= waterReflectionDistance;
+	bool withinReflectionDistance = isWater && waterDist <= waterReflectionDistance;
 	vec3 reflColor = (reflectionsEnabled && withinReflectionDistance) ? sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl) : skyRefl;
 
 	// Add realistic sun specular glint on water surface ripples:
 	vec3 sunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);
-	float sunSpecular = pow(max(0.0, dot(normalize(viewSpaceReflDir), sunDir)), 48.0) * 1.2;
+	float sunSpecular = isWater ? pow(max(0.0, dot(normalize(viewSpaceReflDir), sunDir)), 48.0) * 1.2 : 0.0;
 	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionsEnabled ? 1.0 : 0.4);
 
 	float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
@@ -294,7 +302,7 @@ void main() {
 	float specularReflectivity = materialReflectivity * fresnelBoost;
 
 	textureColor.rgb *= textureColor.a;
-	if (materialReflectivity > 0.01) {
+	if (isWater && materialReflectivity > 0.01) {
 		textureColor.rgb += reflColor * specularReflectivity * 0.70;
 	}
 	blendColor.rgb = vec3(1.0 - textureColor.a);
@@ -317,7 +325,7 @@ void main() {
 
 		// Apply the air fog:
 		applyBackfaceFog(airFogDistance, fog.color);
-	} else {
+	} else if (isWater) {
 		// Water surface underside (backface) viewed from underwater:
 		// Caustic ripple pattern that modulates the sky/outside background color with dark wave lines and bright shimmering highlights.
 		vec2 rippleUv = direction.xy * 0.35 + vec2(waterTime * 0.3);
@@ -330,6 +338,13 @@ void main() {
 
 		fragColor.rgb = textureColor.rgb * 0.20;
 		blendColor.rgb = waveModulation;
+		fragColor.a = 1.0;
+		return;
+	} else {
+		// Generic transparent materials (ice, glass, etc.) retain their own texture and
+		// alpha blend, but never inherit water's underwater caustics or animated surface.
+		fragColor.rgb = textureColor.rgb;
+		blendColor.rgb = vec3(1.0 - textureColor.a);
 		fragColor.a = 1.0;
 		return;
 	}

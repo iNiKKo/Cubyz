@@ -32,6 +32,9 @@ uniform vec3 dropLightPositionRelative;
 uniform vec3 dropLightColor;
 uniform float handLightRadius;
 uniform bool reflectionsEnabled;
+// Supplied by the block registry. Snow uses a material-local shadow softening so its high albedo
+// does not create disproportionately harsh dark patches.
+uniform int snowTextureIndex;
 
 layout(std430, binding = 1) buffer _animatedTexture
 {
@@ -89,7 +92,13 @@ vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012
 
 void main() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
+	// Cube leaf blocks are a dense, cutout canopy rather than a hard material with six visibly separate
+	// lit faces. Applying full block-face directional contrast creates the dark vertical seam around every
+	// leaf cube. Retain a little shape cue, but keep foliage lighting cohesive across the canopy.
 	float normalVariation = (opaqueInLod == 0) ? 1.0 : lightVariation(normal);
+	if (isFoliage != 0) {
+		normalVariation = mix(1.0, normalVariation, 0.22);
+	}
 	vec2 clampedUv = uv;
 	if (isFoliage != 0) {
 		vec2 tile = clamp(floor((uv - vec2(0.0005)) * 4.0), vec2(0.0), vec2(3.0));
@@ -129,6 +138,17 @@ void main() {
 	// SSS/root-AO/shadow self-occlusion handling below just because it isn't flat on a block boundary.
 	bool shadedAsFoliage = isFoliage != 0;
 	float shadowFactor = sampleSunShadow(direction, normal, length(mvVertexPos), shadedAsFoliage)*sampleCloudShadow(direction);
+	// Dense alpha-cutout cube leaves otherwise shadow their neighbouring leaf cubes very aggressively,
+	// producing dark canopy patches. Keep this leaf-only softening off grass/plant quads so they retain
+	// their normal, visible shadow response.
+	if (shadedAsFoliage && opaqueInLod != 0) {
+		shadowFactor = mix(shadowFactor, 1.0, 0.65);
+	}
+	// Bright snow makes the standard terrain shadow floor appear much darker than its surroundings.
+	// Keep contact/form detail, but diffuse 60% of that contrast for snow alone.
+	if (textureIndex == snowTextureIndex) {
+		shadowFactor = mix(shadowFactor, 1.0, 0.60);
+	}
 	// Rain/snow clouds turn the directional sun into diffuse overcast light. Preserve a small amount of
 	// form shading but remove the hard, sunny shadow contrast while local weather is active.
 	shadowFactor = mix(shadowFactor, 1.0, weatherShadowFade);
@@ -164,7 +184,11 @@ void main() {
 		// distance (chunk_vertex.vert scales uv by voxelSize, pushing uv.y above 1) `1.0 - uv.y` went
 		// negative and flat-darkened *all* distant foliage by the full 30%. Only the root — genuinely
 		// occluded by surrounding blades and the ground — should darken.
-		float rootAO = mix(0.70, 1.0, smoothstep(0.0, 0.4, uv.y));
+		// `cube_leaf.obj` uses compact atlas UVs (different faces occupy different 0.25-wide
+		// regions), so applying a grass-root gradient to it permanently darkens parts of a
+		// leaf cube based on texture coordinates. Only non-face-aligned foliage is a rooted
+		// plant blade/quad; cube leaves must keep uniform diffuse lighting.
+		float rootAO = opaqueInLod == 0 ? mix(0.70, 1.0, smoothstep(0.0, 0.4, uv.y)) : 1.0;
 
 		effectiveSunLight = outSunLight * (1.0 + sssTranslucency * sssIntensity) * rootAO;
 	}

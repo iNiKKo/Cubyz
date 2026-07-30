@@ -5,7 +5,6 @@
 		.{.items = .{.auto}},
 	},
 	.transparent = true,
-	.hasBackFace = true,
 	.absorbedLight = 0xb15635,
 	.model = "cubyz:cube",
 	.texture = "cubyz:ice",

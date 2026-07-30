@@ -59,6 +59,13 @@ const UniformStruct = struct {
 	/// transparent_fragment.frag) — harmless unused uniform location on the opaque pipeline, kept in
 	/// this shared struct rather than a second near-duplicate struct just for one extra field.
 	waterTime: c_int,
+	/// Texture handle for the sole material allowed to use the water-only path in
+	/// transparent_fragment.frag. This must not be inferred from transparency or reflectivity:
+	/// ice, glass, and future transparent foliage are separate materials.
+	waterTextureIndex: c_int,
+	/// Snow gets a local diffuse-shadow treatment because its bright albedo makes ordinary terrain
+	/// shadows read much harsher than on surrounding materials.
+	snowTextureIndex: c_int,
 	reflectionsEnabled: c_int,
 	waterReflectionDistance: c_int,
 	foliageSway: c_int,
@@ -254,6 +261,10 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 	c.glUniform1f(locations.waterTime, waterTime);
+	const waterBlock: Block = .{.typ = blocks.getTypeById("cubyz:water"), .data = 0};
+	c.glUniform1i(locations.waterTextureIndex, blocks.meshes.textureIndex(waterBlock, 0));
+	const snowBlock: Block = .{.typ = blocks.getTypeById("cubyz:snow"), .data = 0};
+	c.glUniform1i(locations.snowTextureIndex, blocks.meshes.textureIndex(snowBlock, 0));
 	c.glUniform1i(locations.foliageSway, @intFromBool(main.settings.foliageSway));
 	const weatherWind = game.world.?.weatherGrid.snapshot().wind;
 	c.glUniform2fv(locations.weatherWind, 1, @ptrCast(&weatherWind));
