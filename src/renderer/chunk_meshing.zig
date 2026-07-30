@@ -86,8 +86,22 @@ const UniformStruct = struct {
 	csmActiveCascades: c_int,
 	handLightPositionRelative: c_int,
 	handLightColor: c_int,
-	dropLightPositionRelative: c_int,
-	dropLightColor: c_int,
+	dropLightPosition0: c_int,
+	dropLightColor0: c_int,
+	dropLightPosition1: c_int,
+	dropLightColor1: c_int,
+	dropLightPosition2: c_int,
+	dropLightColor2: c_int,
+	dropLightPosition3: c_int,
+	dropLightColor3: c_int,
+	dropLightPosition4: c_int,
+	dropLightColor4: c_int,
+	dropLightPosition5: c_int,
+	dropLightColor5: c_int,
+	dropLightPosition6: c_int,
+	dropLightColor6: c_int,
+	dropLightPosition7: c_int,
+	dropLightColor7: c_int,
 	handLightRadius: c_int,
 	remoteHandLightPositionRelative: c_int,
 	remoteHandLightColor: c_int,
@@ -318,8 +332,22 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 
 	c.glUniform3fv(locations.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
 	c.glUniform3fv(locations.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
-	c.glUniform3fv(locations.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
-	c.glUniform3fv(locations.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
+	c.glUniform3fv(locations.dropLightPosition0, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[0]));
+	c.glUniform3fv(locations.dropLightColor0, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[0]));
+	c.glUniform3fv(locations.dropLightPosition1, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[1]));
+	c.glUniform3fv(locations.dropLightColor1, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[1]));
+	c.glUniform3fv(locations.dropLightPosition2, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[2]));
+	c.glUniform3fv(locations.dropLightColor2, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[2]));
+	c.glUniform3fv(locations.dropLightPosition3, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[3]));
+	c.glUniform3fv(locations.dropLightColor3, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[3]));
+	c.glUniform3fv(locations.dropLightPosition4, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[4]));
+	c.glUniform3fv(locations.dropLightColor4, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[4]));
+	c.glUniform3fv(locations.dropLightPosition5, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[5]));
+	c.glUniform3fv(locations.dropLightColor5, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[5]));
+	c.glUniform3fv(locations.dropLightPosition6, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[6]));
+	c.glUniform3fv(locations.dropLightColor6, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[6]));
+	c.glUniform3fv(locations.dropLightPosition7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[7]));
+	c.glUniform3fv(locations.dropLightColor7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[7]));
 	c.glUniform1f(locations.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 	const remoteLight = main.itemdrop.ItemDisplayManager.closestRemoteLight(game.Player.getPosBlocking());
 	c.glUniform3fv(locations.remoteHandLightPositionRelative, 1, @ptrCast(&remoteLight.positionRelative));

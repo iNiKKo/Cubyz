@@ -123,4 +123,11 @@ pub fn render() void {
 	// This slot will receive the next frame's queries after GUI rendering finishes.
 	submitted[curBuffer] = @splat(false);
 	draw.print("Total: {} µs", .{@divTrunc(sum, 1000)}, 0, 0, 8);
+	const lightManager = main.itemdrop.ItemDisplayManager;
+	draw.print("Dropped lights: {} sources -> {} clusters -> {}/{} GPU", .{
+		lightManager.droppedLightSourceCount,
+		lightManager.droppedLightClusterCount,
+		lightManager.activeDropLightCount,
+		lightManager.maxDropLights,
+	}, 0, y, 8);
 }

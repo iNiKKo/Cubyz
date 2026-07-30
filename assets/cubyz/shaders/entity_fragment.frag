@@ -17,8 +17,22 @@ layout(location = 5) uniform float contrast;
 
 uniform vec3 handLightPositionRelative;
 uniform vec3 handLightColor;
-uniform vec3 dropLightPositionRelative;
-uniform vec3 dropLightColor;
+uniform vec3 dropLightPosition0;
+uniform vec3 dropLightColor0;
+uniform vec3 dropLightPosition1;
+uniform vec3 dropLightColor1;
+uniform vec3 dropLightPosition2;
+uniform vec3 dropLightColor2;
+uniform vec3 dropLightPosition3;
+uniform vec3 dropLightColor3;
+uniform vec3 dropLightPosition4;
+uniform vec3 dropLightColor4;
+uniform vec3 dropLightPosition5;
+uniform vec3 dropLightColor5;
+uniform vec3 dropLightPosition6;
+uniform vec3 dropLightColor6;
+uniform vec3 dropLightPosition7;
+uniform vec3 dropLightColor7;
 uniform float handLightRadius;
 uniform vec3 remoteHandLightPositionRelative;
 uniform vec3 remoteHandLightColor;
@@ -36,12 +50,15 @@ vec3 handLightContribution(vec3 worldPosRelative) {
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
 		totalLight += handLightColor * atten * peakHighlight;
 	}
-	if (dropLightColor != vec3(0.0)) {
-		float dist = length(worldPosRelative - dropLightPositionRelative);
+	vec3 dropPositions[8] = vec3[8](dropLightPosition0, dropLightPosition1, dropLightPosition2, dropLightPosition3, dropLightPosition4, dropLightPosition5, dropLightPosition6, dropLightPosition7);
+	vec3 dropColors[8] = vec3[8](dropLightColor0, dropLightColor1, dropLightColor2, dropLightColor3, dropLightColor4, dropLightColor5, dropLightColor6, dropLightColor7);
+	for (int i = 0; i < 8; ++i) {
+		if (dropColors[i] == vec3(0.0)) continue;
+		float dist = length(worldPosRelative - dropPositions[i]);
 		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
 		float atten = (1.0 - normDist) * (1.0 - normDist);
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
-		totalLight += dropLightColor * atten * peakHighlight;
+		totalLight += dropColors[i] * atten * peakHighlight;
 	}
 	if (remoteHandLightColor != vec3(0.0)) {
 		float dist = length(worldPosRelative - remoteHandLightPositionRelative);
@@ -94,7 +111,7 @@ void main() {
 	float effectiveShadow = mix(shadowFactor, 1.0, clamp(handIntensity * 3.0, 0.0, 1.0));
 
 	vec3 directSunAndShadow = outSunLight * effectiveShadow;
-	vec3 activeLightColor = max(handLightColor, dropLightColor);
+	vec3 activeLightColor = max(handLightColor, max(max(max(dropLightColor0, dropLightColor1), max(dropLightColor2, dropLightColor3)), max(max(dropLightColor4, dropLightColor5), max(dropLightColor6, dropLightColor7))));
 	vec3 selfEmission = (handLightRadius > 0.0) ? activeLightColor * 0.7 : vec3(0.0);
 	vec3 light = min(max(directSunAndShadow + handLight + outBlockLight, selfEmission), vec3(1.0));
 	vec4 albedo = texture(textureSampler, outTexCoord);

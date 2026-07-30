@@ -54,8 +54,22 @@ pub const client = struct {
 		shadowTransitionFade: c_int,
 		handLightPositionRelative: c_int,
 		handLightColor: c_int,
-		dropLightPositionRelative: c_int,
-		dropLightColor: c_int,
+		dropLightPosition0: c_int,
+		dropLightColor0: c_int,
+		dropLightPosition1: c_int,
+		dropLightColor1: c_int,
+		dropLightPosition2: c_int,
+		dropLightColor2: c_int,
+		dropLightPosition3: c_int,
+		dropLightColor3: c_int,
+		dropLightPosition4: c_int,
+		dropLightColor4: c_int,
+		dropLightPosition5: c_int,
+		dropLightColor5: c_int,
+		dropLightPosition6: c_int,
+		dropLightColor6: c_int,
+		dropLightPosition7: c_int,
+		dropLightColor7: c_int,
 		handLightRadius: c_int,
 		remoteHandLightPositionRelative: c_int,
 		remoteHandLightColor: c_int,
@@ -266,8 +280,22 @@ pub const client = struct {
 		c.glUniform1f(uniforms.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 		c.glUniform3fv(uniforms.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
 		c.glUniform3fv(uniforms.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));
-		c.glUniform3fv(uniforms.dropLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionRelative));
-		c.glUniform3fv(uniforms.dropLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColor));
+		c.glUniform3fv(uniforms.dropLightPosition0, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[0]));
+		c.glUniform3fv(uniforms.dropLightColor0, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[0]));
+		c.glUniform3fv(uniforms.dropLightPosition1, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[1]));
+		c.glUniform3fv(uniforms.dropLightColor1, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[1]));
+		c.glUniform3fv(uniforms.dropLightPosition2, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[2]));
+		c.glUniform3fv(uniforms.dropLightColor2, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[2]));
+		c.glUniform3fv(uniforms.dropLightPosition3, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[3]));
+		c.glUniform3fv(uniforms.dropLightColor3, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[3]));
+		c.glUniform3fv(uniforms.dropLightPosition4, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[4]));
+		c.glUniform3fv(uniforms.dropLightColor4, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[4]));
+		c.glUniform3fv(uniforms.dropLightPosition5, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[5]));
+		c.glUniform3fv(uniforms.dropLightColor5, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[5]));
+		c.glUniform3fv(uniforms.dropLightPosition6, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[6]));
+		c.glUniform3fv(uniforms.dropLightColor6, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[6]));
+		c.glUniform3fv(uniforms.dropLightPosition7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[7]));
+		c.glUniform3fv(uniforms.dropLightColor7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[7]));
 		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 		// entity_manager is already locked by this render pass, so compute the closest remote light
 		// directly here instead of calling ItemDisplayManager.closestRemoteLight (which locks it).

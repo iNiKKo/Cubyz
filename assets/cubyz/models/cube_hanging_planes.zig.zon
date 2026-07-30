@@ -1,0 +1,6 @@
+.{
+	// Palm fronds and other hanging leaf planes need alpha-to-coverage under MSAA. This explicit
+	// classification keeps that treatment off hard cutout branch geometry, where it creates seams
+	// along the two triangles of an otherwise opaque quad.
+	.isFoliage = true,
+}

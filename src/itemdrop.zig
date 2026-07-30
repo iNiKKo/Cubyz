@@ -508,8 +508,25 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 
 	pub var handLightPositionRelative: Vec3f = @splat(0);
 	pub var handLightColor: Vec3f = @splat(0);
-	pub var dropLightPositionRelative: Vec3f = @splat(0);
-	pub var dropLightColor: Vec3f = @splat(0);
+	/// A dropped torch must not replace another dropped torch just because the player walks closer
+	/// to it. Keep a small, sorted set of the most relevant lights for the GPU instead. Four covers
+	/// ordinary torch use while keeping the per-fragment work bounded. Beyond this limit the weakest
+	/// lights are intentionally omitted rather than causing a sudden nearest-light swap.
+	pub const maxDropLights = 8;
+	const maxDropLightClusters = 32;
+	const dropLightClusterRadius: f32 = 4.0;
+	pub var dropLightPositionsRelative: [maxDropLights]Vec3f = @splat(@splat(0));
+	pub var dropLightColors: [maxDropLights]Vec3f = @splat(@splat(0));
+	/// F5 exposes these so dynamic-light pressure is visible while testing worlds with many torches.
+	pub var droppedLightSourceCount: u32 = 0;
+	pub var droppedLightClusterCount: u32 = 0;
+	pub var activeDropLightCount: u32 = 0;
+	const DropLightCluster = struct {
+		position: Vec3f,
+		color: Vec3f,
+		weight: f32,
+		sources: u16,
+	};
 	pub var handLightRadius: f32 = 12.0;
 	/// Live developer controls for procedural-tool attachment. Kept out of persistent graphics
 	/// settings because they are temporary model-tuning values, but replicated through heldLight.
@@ -615,7 +632,11 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 
 	fn updateHandLight() void {
 		handLightColor = @splat(0);
-		dropLightColor = @splat(0);
+		dropLightPositionsRelative = @splat(@splat(0));
+		dropLightColors = @splat(@splat(0));
+		droppedLightSourceCount = 0;
+		droppedLightClusterCount = 0;
+		activeDropLightCount = 0;
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
 		// The held state is replicated for every block item; only its emitted-light colour remains
@@ -657,7 +678,9 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 			sentInitialHeldLight = false;
 		}
 
-		var dropStrength: f32 = 0.0;
+		var clusters: [maxDropLightClusters]DropLightCluster = undefined;
+		var clusterCount: usize = 0;
+		var dropStrengths: [maxDropLights]f32 = @splat(0);
 
 		if (game.world) |world| {
 			const itemDrops = &world.itemDrops.super;
@@ -677,22 +700,62 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 							};
 							const distToPlayer = vec.length(relPos);
 							if (distToPlayer < 48.0) {
+								droppedLightSourceCount += 1;
 								const col = Vec3f{
 									@floatFromInt(light >> 16 & 255),
 									@floatFromInt(light >> 8 & 255),
 									@floatFromInt(light & 255),
 								} / @as(Vec3f, @splat(255.0));
 								const str = @max(@max(col[0], col[1]), col[2]) / (1.0 + distToPlayer * 0.05);
-								if (str > dropStrength) {
-									dropStrength = str;
-									dropLightColor = col;
-									dropLightPositionRelative = relPos;
+								// Nearby torches form one soft cluster. Its position is weighted by the
+								// visible contribution, so a pair within four blocks behaves like one
+								// stronger light rather than consuming two GPU slots.
+								var match: ?usize = null;
+								var bestClusterDistance = dropLightClusterRadius * dropLightClusterRadius;
+								for (clusters[0..clusterCount], 0..) |cluster, clusterIndex| {
+									const clusterDistance = vec.lengthSquare(relPos - cluster.position);
+									if (clusterDistance <= bestClusterDistance) {
+										bestClusterDistance = clusterDistance;
+										match = clusterIndex;
+									}
+								}
+								if (match) |clusterIndex| {
+									const oldWeight = clusters[clusterIndex].weight;
+									const newWeight = oldWeight + str;
+									clusters[clusterIndex].position = (clusters[clusterIndex].position * @as(Vec3f, @splat(oldWeight)) + relPos * @as(Vec3f, @splat(str))) / @as(Vec3f, @splat(newWeight));
+									clusters[clusterIndex].color += col;
+									clusters[clusterIndex].weight = newWeight;
+									clusters[clusterIndex].sources +|= 1;
+								} else if (clusterCount < maxDropLightClusters) {
+									clusters[clusterCount] = .{ .position = relPos, .color = col, .weight = str, .sources = 1 };
+									clusterCount += 1;
 								}
 							}
 						}
 					}
 				}
 			}
+		}
+		droppedLightClusterCount = @intCast(clusterCount);
+		// Select the most visible clusters for the fixed GPU budget. This preserves a bounded
+		// fragment cost even when a player drops hundreds of torches in one place.
+		for (clusters[0..clusterCount]) |cluster| {
+			for (0..maxDropLights) |slot| {
+				if (cluster.weight <= dropStrengths[slot]) continue;
+				var move: usize = maxDropLights - 1;
+				while (move > slot) : (move -= 1) {
+					dropStrengths[move] = dropStrengths[move - 1];
+					dropLightPositionsRelative[move] = dropLightPositionsRelative[move - 1];
+					dropLightColors[move] = dropLightColors[move - 1];
+				}
+				dropStrengths[slot] = cluster.weight;
+				dropLightPositionsRelative[slot] = cluster.position;
+				dropLightColors[slot] = cluster.color;
+				break;
+			}
+		}
+		for (dropStrengths) |strength| {
+			if (strength > 0) activeDropLightCount += 1;
 		}
 	}
 };

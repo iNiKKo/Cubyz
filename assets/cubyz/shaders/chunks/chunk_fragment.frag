@@ -28,8 +28,22 @@ layout(location = 7) uniform float lodDistance;
 
 uniform vec3 handLightPositionRelative;
 uniform vec3 handLightColor;
-uniform vec3 dropLightPositionRelative;
-uniform vec3 dropLightColor;
+uniform vec3 dropLightPosition0;
+uniform vec3 dropLightColor0;
+uniform vec3 dropLightPosition1;
+uniform vec3 dropLightColor1;
+uniform vec3 dropLightPosition2;
+uniform vec3 dropLightColor2;
+uniform vec3 dropLightPosition3;
+uniform vec3 dropLightColor3;
+uniform vec3 dropLightPosition4;
+uniform vec3 dropLightColor4;
+uniform vec3 dropLightPosition5;
+uniform vec3 dropLightColor5;
+uniform vec3 dropLightPosition6;
+uniform vec3 dropLightColor6;
+uniform vec3 dropLightPosition7;
+uniform vec3 dropLightColor7;
 uniform float handLightRadius;
 uniform vec3 remoteHandLightPositionRelative;
 uniform vec3 remoteHandLightColor;
@@ -73,12 +87,15 @@ vec3 handLightContribution() {
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
 		totalLight += handLightColor * atten * peakHighlight;
 	}
-	if (dropLightColor != vec3(0.0)) {
-		float dist = length(direction - dropLightPositionRelative);
+	vec3 dropPositions[8] = vec3[8](dropLightPosition0, dropLightPosition1, dropLightPosition2, dropLightPosition3, dropLightPosition4, dropLightPosition5, dropLightPosition6, dropLightPosition7);
+	vec3 dropColors[8] = vec3[8](dropLightColor0, dropLightColor1, dropLightColor2, dropLightColor3, dropLightColor4, dropLightColor5, dropLightColor6, dropLightColor7);
+	for (int i = 0; i < 8; ++i) {
+		if (dropColors[i] == vec3(0.0)) continue;
+		float dist = length(direction - dropPositions[i]);
 		float normDist = clamp(dist / handLightRadius, 0.0, 1.0);
 		float atten = (1.0 - normDist) * (1.0 - normDist);
 		float peakHighlight = 1.0 + 0.5 * (1.0 - normDist) * (1.0 - normDist);
-		totalLight += dropLightColor * atten * peakHighlight;
+		totalLight += dropColors[i] * atten * peakHighlight;
 	}
 	if (remoteHandLightColor != vec3(0.0)) {
 		float dist = length(direction - remoteHandLightPositionRelative);
@@ -123,11 +140,17 @@ void main() {
 	// eliminating the visible wireframe "string" along polygon borders of cross.obj quads.
 	// fwidth(texAlpha) measures how fast alpha changes across this pixel; dividing by it normalizes
 	// the alpha transition to exactly 1 pixel width, giving A2C hardware a clean gradient to work with.
-	if (isFoliage != 0 || opaqueInLod == 0) {
+	if (isFoliage != 0) {
 		float cutoff = 0.5;
 		float alphaDerivative = fwidth(texAlpha);
 		texAlpha = (texAlpha - cutoff) / max(alphaDerivative, 0.0001) + 0.5;
 		texAlpha = clamp(texAlpha, 0.0, 1.0);
+		if (texAlpha < 0.001) discard;
+	} else if (opaqueInLod == 0) {
+		// Custom hard-cutout meshes (branches, bars, etc.) still need alpha-to-coverage so the
+		// transparent texels do not turn into visible geometric gaps under MSAA. Do not run their
+		// alpha through fwidth, though: a mip/derivative discontinuity across a quad's diagonal made
+		// the two triangles receive different coverage and showed up as the seam in palm branches.
 		if (texAlpha < 0.001) discard;
 	}
 
