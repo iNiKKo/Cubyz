@@ -20,6 +20,7 @@ pub const files = @import("files.zig");
 pub const fmt = @import("fmt.zig");
 pub const game = @import("game.zig");
 pub const graphics = @import("graphics.zig");
+pub const graphics_benchmark = @import("graphics_benchmark.zig");
 pub const itemdrop = @import("itemdrop.zig");
 pub const items = @import("items.zig");
 pub const log = @import("log.zig");
@@ -474,6 +475,7 @@ pub fn clientMain() void { // MARK: clientMain()
 
 		if (game.world != null) { // Update the game
 			game.update(deltaTime);
+			graphics_benchmark.update(deltaTime);
 		}
 
 		if (!isHidden) {

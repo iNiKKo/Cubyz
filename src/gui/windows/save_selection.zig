@@ -31,6 +31,9 @@ pub var mode: main.server.ServerWorld.Mode = undefined;
 var deleteIcon: Texture = undefined;
 var fileExplorerIcon: Texture = undefined;
 
+const benchmarkWorldName = "__graphics_benchmark_3";
+const benchmarkWorldSeed: u64 = 1286493750284917632;
+
 const WorldInfo = struct {
 	lastUsedTime: i64,
 	name: []const u8,
@@ -83,6 +86,24 @@ pub fn openWorld(name: []const u8) void {
 	gui.openHud();
 }
 
+fn runGraphicsBenchmark() void {
+	const benchmarkPath = "saves/" ++ benchmarkWorldName;
+	if (!main.files.cubyzDir().hasDir(benchmarkPath)) {
+		var worldSettings = main.server.world_zig.Settings.defaults;
+		worldSettings.seed = benchmarkWorldSeed;
+		const preset = main.assets.worldPresets().get("cubyz:default") orelse {
+			std.log.err("Cannot create graphics benchmark world: cubyz:default preset is unavailable.", .{});
+			return;
+		};
+		main.server.world_zig.tryCreateWorld(benchmarkWorldName, worldSettings, preset) catch |err| {
+			std.log.err("Could not create graphics benchmark world: {s}", .{@errorName(err)});
+			return;
+		};
+	}
+	main.graphics_benchmark.armForBenchmarkWorld(benchmarkWorldName, benchmarkWorldSeed);
+	openWorld(benchmarkWorldName);
+}
+
 fn openWorldWrap(index: usize) void { // TODO: Improve this situation. Maybe it makes sense to always use 2 arguments in the Callback.
 	openWorld(worldList.items[index].fileName);
 }
@@ -113,6 +134,7 @@ pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 300, 8);
 	list.add(Label.init(.{0, 0}, width, if (mode == .singleplayer) "**Select World**" else "**Select World to Host**", .center));
 	list.add(Button.initText(.{0, 0}, 128, "Create New World", .{.onAction = gui.openWindowCallback("save_creation")}));
+	if (mode == .singleplayer) list.add(Button.initText(.{0, 0}, 128, "Run Graphics Benchmark", .{.onAction = .init(runGraphicsBenchmark)}));
 	readingSaves: {
 		var dir = main.files.cubyzDir().openIterableDir("saves") catch |err| {
 			list.add(Label.init(.{0, 0}, 128, "Encountered error while trying to open saves folder:", .center));
