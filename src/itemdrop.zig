@@ -256,8 +256,8 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 			const updateData = list.toStringEfficient(main.stackAllocator, &.{});
 			defer main.stackAllocator.free(updateData);
 
-			const userList = main.server.getUserListAndIncreaseRefCount(main.stackAllocator);
-			defer main.server.freeUserListAndDecreaseRefCount(main.stackAllocator, userList);
+			const userList = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
 			for (userList) |user| {
 				main.network.protocols.entity.send(user.conn, updateData);
 			}
@@ -288,8 +288,8 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 			const updateData = list.toStringEfficient(main.stackAllocator, &.{});
 			defer main.stackAllocator.free(updateData);
 
-			const userList = main.server.getUserListAndIncreaseRefCount(main.stackAllocator);
-			defer main.server.freeUserListAndDecreaseRefCount(main.stackAllocator, userList);
+			const userList = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
 			for (userList) |user| {
 				main.network.protocols.entity.send(user.conn, updateData);
 			}
@@ -344,8 +344,8 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 		const updateData = list.toStringEfficient(main.stackAllocator, &.{});
 		defer main.stackAllocator.free(updateData);
 
-		const userList = main.server.getUserListAndIncreaseRefCount(main.stackAllocator);
-		defer main.server.freeUserListAndDecreaseRefCount(main.stackAllocator, userList);
+		const userList = main.server.getUserList(main.stackAllocator);
+		defer main.stackAllocator.free(userList);
 		for (userList) |user| {
 			main.network.protocols.entity.send(user.conn, updateData);
 		}
@@ -661,7 +661,6 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 	var itemModelSSBO: graphics.SSBO = undefined;
 	var modelData: main.ListManaged(u32) = undefined;
 	var freeSlots: main.ListManaged(*ItemVoxelModel) = undefined;
-	var displayItemUbo: graphics.frame_uniforms.StaticUbo = undefined;
 
 	const ItemVoxelModel = struct {
 		index: u31 = undefined,
@@ -772,13 +771,6 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 
 		modelData = .init(main.globalAllocator);
 		freeSlots = .init(main.globalAllocator);
-
-		displayItemUbo = .init(.{
-			.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(65), @as(f32, @floatFromInt(main.renderer.lastWidth))/@as(f32, @floatFromInt(main.renderer.lastHeight)), 0.01, 3).toGl(),
-			.viewMatrix = Mat4f.identity().toGl(),
-			.playerPositionInteger = @splat(0),
-			.playerPositionFraction = @splat(0),
-		});
 	}
 
 	pub fn deinit() void {
@@ -952,19 +944,13 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 	pub fn renderDisplayItems(ambientLight: Vec3f, playerPos: Vec3d) void {
 		if (!ItemDisplayManager.showItem) return;
 
-		// Refreshed every frame rather than left at its init()-time value: displayItemUbo's projection
-		// matrix depends on main.renderer.lastWidth/lastHeight for its aspect ratio, but those are still
-		// their zero-initialized default at the point ItemDropRenderer.init() runs (it happens before
-		// the window's real framebuffer size callback fires) — baking the matrix once at init time froze
-		// in an aspect ratio of 0/0 = NaN, silently sending every held-item vertex to NaN clip space
-		// forever after (invisible, no error). Recomputing per frame is cheap (one small UBO update) and
-		// also keeps it correct across window resizes, which the old one-time bake never handled either.
-		displayItemUbo.update(.{
+		const displayItemUbo = graphics.frame_uniforms.StaticUbo.init(.{
 			.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(65), @as(f32, @floatFromInt(main.renderer.lastWidth))/@as(f32, @floatFromInt(main.renderer.lastHeight)), 0.01, 3).toGl(),
 			.viewMatrix = Mat4f.identity().toGl(),
 			.playerPositionInteger = @splat(0),
 			.playerPositionFraction = @splat(0),
 		});
+		defer displayItemUbo.deinit();
 		displayItemUbo.bind();
 		defer displayItemUbo.unbind();
 		bindCommonUniforms(ambientLight);
