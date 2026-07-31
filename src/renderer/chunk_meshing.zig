@@ -308,7 +308,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform2fv(locations.weatherWind, 1, @ptrCast(&weatherWind));
 
 	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
-	if (main.settings.shadows) {
+	{
 		const csm = &renderer.CascadedShadowMap;
 		// Upload flat array of 3×16 floats (column-major mat4 order as GL expects)
 		c.glUniformMatrix4fv(locations.csmLightSpaceMatrix, 3, c.GL_FALSE, @ptrCast(&csm.lightSpaceMatricesGL));
@@ -320,7 +320,14 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 		};
 		c.glUniform3fv(locations.csmTexelSize, 1, @ptrCast(&csmTexelSizes));
 		c.glUniform1i(locations.csmActiveCascades, @intCast(csm.activeCascadeCount));
-		// Bind the 3 shadow map textures to bindings 6, 7, 8:
+		// Bind the 3 shadow map textures to bindings 6, 7, 8 UNCONDITIONALLY, even with
+		// settings.shadows off - chunk_fragment.frag's sampler2DShadow uniforms (csmMap0/1/2) always
+		// exist at these bindings and shadow.glsl's own `if (!shadowsEnabled) return 1.0;` is only a
+        // runtime branch, not something the shader compiler proves unreachable. If nothing is bound to
+        // these units while shadows are disabled (as this used to do by skipping this whole block), GL's
+		// validation layer correctly flags reading an empty/wrong-format texture through a shadow
+		// sampler as undefined behaviour, even though the sampled value is always discarded afterward.
+		// Keeping the (possibly stale, all-border-color) depth textures bound here is cheap and harmless.
 		c.glActiveTexture(c.GL_TEXTURE6);
 		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[0].depthTexture);
 		c.glActiveTexture(c.GL_TEXTURE7);

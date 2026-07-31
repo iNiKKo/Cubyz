@@ -538,6 +538,15 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
 	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0, miningSwing: f32 = -1.0 };
 	var remoteHeldItems: [maxReplicatedPlayers]RemoteHeldItem = @splat(.{});
+	/// Guards all of `remoteHeldItems`. `setRemoteHeldItem` runs on the network thread and can replace
+	/// (deinit the old, store a new) any slot at any time; every render-thread read - even just reading
+	/// out `.item` to `.clone()` it - raced with that write without this lock, since reading the field
+	/// and calling `.clone()` on it are two separate steps: the network thread could deinit/overwrite the
+	/// slot in between, so the "clone" would already be cloning freed memory. This crashed in
+	/// `ProceduralItem.clone()` itself (reading `self.image.width` on freed memory) even after the
+	/// earlier clone-instead-of-share fix, because that fix addressed WHAT gets handed out, not that the
+	/// read of the live value was still unsynchronized with the writer.
+	var remoteHeldItemsMutex: main.utils.Mutex = .{};
 	const HeldItemIdentity = union(enum) { none: void, base: items.BaseItemIndex, procedural: *items.ProceduralItem };
 	var lastSentHeldItem: HeldItemIdentity = .{ .none = {} };
 	var lastSentHeldLightTransform: HeldLightTransform = defaultHeldLightTransform;
@@ -552,6 +561,8 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 			item.deinit();
 			return;
 		}
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
 		remoteHeldItems[id].item.deinit();
 		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale, .miningSwing = miningSwing };
 	}
@@ -567,6 +578,8 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return null;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
 		const item = remoteHeldItems[id].item;
 		return if (item == .null) null else item.clone();
 	}
@@ -576,6 +589,8 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	pub fn hasRemoteHeldItem(entityId: main.entity.Entity) bool {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return false;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
 		return remoteHeldItems[id].item != .null;
 	}
 	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
@@ -587,25 +602,39 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	}
 	pub fn remoteHeldLightTransform(entityId: main.entity.Entity) HeldLightTransform {
 		const id = @intFromEnum(entityId);
-		return if (id < maxReplicatedPlayers) remoteHeldItems[id].transform else defaultHeldLightTransform;
+		if (id >= maxReplicatedPlayers) return defaultHeldLightTransform;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		return remoteHeldItems[id].transform;
 	}
 	pub fn remoteHeldToolRotationYZ(entityId: main.entity.Entity) Vec2f {
 		const id = @intFromEnum(entityId);
-		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolRotationYZ else .{0.0, 0.0};
+		if (id >= maxReplicatedPlayers) return .{0.0, 0.0};
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		return remoteHeldItems[id].toolRotationYZ;
 	}
 	pub fn remoteHeldToolScale(entityId: main.entity.Entity) f32 {
 		const id = @intFromEnum(entityId);
-		return if (id < maxReplicatedPlayers) remoteHeldItems[id].toolScale else 1.0;
+		if (id >= maxReplicatedPlayers) return 1.0;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		return remoteHeldItems[id].toolScale;
 	}
 	pub fn remoteMiningSwing(entityId: main.entity.Entity) ?f32 {
 		const id = @intFromEnum(entityId);
-		if (id >= maxReplicatedPlayers or remoteHeldItems[id].miningSwing < 0) return null;
+		if (id >= maxReplicatedPlayers) return null;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		if (remoteHeldItems[id].miningSwing < 0) return null;
 		return remoteHeldItems[id].miningSwing;
 	}
 	/// Remote held procedural items are deserialized per client and owned by this cache. Release them
 	/// when leaving a world and at renderer shutdown so a remote player holding a tool cannot leak its
 	/// ProceduralItem allocation.
 	pub fn clearRemoteHeldItems() void {
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
 		for (&remoteHeldItems) |*held| {
 			held.item.deinit();
 			held.* = .{};
