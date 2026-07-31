@@ -542,6 +542,11 @@ pub const World = struct { // MARK: World
 		/// Horizontal weather-fog scale in blocks. Rain deliberately reaches farther than snow; both values
 		/// are eased so crossing a weather-cell boundary cannot make the visibility wall jump.
 		weatherFogRange: f32 = 96,
+		/// Weather needs its own colour memory as well as its smoothed density. Rebuilding the tint from
+		/// the clear biome every frame made the horizon snap from storm haze to sky blue on crossing a
+		/// weather-cell boundary, even while `weatherVisibility` was still visibly fading out.
+		weatherHazeColor: Vec3f = .{0.58, 0.65, 0.74},
+		weatherSkyHazeColor: Vec3f = .{0.58, 0.65, 0.74},
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
 		/// How far (0-1) between `dayTime`'s current tick and the next, in real time — `dayTime` itself
@@ -714,6 +719,8 @@ pub const World = struct { // MARK: World
 			self.fog.density = self.biomeFog.density;
 			self.fog.fogLower = self.biomeFog.fogLower;
 			self.fog.fogHigher = self.biomeFog.fogHigher;
+			const clearFogColor = self.fog.fogColor;
+			const clearSkyColor = self.fog.skyColor;
 
 			// Sandstorm visibility is local to the same server weather cell that emits dust particles.
 			// It must not tint/fog a player standing in a neighbouring clear biome.
@@ -730,6 +737,24 @@ pub const World = struct { // MARK: World
 			// light rain gains a readable haze while full storms still remain substantially stronger.
 			const visibilityTarget = @sqrt(@max(precipitationVisibility, dust));
 			self.weatherVisibility += (visibilityTarget - self.weatherVisibility)*t;
+			// Deliberately distinct atmosphere palettes. These targets are smoothed independently of
+			// the local cell, so walking out of a storm carries its haze into clear air and dissolves it
+			// naturally instead of immediately replacing it with the clear-sky colour.
+			const weatherHazeTarget: Vec3f = switch (localWeather.kind) {
+				1 => .{0.34, 0.43, 0.56}, // rain: cool blue-grey
+				2 => .{0.84, 0.89, 0.96}, // snow: pale, neutral-white haze
+				3 => .{0.76, 0.52, 0.25}, // dust: warm yellow-orange sand
+				else => clearFogColor,
+			};
+			const weatherSkyHazeTarget: Vec3f = switch (localWeather.kind) {
+				1 => .{0.40, 0.50, 0.64},
+				2 => .{0.88, 0.93, 0.98},
+				3 => .{0.78, 0.56, 0.30},
+				else => clearSkyColor,
+			};
+			const hazeT = 1 - @as(f32, @floatCast(@exp(-1.35*deltaTime)));
+			self.weatherHazeColor += (weatherHazeTarget - self.weatherHazeColor)*@as(Vec3f, @splat(hazeT));
+			self.weatherSkyHazeColor += (weatherSkyHazeTarget - self.weatherSkyHazeColor)*@as(Vec3f, @splat(hazeT));
 			const weatherFogRangeTarget: f32 = switch (localWeather.kind) {
 				1 => 96, // rain: preserve more mid-distance visibility than snow.
 				2 => 64, // snow: retain the denser, closer white-out requested by the player.
@@ -737,32 +762,10 @@ pub const World = struct { // MARK: World
 				else => 96,
 			};
 			self.weatherFogRange += (weatherFogRangeTarget - self.weatherFogRange)*t;
-			if (dust > 0.01) {
-				const dustColor = Vec3f{0.72, 0.55, 0.32};
-				self.fog.fogColor += (dustColor - self.fog.fogColor)*@as(Vec3f, @splat(dust*0.65));
-				self.fog.skyColor += (dustColor - self.fog.skyColor)*@as(Vec3f, @splat(dust*0.35));
-				self.fog.density *= std.math.lerp(1.0, 6.0, dust);
-			}
-			if (precipitationVisibility > 0.01 and (localWeather.kind == 1 or localWeather.kind == 2)) {
-				const precipitationFog = if (localWeather.kind == 2) Vec3f{0.88, 0.92, 0.97} else Vec3f{0.58, 0.65, 0.74};
-				self.fog.fogColor += (precipitationFog - self.fog.fogColor)*@as(Vec3f, @splat(precipitationVisibility*0.35));
-				self.fog.skyColor += (precipitationFog - self.fog.skyColor)*@as(Vec3f, @splat(precipitationVisibility*0.18));
-				self.fog.density *= std.math.lerp(1.0, 2.2, precipitationVisibility);
-			}
 			if (self.weatherVisibility > 0.01) {
-				// Weather needs a dedicated atmospheric colour rather than a lightly tinted version of the
-				// clear biome sky. Otherwise distant terrain remains a readable silhouette and fogged cloud
-				// faces inherit the bright daytime blue/white sky. Snow retains its pale haze; rain becomes
-				// the muted blue-grey of a dense overcast.
-				const weatherHaze = switch (localWeather.kind) {
-					1 => Vec3f{0.36, 0.43, 0.52},
-					2 => Vec3f{0.78, 0.84, 0.91},
-					3 => Vec3f{0.58, 0.45, 0.28},
-					else => self.fog.fogColor,
-				};
-				const hazeStrength = std.math.clamp(self.weatherVisibility * 0.85, 0.0, 0.75);
-				self.fog.fogColor += (weatherHaze - self.fog.fogColor)*@as(Vec3f, @splat(hazeStrength));
-				self.fog.skyColor += (weatherHaze - self.fog.skyColor)*@as(Vec3f, @splat(hazeStrength * 0.55));
+				const hazeStrength = std.math.clamp(self.weatherVisibility * 0.92, 0.0, 0.82);
+				self.fog.fogColor += (self.weatherHazeColor - self.fog.fogColor)*@as(Vec3f, @splat(hazeStrength));
+				self.fog.skyColor += (self.weatherSkyHazeColor - self.fog.skyColor)*@as(Vec3f, @splat(hazeStrength * 0.72));
 				// Strong weather hides distant terrain through ordinary depth fog, not an abrupt circular
 				// wall. Fog density rises while its upper distance contracts, both eased above.
 				self.fog.density *= std.math.lerp(1.0, 30.0, self.weatherVisibility);

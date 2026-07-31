@@ -70,6 +70,34 @@ const maxActiveDensity: f32 = 0.95;
 const dropColor = Vec3f{0.6, 0.7, 0.9};
 const dropAlpha: f32 = 0.40; // Translucent liquid raindrops
 
+/// Returns how strongly each precipitation type is carried by the world wind.  The weather grid's
+/// wind is intentionally a gentle, stable direction vector rather than a physical velocity, so these
+/// values turn it into a readable visual drift without making ordinary rain look horizontal.
+fn windDriftScale(isSnow: bool, isDust: bool) f32 {
+	// Snow is heavier/denser than the old tiny flakes but remains recognisably falling. Sand is light
+	// enough to be blown hard across the scene during a storm.
+	return if (isDust) 36.0 else if (isSnow) 4.0 else 10.0;
+}
+
+/// Extra coverage for the two weather types that should read as a substantial event, even when the
+/// server reports a moderate weather strength.
+fn precipitationDensity(intensity: f32, isSnow: bool, isDust: bool) f32 {
+	const multiplier: f32 = if (isDust) 0.78 else if (isSnow) 1.30 else 1.0;
+	return std.math.clamp(intensity*maxActiveDensity*multiplier, 0.0, 0.985);
+}
+
+/// The quad's long axis follows the same downwind trajectory its centre uses.  A point lower in a
+/// falling streak has existed longer, so it must be farther downwind than its top; this is what makes
+/// rain, snow and dust visibly fall at an angle instead of merely sliding as vertical sprites.
+fn precipitationHalfHeight(wind: Vec2f, fallSpeedForType: f32, driftScale: f32, height: f32) Vec3f {
+	const halfTravelSeconds = height*0.5/fallSpeedForType;
+	return .{
+		-wind[0]*driftScale*halfTravelSeconds,
+		-wind[1]*driftScale*halfTravelSeconds,
+		height*0.5,
+	};
+}
+
 const RainVertex = extern struct {
 	pos: [3]f32,
 	color: [3]f32,
@@ -155,7 +183,6 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 	var camRight = Vec3f{viewMatrix.rows[0][0], viewMatrix.rows[0][1], 0};
 	if (vec.dot(camRight, camRight) < 1e-8) camRight = Vec3f{1, 0, 0};
 	camRight = vec.normalize(camRight);
-	const up = Vec3f{0, 0, 1};
 
 	const gridDim: u32 = std.math.clamp(@as(u32, @intFromFloat(@ceil(2*gridRadius/cellSize))), 4, maxGridDim);
 	const originCellX: i64 = @intFromFloat(@floor(playerPos[0]/cellSize) - @as(f64, @floatFromInt(gridDim))/2);
@@ -186,7 +213,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const isDust = weather.kind == 3;
 			const cellRainIntensity = if (isDust) weather.dust else weather.precipitation;
 			if (cellRainIntensity <= 0.01) continue;
-			const activeDensity = cellRainIntensity * maxActiveDensity;
+			const activeDensity = precipitationDensity(cellRainIntensity, isSnow, isDust);
 			if (hashCell(worldCellX, worldCellY) > activeDensity) continue;
 
 			// Distance-from-player fade so drops don't just pop in/out at the AOE grid's square edge.
@@ -195,16 +222,32 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const edgeDist = @sqrt(dx*dx + dy*dy)/gridRadius;
 			if (edgeDist >= 1.0) continue;
 
-			// Keep the particle source below the low storm deck.
-			const topZ: f64 = @min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 			const groundZ: f64 = findGroundZ(worldX, worldY, anchorZ);
+			// Sandstorms are ground transport, not cloud precipitation. Each grain occupies a stable
+			// random height inside a shallow 0–5 block surface layer: this reads as wind lifting sand
+			// off dunes instead of a paper-thin line on the ground or a cloud-born particle shower.
+			const dustHeight = 0.15 + hashCell(worldCellX +% 401, worldCellY +% 809)*5.0;
+			const topZ: f64 = if (isDust)
+				groundZ + @as(f64, dustHeight)
+			else
+				@min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 			if (topZ <= groundZ) continue;
 			const range: f32 = @max(@as(f32, @floatCast(topZ - groundZ)), 1.0);
-			const cellFallSpeed = if (isSnow) 7.0 else if (isDust) 4.0 else fallSpeed;
+			const cellFallSpeed = if (isSnow) 8.5 else if (isDust) 5.0 else fallSpeed;
 			const loopFrac = @mod(elapsedSeconds*cellFallSpeed/range + phase, 1.0);
-			const dropZ: f64 = topZ - @as(f64, loopFrac*range);
-			const fallSeconds = @as(f32, @floatCast(topZ - dropZ))/cellFallSpeed;
-			const windScale: f32 = if (isDust) 1.5 else if (isSnow) 0.35 else 0.15;
+			const dropZ: f64 = if (isDust)
+				groundZ + @as(f64, dustHeight)
+			else
+				topZ - @as(f64, loopFrac*range);
+			// Dust moves continuously along the ground in a long, bounded cycle. This avoids the rapid
+			// visible wrap that made grains appear to spawn/disappear while the camera was still.
+			const fallSeconds: f32 = if (isDust)
+				// A long cycle keeps each grain travelling for eight seconds before it wraps. The previous
+				// two-second loop made sand visibly spawn and disappear while the camera was still.
+				@mod(elapsedSeconds*0.125 + phase, 1.0)
+			else
+				@as(f32, @floatCast(topZ - dropZ))/cellFallSpeed;
+			const windScale = windDriftScale(isSnow, isDust);
 
 			const center = Vec3f{
 				@floatCast(worldX + @as(f64, weatherSnapshot.wind[0]*fallSeconds*windScale) - playerPos[0]),
@@ -224,10 +267,10 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const vertexColor: Vec3f = precipitationColor * lightFactor;
 			const colorArray: [3]f32 = .{vertexColor[0], vertexColor[1], vertexColor[2]};
 
-			const cellWidth: f32 = if (isSnow) 0.18 else if (isDust) 0.32 else dropWidth;
-			const cellHeight: f32 = if (isSnow) 0.18 else if (isDust) 0.12 else dropHeight;
+			const cellWidth: f32 = if (isSnow) 0.24 else if (isDust) 0.20 else dropWidth;
+			const cellHeight: f32 = if (isSnow) 0.24 else if (isDust) 0.07 else dropHeight;
 			const halfWidth: Vec3f = @as(Vec3f, @splat(cellWidth*0.5))*camRight;
-			const halfHeight: Vec3f = @as(Vec3f, @splat(cellHeight*0.5))*up;
+			const halfHeight = precipitationHalfHeight(weatherSnapshot.wind, cellFallSpeed, windScale, cellHeight);
 
 			const base: u32 = @intCast(vertices.items.len);
 			vertices.append(.{.pos = center - halfWidth - halfHeight, .color = colorArray});
@@ -255,6 +298,10 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 		const wyCell = weatherSnapshot.origin_cell[1] + @as(i32, @intCast(weatherIndex / game.WeatherGrid.dimension));
 		const isSnow = weatherCell.kind == 2;
 		const isDust = weatherCell.kind == 3;
+		// A distant sand curtain would have no terrain height information and therefore appears to hang
+		// in the sky. The close ground-aware tier above supplies the visible grains; weather fog carries
+		// the sandstorm atmosphere beyond it.
+		if (isDust) continue;
 		const weatherStrength = if (isDust) weatherCell.dust else weatherCell.precipitation;
 		if (weatherStrength == 0) continue;
 		const intensity = @as(f32, @floatFromInt(weatherStrength))/255.0;
@@ -269,10 +316,10 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const distance = @sqrt(dx*dx + dy*dy);
 			if (distance < gridRadius*1.2) continue;
 			const phase = hashCell(hx +% 173, hy +% 271);
-			const speed = if (isSnow) 7.0 else if (isDust) 4.0 else fallSpeed;
+			const speed = if (isSnow) 8.5 else if (isDust) 5.0 else fallSpeed;
 			const dropZ = farTopZ - @as(f64, @mod(elapsedSeconds*speed/farRange + phase, 1.0)*farRange);
 			const fallSeconds = @as(f32, @floatCast(farTopZ - dropZ))/speed;
-			const windScale: f32 = if (isDust) 1.5 else if (isSnow) 0.35 else 0.15;
+			const windScale = windDriftScale(isSnow, isDust);
 			const center = Vec3f{
 				@floatCast(worldX + @as(f64, weatherSnapshot.wind[0]*fallSeconds*windScale) - playerPos[0]),
 				@floatCast(worldY + @as(f64, weatherSnapshot.wind[1]*fallSeconds*windScale) - playerPos[1]),
@@ -280,8 +327,10 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			};
 			const fade = std.math.clamp(1.0 - distance/(@as(f32, @floatFromInt(game.WeatherGrid.dimension*game.WeatherGrid.cell_size))/2.0), 0.15, 0.55);
 			const color = (if (isSnow) Vec3f{0.92, 0.95, 1.0} else if (isDust) Vec3f{0.72, 0.55, 0.32} else dropColor) * @as(Vec3f, @splat(fade));
-			const halfWidth: Vec3f = @as(Vec3f, @splat(if (isSnow) 0.12 else if (isDust) 0.22 else 0.05))*camRight;
-			const halfHeight: Vec3f = @as(Vec3f, @splat(if (isSnow) 0.12 else if (isDust) 0.08 else 0.8))*up;
+			const farWidth: f32 = if (isSnow) 0.16 else if (isDust) 0.28 else 0.05;
+			const farHeight: f32 = if (isSnow) 0.16 else if (isDust) 0.10 else 0.8;
+			const halfWidth: Vec3f = @as(Vec3f, @splat(farWidth))*camRight;
+			const halfHeight = precipitationHalfHeight(weatherSnapshot.wind, speed, windScale, farHeight*2.0);
 			const base: u32 = @intCast(vertices.items.len);
 			vertices.append(.{.pos = center - halfWidth - halfHeight, .color = .{color[0], color[1], color[2]}});
 			vertices.append(.{.pos = center + halfWidth - halfHeight, .color = .{color[0], color[1], color[2]}});
