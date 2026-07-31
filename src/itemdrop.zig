@@ -555,14 +555,22 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		remoteHeldItems[id].item.deinit();
 		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale, .miningSwing = miningSwing };
 	}
+	/// Returns an independent clone of the currently-held remote item, if any - never the live, still-owned
+	/// value. `setRemoteHeldItem` can run on the network thread at any time and immediately `deinit()`s
+	/// whatever was previously stored; handing out that value directly (as this used to do) let a caller
+	/// on the render thread end up holding a dangling pointer if a new held-item packet arrived while the
+	/// old one was still being used (e.g. mid-hashCode() on a `.proceduralItem`'s crafting grid), crashing
+	/// with a segfault deep inside whatever code happened to touch it next. Callers must `.deinit()` the
+	/// returned clone when done with it, per this codebase's normal `Item` ownership convention.
 	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return null;
 		const item = remoteHeldItems[id].item;
-		return if (item == .null) null else item;
+		return if (item == .null) null else item.clone();
 	}
 	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
 		const item = remoteHeldItem(entityId) orelse return null;
+		defer item.deinit();
 		if (item != .baseItem) return null;
 		const blockType = item.baseItem.block() orelse return null;
 		return if ((blocks.Block{ .typ = blockType, .data = 0 }).light() != 0) blockType else null;
@@ -809,7 +817,11 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		fn init(template: ItemVoxelModel) *ItemVoxelModel {
 			const self = main.globalAllocator.create(ItemVoxelModel);
 			self.* = ItemVoxelModel{
-				.item = template.item,
+				// Clone rather than share the template's item: this cache entry can outlive whatever
+				// caller/borrowed value the template came from (e.g. a remote player's held item, which
+				// the network thread can replace/free independently at any time - see remoteHeldItem's
+				// own doc comment for the crash this was part of), so it needs to own an independent copy.
+				.item = template.item.clone(),
 				.forceBlockModel = template.forceBlockModel,
 			};
 			if (self.item == .baseItem and self.item.baseItem.block() != null and (self.forceBlockModel or self.item.baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr)) {
@@ -863,6 +875,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		}
 
 		fn deinit(self: *ItemVoxelModel) void {
+			self.item.deinit();
 			freeSlots.append(self);
 		}
 
@@ -997,6 +1010,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		for (main.client.entity_manager.entities.items()) |ent| {
 			if (ent.id == game.Player.id) continue;
 			const item = ItemDisplayManager.remoteHeldItem(ent.id) orelse continue;
+			defer item.deinit();
 			const baseItem = if (item == .baseItem) item.baseItem else null;
 			const blockType = if (baseItem) |candidate| candidate.block() else null;
 			const emittedLight = getItemEmittedLight(item);
