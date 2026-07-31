@@ -1045,7 +1045,14 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							// Same-type-and-same-data neighbors are assumed to share identical geometry (two
+							// full water blocks side by side don't need an interior wall). The `data` half of
+							// this check matters now that water's fluid level (stored in `data`) drives a
+							// shorter/taller model (see the cubyz:fluid rotation mode) - two same-`typ` water
+							// blocks at different levels are NOT the same shape, so their shared face must
+							// still render. Every other transparent block type keeps `data` at 0 always, so
+							// this is a no-op there (identical to the old typ-only check).
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1074,7 +1081,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1103,7 +1110,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1132,7 +1139,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1161,7 +1168,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1190,7 +1197,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ) continue;
+							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
