@@ -976,9 +976,12 @@ pub const ProceduralItem = struct { // MARK: ProceduralItem
 	pub fn hashCode(self: ProceduralItem) u32 {
 		var hash: u32 = 0;
 		for (self.craftingGrid) |nullItem| {
-			if (nullItem) |item| {
-				hash = 33*%hash +% item.material().?.hashCode();
-			}
+			// Not every base item has a material (e.g. non-craftable-material items) - skip those slots
+			// the same way property/modifier computation above already does, rather than force-unwrapping.
+			// A crafted item using such an ingredient previously crashed any client that tried to hash it
+			// (e.g. rendering it in another player's hand), even though it's a perfectly valid item.
+			const material = (nullItem orelse continue).material() orelse continue;
+			hash = 33*%hash +% material.hashCode();
 		}
 		return hash;
 	}
