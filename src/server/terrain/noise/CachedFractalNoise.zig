@@ -25,7 +25,7 @@ pub fn init(wx: i32, wy: i32, voxelSize: u31, size: u31, worldSeed: u64, scale: 
 		.scale = scale,
 		.worldSeed = worldSeed,
 	};
-	// Init the corners:
+
 	@memset(self.cache.mem, 0);
 	const reducedScale = scale/voxelSize;
 	var x: u31 = 0;
@@ -33,7 +33,7 @@ pub fn init(wx: i32, wy: i32, voxelSize: u31, size: u31, worldSeed: u64, scale: 
 		var y: u31 = 0;
 		while (y <= maxSize) : (y += reducedScale) {
 			self.cache.ptr(x, y).* = (@as(f32, @floatFromInt(reducedScale + 1 + scale))*self.getGridValue(x, y))*@as(f32, @floatFromInt(voxelSize));
-		} //                                                 ↑ sacrifice some resolution to reserve the value 0, for determining if the value was initialized. This prevents an expensive array initialization.
+		}
 	}
 	return self;
 }
@@ -54,7 +54,7 @@ fn getGridValue(self: CachedFractalNoise, relX: u31, relY: u31) f32 {
 fn generateRegion(self: CachedFractalNoise, _x: u31, _y: u31, voxelSize: u31) void {
 	const x = _x & ~@as(u31, voxelSize - 1);
 	const y = _y & ~@as(u31, voxelSize - 1);
-	// Make sure that all higher points are generated:
+
 	_ = self._getValue(x | voxelSize, y | voxelSize);
 
 	const xMid = x + @divExact(voxelSize, 2);
@@ -64,23 +64,22 @@ fn generateRegion(self: CachedFractalNoise, _x: u31, _y: u31, voxelSize: u31) vo
 	const cache = self.cache;
 
 	var a: u31 = 0;
-	while (a <= voxelSize) : (a += voxelSize) { // 1 coordinate on the grid.
-		// x
+	while (a <= voxelSize) : (a += voxelSize) {
+
 		cache.ptr(x + a, yMid).* = (cache.get(x + a, y) + cache.get(x + a, y + voxelSize))/2;
 		cache.ptr(x + a, yMid).* += randomFactor*self.getGridValue(x + a, yMid);
-		// y
+
 		cache.ptr(xMid, y + a).* = (cache.get(x, y + a) + cache.get(x + voxelSize, y + a))/2;
 		cache.ptr(xMid, y + a).* += randomFactor*self.getGridValue(xMid, y + a);
 	}
 
-	// Center point:
 	cache.ptr(xMid, yMid).* = (cache.get(xMid, y) + cache.get(xMid, y + voxelSize) + cache.get(x, yMid) + cache.get(x + voxelSize, yMid))/4 + randomFactor*self.getGridValue(xMid, yMid);
 }
 
 fn _getValue(self: CachedFractalNoise, x: u31, y: u31) f32 {
 	const value = self.cache.get(x, y);
 	if (value != 0) return value;
-	// Need to actually generate stuff now.
+
 	const minShift = @min(@ctz(x), @ctz(y));
 	self.generateRegion(x, y, @as(u31, 2) << @intCast(minShift));
 	return self.cache.get(x, y);

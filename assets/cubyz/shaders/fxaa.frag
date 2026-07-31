@@ -1,11 +1,5 @@
 #version 460
 
-// Standard luma-edge-detection FXAA (a la Timothy Lottes' FXAA 3.11), operating on the final
-// composited LDR image. Runs last, after deferred_render_pass has already tonemapped/composited
-// bloom+god-rays+fog, so it also smooths the aliased silhouettes of alpha-cutout foliage (distant
-// tree canopies made of many small hard-edged leaf quads) which this engine has no other mechanism
-// to anti-alias against (no MSAA on the deferred/HDR path, no TAA).
-
 layout(location = 0) out vec4 fragColor;
 
 layout(location = 0) in vec2 texCoords;
@@ -14,14 +8,9 @@ layout(binding = 3) uniform sampler2D image;
 
 layout(location = 0) uniform vec2 inverseScreenSize;
 
-const float edgeThresholdMin = 0.0625; // Skip pixels darker/flatter than this contrast (avoids blurring flat shadows).
-const float edgeThresholdMax = 0.166; // Contrast above this is always considered an edge.
-// Sub-pixel smoothing additionally blurs based on local 3x3 luma deviation, not just the directional
-// edge search — this is what catches thin/specular aliasing, but it can't distinguish "jagged edge"
-// from "dense fine texture detail" (e.g. distant tree canopies made of many small leaf quads), so a
-// high value here reads as an out-of-focus blur on exactly that kind of high-frequency foliage detail
-// rather than fixing aliasing. Kept low so FXAA only cleans up actual silhouette jaggies and mostly
-// leaves foliage-density detail alone, rather than smearing it into a soft blob.
+const float edgeThresholdMin = 0.0625;
+const float edgeThresholdMax = 0.166;
+
 const float subpixelQuality = 0.25;
 const int iterations = 12;
 
@@ -126,9 +115,6 @@ void main() {
 	bool correctVariation = ((isDirection1 ? lumaEnd1 : lumaEnd2) < 0.0) != isLumaCenterSmaller;
 	float finalOffset = correctVariation ? pixelOffset : 0.0;
 
-	// Sub-pixel antialiasing: additionally blur based on how far the local 3x3 average luma deviates
-	// from a simple box blur — catches thin geometry (grass blades, leaf edges) the edge search above
-	// can miss since that search only follows the single dominant gradient direction.
 	float lumaAverage = (1.0/12.0)*(2.0*(lumaDownUp + lumaLeftRight) + lumaLeftCorners + lumaRightCorners);
 	float subPixelOffset1 = clamp(abs(lumaAverage - lumaCenter)/lumaRange, 0.0, 1.0);
 	float subPixelOffset2 = (-2.0*subPixelOffset1 + 3.0)*subPixelOffset1*subPixelOffset1;

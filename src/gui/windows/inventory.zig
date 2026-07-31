@@ -43,8 +43,7 @@ var itemSlots: [20]*ItemSlot = undefined;
 
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, padding + 16}, 300, 0);
-	// Some miscellanious slots and buttons:
-	// TODO: armor slots, backpack slot + stack-based backpack inventory, other items maybe?
+
 	{
 		const row = HorizontalList.init();
 		blk: {

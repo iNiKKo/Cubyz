@@ -46,19 +46,6 @@ pub fn generate(self: *Stalagmite, _: GenerationMode, x: i32, y: i32, z: i32, ch
 
 	const height = self.size + random.nextFloat(seed)*self.sizeVariation;
 
-	// We want to ensure the following properties:
-	// height(r = 0) = height
-	// height'(r = 0) = -topSlope
-	// height(r = baseRadius) = 0
-	// height'(r = baseRadius) = -baseSlope
-	// With height(r) = a·r² + b·r + c → height'(r) = 2a·r + b
-	// c = height, b = -topSlope
-	// 0 = a·baseRadius² + b·baseRadius + c
-	// -baseSlope = 2a·baseRadius + b
-	// → a·baseRadius = (-baseSlope - b)/2
-	// This permits both positive and negative values for baseRadius, so we need to account for that during substitution:
-	// = (-baseSlope - b)/2·±baseRadius + b·baseRadius + c
-	// → baseRadius = -c/(±(-baseSlope - b)/2 + b)
 	const c = height;
 	const b = -self.topSlope;
 	var baseRadius: f32 = undefined;

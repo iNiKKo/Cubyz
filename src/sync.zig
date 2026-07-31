@@ -23,7 +23,7 @@ const @"cubyz:bag" = main.entity.components.@"cubyz:bag";
 
 pub const Side = enum { client, server };
 
-pub const client = struct { // MARK: client
+pub const client = struct {
 	pub var mutex: main.utils.Mutex = .{};
 	var commands: utils.CircularBufferQueue(Command) = undefined;
 
@@ -128,7 +128,7 @@ pub const client = struct { // MARK: client
 	}
 };
 
-pub const server = struct { // MARK: server
+pub const server = struct {
 
 	pub fn init() void {
 		threadContext = .server;
@@ -164,7 +164,7 @@ pub const server = struct { // MARK: server
 				main.network.protocols.inventory.sendSyncOperation(user.conn, syncData);
 			}
 		}
-		if (source != null and command.payload == .open) { // Send initial items
+		if (source != null and command.payload == .open) {
 			for (command.payload.open.inv._items, 0..) |stack, slot| {
 				if (stack.item != .null) {
 					const syncOp = Command.SyncOperation{.create = .{
@@ -221,7 +221,7 @@ pub fn setGamemode(user: ?*main.server.User, gamemode: Gamemode) void {
 		server.setGamemode(user.?, gamemode);
 	}
 }
-pub const Command = struct { // MARK: Command
+pub const Command = struct {
 	pub const PayloadType = enum(u8) {
 		open = 0,
 		close = 1,
@@ -333,8 +333,8 @@ pub const Command = struct { // MARK: Command
 		energy = 5,
 	};
 
-	const SyncOperation = union(SyncOperationType) { // MARK: SyncOperation
-		// Since the client doesn't know about all inventories, we can only use create(+amount)/delete(-amount) and use durability operations to apply the server side updates.
+	const SyncOperation = union(SyncOperationType) {
+
 		create: struct {
 			inv: InventoryAndSlot,
 			amount: u16,
@@ -531,9 +531,9 @@ pub const Command = struct { // MARK: Command
 		return writer.data.toOwnedSlice();
 	}
 
-	fn do(self: *Command, allocator: NeverFailingAllocator, side: Side, user: ?*main.server.User, gamemode: main.game.Gamemode) error{serverFailure}!void { // MARK: do()
+	fn do(self: *Command, allocator: NeverFailingAllocator, side: Side, user: ?*main.server.User, gamemode: main.game.Gamemode) error{serverFailure}!void {
 		threadContext.assertCorrectContext(side);
-		std.debug.assert(self.baseOperations.items.len == 0); // do called twice without cleaning up
+		std.debug.assert(self.baseOperations.items.len == 0);
 		switch (self.payload) {
 			inline else => |payload| {
 				try payload.run(.{.allocator = allocator, .cmd = self, .side = side, .user = user, .gamemode = gamemode});
@@ -543,7 +543,7 @@ pub const Command = struct { // MARK: Command
 
 	fn undo(self: *Command) void {
 		threadContext.assertCorrectContext(.client);
-		// Iterating in reverse order!
+
 		while (self.baseOperations.popOrNull()) |step| {
 			switch (step) {
 				.move => |info| {
@@ -708,7 +708,7 @@ pub const Command = struct { // MARK: Command
 		}
 	}
 
-	fn executeBaseOperation(self: *Command, allocator: NeverFailingAllocator, _op: BaseOperation, side: Side) void { // MARK: executeBaseOperation()
+	fn executeBaseOperation(self: *Command, allocator: NeverFailingAllocator, _op: BaseOperation, side: Side) void {
 		threadContext.assertCorrectContext(side);
 		var op = _op;
 		switch (op) {
@@ -842,7 +842,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const Open = struct { // MARK: Open
+	const Open = struct {
 		inv: Inventory,
 		source: Inventory.Source,
 
@@ -903,7 +903,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const Close = struct { // MARK: Close
+	const Close = struct {
 		inv: Inventory,
 		allocator: NeverFailingAllocator,
 
@@ -927,7 +927,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const DepositOrSwap = struct { // MARK: DepositOrSwap
+	const DepositOrSwap = struct {
 		dest: InventoryAndSlot,
 		source: InventoryAndSlot,
 
@@ -969,7 +969,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const Deposit = struct { // MARK: Deposit
+	const Deposit = struct {
 		dest: InventoryAndSlot,
 		source: InventoryAndSlot,
 		amount: u16,
@@ -1014,7 +1014,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const TakeHalf = struct { // MARK: TakeHalf
+	const TakeHalf = struct {
 		dest: InventoryAndSlot,
 		source: InventoryAndSlot,
 
@@ -1057,7 +1057,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const Drop = struct { // MARK: Drop
+	const Drop = struct {
 		source: InventoryAndSlot,
 		desiredAmount: u16 = 0xffff,
 
@@ -1090,7 +1090,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const FillFromCreative = struct { // MARK: FillFromCreative
+	const FillFromCreative = struct {
 		dest: InventoryAndSlot,
 		item: Item,
 		amount: u16 = 0,
@@ -1144,7 +1144,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const FillAnyFromCreative = struct { // MARK: FillAnyFromCreative
+	const FillAnyFromCreative = struct {
 		destinations: Inventory.Inventories,
 		item: Item,
 		amount: u16,
@@ -1197,7 +1197,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const DepositOrDrop = struct { // MARK: DepositOrDrop
+	const DepositOrDrop = struct {
 		destinations: Inventory.Inventories,
 		source: Inventory,
 		dropLocation: Vec3d,
@@ -1255,7 +1255,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const DepositToAny = struct { // MARK: DepositToAny
+	const DepositToAny = struct {
 		destinations: Inventory.Inventories,
 		source: InventoryAndSlot,
 		amount: u16,
@@ -1297,7 +1297,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const MoveToPlayerBag = struct { // MARK: MoveToPlayerBag
+	const MoveToPlayerBag = struct {
 		source: InventoryAndSlot,
 		amount: u16,
 
@@ -1323,7 +1323,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const TakeFromPlayerBag = struct { // MARK: TakeFromPlayerBag
+	const TakeFromPlayerBag = struct {
 		destinations: Inventory.Inventories,
 		amount: u16,
 
@@ -1370,7 +1370,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const CraftFrom = struct { // MARK: CraftFrom
+	const CraftFrom = struct {
 		destinations: Inventory.Inventories,
 		sources: Inventory.Inventories,
 		recipe: *const main.items.Recipe,
@@ -1391,10 +1391,9 @@ pub const Command = struct { // MARK: Command
 		fn run(self: CraftFrom, ctx: Context) error{serverFailure}!void {
 			if (self.destinations.canHold(.{.item = .{.baseItem = self.recipe.resultItem}, .amount = self.recipe.resultAmount}) != .yes) return;
 
-			// Can we even craft it?
 			outer: for (self.recipe.sourceItems) |requiredItem| {
 				var amount: usize = 0;
-				// There might be duplicate entries:
+
 				for (self.recipe.sourceItems, self.recipe.sourceAmounts) |otherItem, otherAmount| {
 					if (requiredItem == otherItem) amount += otherAmount;
 				}
@@ -1406,7 +1405,7 @@ pub const Command = struct { // MARK: Command
 						}
 					}
 				}
-				// Not enough ingredients
+
 				if (amount != 0) return;
 			}
 
@@ -1438,7 +1437,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const CraftProceduralItem = struct { // MARK: CraftProceduralItem
+	const CraftProceduralItem = struct {
 		destinations: Inventory.Inventories,
 		craftingGrid: Inventory,
 
@@ -1478,7 +1477,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const Clear = struct { // MARK: Clear
+	const Clear = struct {
 		inv: Inventory,
 
 		pub fn run(self: Clear, ctx: Context) error{serverFailure}!void {
@@ -1504,7 +1503,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const UpdateBlock = struct { // MARK: UpdateBlock
+	const UpdateBlock = struct {
 		source: InventoryAndSlot,
 		pos: Vec3i,
 		dropLocation: BlockDropLocation,
@@ -1593,7 +1592,6 @@ pub const Command = struct { // MARK: Command
 			var shouldDropSourceBlockOnSuccess: bool = true;
 			const costOfChange = if (ctx.gamemode != .creative) self.oldBlock.canBeChangedInto(self.newBlock, stack.*, &shouldDropSourceBlockOnSuccess) else .yes;
 
-			// Check if we can change it:
 			if (!switch (costOfChange) {
 				.no => false,
 				.yes => true,
@@ -1601,7 +1599,7 @@ pub const Command = struct { // MARK: Command
 				.yes_costsItems => |amount| stack.amount >= amount,
 			}) {
 				if (ctx.side == .server) {
-					// Inform the client of the actual block:
+
 					var writer = BinaryWriter.init(main.stackAllocator);
 					defer writer.deinit();
 
@@ -1613,7 +1611,7 @@ pub const Command = struct { // MARK: Command
 
 			if (ctx.side == .server) {
 				if (main.server.world.?.cmpxchgBlock(self.pos[0], self.pos[1], self.pos[2], self.oldBlock, self.newBlock) != null) {
-					// Inform the client of the actual block:
+
 					var writer = BinaryWriter.init(main.stackAllocator);
 					defer writer.deinit();
 
@@ -1623,8 +1621,7 @@ pub const Command = struct { // MARK: Command
 				}
 			}
 
-			// Apply inventory changes:
-			const handItem = self.source.inv.getItem(self.source.slot); // State should be stored before procedural item breaks
+			const handItem = self.source.inv.getItem(self.source.slot);
 			switch (costOfChange) {
 				.no => unreachable,
 				.yes => {},
@@ -1680,7 +1677,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const AddHealth = struct { // MARK: AddHealth
+	const AddHealth = struct {
 		target: main.entity.Entity,
 		health: f32,
 		cause: main.game.DamageType,
@@ -1730,7 +1727,7 @@ pub const Command = struct { // MARK: Command
 		}
 	};
 
-	const ChatCommand = struct { // MARK: ChatCommand
+	const ChatCommand = struct {
 		message: []const u8,
 
 		fn finalize(self: ChatCommand, _: Side, _: *BinaryReader) !void {
@@ -1764,7 +1761,7 @@ pub const Command = struct { // MARK: Command
 };
 
 pub threadlocal var threadContext: ThreadContext = .other;
-pub const ThreadContext = enum { // MARK: ThreadContext
+pub const ThreadContext = enum {
 	other,
 	server,
 	chunkDeiniting,

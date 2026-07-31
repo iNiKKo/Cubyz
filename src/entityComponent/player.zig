@@ -22,7 +22,6 @@ const BinaryReader = main.utils.BinaryReader;
 pub var entityComponentID: main.entity.EntityComponentId = undefined;
 pub const entityComponentVersion = 0;
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	const Component = struct {
 		playerIndex: u32,
@@ -53,11 +52,9 @@ pub const client = struct {
 	}
 };
 
-// ############################# Server only stuff ################################
-
 pub const server = struct {
 	pub const Component = struct {
-		playerIndex: u32, // model
+		playerIndex: u32,
 		pub fn save(self: Component, writer: *utils.BinaryWriter, audience: main.entity.AudienceInfo) main.entity.ComponentSaveBehaviour {
 			writer.writeVarInt(u32, self.playerIndex);
 			if (audience == .disk) return .discard;

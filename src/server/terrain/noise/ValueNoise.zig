@@ -18,16 +18,15 @@ fn getGridValue1D(x: f32, worldSeed: u64) f32 {
 
 fn samplePoint1D(_x: f32, lineSeed: u64) f32 {
 	var seed = lineSeed;
-	const x = _x + 0.0001*random.nextFloat(&seed); // random offset
+	const x = _x + 0.0001*random.nextFloat(&seed);
 	const start = @floor(x);
 	const interp = x - start;
 	return (1 - interp)*getGridValue1D(start, lineSeed) + interp*getGridValue1D(start + 1, lineSeed);
 }
 
-/// The result will be between 0 and 1.
 pub fn samplePoint2D(x: f32, _y: f32, worldSeed: u64) f32 {
 	var seed = worldSeed;
-	const y = _y + random.nextFloat(&seed); // random offset
+	const y = _y + random.nextFloat(&seed);
 	const lineSeed = random.nextInt(u64, &seed);
 
 	const start = @floor(y);

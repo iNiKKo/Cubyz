@@ -64,10 +64,10 @@ fn getNearestNeighborsInHexGrid(in: Vec2f) [3]Vec2i {
 	} else {
 		result[1][0] = gridNearest[0] + 1;
 	}
-	if (@abs(offset[0]) < 2*@abs(offset[1])) { // We got two from the same y row
+	if (@abs(offset[0]) < 2*@abs(offset[1])) {
 		result[1][1] = @round(in[1] - @as(f32, if (@mod(result[1][0], 2) == 1) 0.5 else 0));
 		result[2] = gridNearest + Vec2i{0, if (offset[1] < 0) -1 else 1};
-	} else { // We got two from the other y row
+	} else {
 		result[1][1] = @round(in[1] - @as(f32, if (@mod(result[1][0], 2) == 1) 0.5 else 0));
 		const offset2 = in[1] - @as(f32, if (@mod(result[1][0], 2) == 1) 0.5 else 0) - @as(f32, @floatFromInt(result[1][1]));
 		result[2] = result[1] + Vec2i{0, if (offset2 < 0) -1 else 1};
@@ -82,7 +82,7 @@ fn computeBarycentricCoordinates(in: [3]Vec2i, pos: Vec2f) [3]f32 {
 		real[i] = @floatFromInt(point);
 		if (@mod(point[0], 2) == 1) real[i][1] += 0.5;
 	}
-	// taken from https://gamedev.stackexchange.com/a/23745
+
 	const v0 = real[1] - real[0];
 	const v1 = real[2] - real[0];
 	const v2 = pos - real[0];
@@ -119,16 +119,13 @@ pub fn generateMapFragment(map: *MapFragment, worldSeed: u64) void {
 	FractalNoise.generateSparseFractalTerrain(map.pos.wx, map.pos.wy, offsetScale, worldSeed ^ 675396758496549, xOffsetMap, map.pos.voxelSize);
 	FractalNoise.generateSparseFractalTerrain(map.pos.wx, map.pos.wy, offsetScale, worldSeed ^ 543864367373859, yOffsetMap, map.pos.voxelSize);
 
-	// A ridgid noise map to generate interesting mountains.
 	const mountainMap = Array2D(f32).init(main.stackAllocator, scaledSize, scaledSize);
 	defer mountainMap.deinit(main.stackAllocator);
 	RandomlyWeightedFractalNoise.generateSparseFractalTerrain(map.pos.wx, map.pos.wy, 256, worldSeed ^ 6758947592930535, mountainMap, map.pos.voxelSize);
 
-	// A smooth map for smaller hills.
 	const hillMap = PerlinNoise.generateSmoothNoise(main.stackAllocator, map.pos.wx, map.pos.wy, mapSize, mapSize, 128, 32, worldSeed ^ 157839765839495820, map.pos.voxelSize, 0.5);
 	defer hillMap.deinit(main.stackAllocator);
 
-	// A fractal map to generate high-detail roughness.
 	const roughMap = Array2D(f32).init(main.stackAllocator, scaledSize, scaledSize);
 	defer roughMap.deinit(main.stackAllocator);
 	FractalNoise.generateSparseFractalTerrain(map.pos.wx, map.pos.wy, 64, worldSeed ^ 954936678493, roughMap, map.pos.voxelSize);
@@ -137,7 +134,7 @@ pub fn generateMapFragment(map: *MapFragment, worldSeed: u64) void {
 	while (x < map.heightMap.len) : (x += 1) {
 		var y: u31 = 0;
 		while (y < map.heightMap.len) : (y += 1) {
-			// Do the biome interpolation:
+
 			var height: f32 = 0;
 			var roughness: f32 = 0;
 			var hills: f32 = 0;

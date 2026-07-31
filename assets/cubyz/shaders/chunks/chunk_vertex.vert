@@ -76,10 +76,7 @@ void main() {
 		fullLight >> 5 & 31u,
 		fullLight >> 0 & 31u
 	);
-	// Kept separate (rather than combined into one clamped magnitude like the old `light` did) so
-	// chunk_fragment.frag can apply the real-time sun-shadow factor to only the sun component — a torch's
-	// baked blockLight is a completely independent local light source and must never be dimmed by the
-	// sun/moon being blocked. Mirrors entity_vertex.vert's outSunLight/outBlockLight split.
+
 	outSunLight = sunLight*ambientLight/31;
 	outBlockLight = blockLight/31;
 	isBackFace = encodedPositionAndLightIndex>>15 & 1;
@@ -96,7 +93,7 @@ void main() {
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
 #ifdef ENTITY
-	// Offset by one to account for block position in chunk
+
 	position = (modelMatrix*vec4(position - vec3(1), 1)).xyz + vec3(1);
 #endif
 	position *= voxelSize;
@@ -107,8 +104,7 @@ void main() {
 		bool isThinPetalPlane = isLilyPad && quads[quadIndex].opaqueInLod == 0;
 		float heightMask = isLilyPad ? 1.0 : clamp(quads[quadIndex].corners[vertexID][2] + 0.2, 0.0, 1.0);
 		float scale = isLilyPad ? 0.060 : 0.030;
-		// Carpet flowers/petal piles are thin raised horizontal planes, not floating lily pads. Keep
-		// their lateral motion subtle so they cannot visibly skate across the ground.
+
 		if (isThinPetalPlane) scale *= 0.35;
 
 		float windWave = sin(worldPos.x * 1.1 + worldPos.y * 0.7 + waterTime * 2.0) * scale;

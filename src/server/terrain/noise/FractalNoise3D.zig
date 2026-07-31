@@ -7,12 +7,11 @@ const random = main.random;
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
 pub fn generateAligned(allocator: NeverFailingAllocator, wx: i32, wy: i32, wz: i32, voxelSize: u31, width: u31, depth: u31, height: u31, worldSeed: u64, scale: u31) Array3D(f32) {
-	std.debug.assert(wx & scale - 1 == 0 and wy & scale - 1 == 0 and wz & scale - 1 == 0); // Alignment;
-	std.debug.assert(width - 1 & scale/voxelSize - 1 == 0 and height - 1 & scale/voxelSize - 1 == 0 and depth - 1 & scale/voxelSize - 1 == 0); // dimensions need to be of the form n*scale + 1 with n ∈ ℕ \ {0}
-	std.debug.assert(width > 1 and height > 1 and depth > 1); // dimensions need to be of the form n*scale + 1 with n ∈ ℕ \ {0}
+	std.debug.assert(wx & scale - 1 == 0 and wy & scale - 1 == 0 and wz & scale - 1 == 0);
+	std.debug.assert(width - 1 & scale/voxelSize - 1 == 0 and height - 1 & scale/voxelSize - 1 == 0 and depth - 1 & scale/voxelSize - 1 == 0);
+	std.debug.assert(width > 1 and height > 1 and depth > 1);
 	const map = Array3D(f32).init(allocator, width, depth, height);
 
-	// Generate the corners:
 	const scaledScale = scale/voxelSize;
 	var x0: u31 = 0;
 	while (x0 < width) : (x0 += scaledScale) {
@@ -32,12 +31,12 @@ pub fn generateAligned(allocator: NeverFailingAllocator, wx: i32, wy: i32, wz: i
 }
 
 fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u31, worldSeed: u64, bigMap: Array3D(f32), maxResolution: u31) void {
-	// Basically an extension to 3D of the FractalNoise algorithm.
+
 	var seed: u64 = undefined;
 	var res: u31 = startingScale/2;
 	while (res != 0) : (res /= 2) {
 		const randomnessScale: f32 = @floatFromInt(res*maxResolution);
-		// x and y coordinate on the grid:
+
 		var x: u31 = 0;
 		while (x < bigMap.width) : (x += 2*res) {
 			var y: u31 = 0;
@@ -50,7 +49,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// x and z coordinate on the grid:
+
 		x = 0;
 		while (x < bigMap.width) : (x += 2*res) {
 			var y: u31 = res;
@@ -63,7 +62,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// y and z coordinate on the grid:
+
 		x = res;
 		while (x + res < bigMap.width) : (x += 2*res) {
 			var y: u31 = 0;
@@ -76,7 +75,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// x coordinate on the grid:
+
 		x = 0;
 		while (x < bigMap.width) : (x += 2*res) {
 			var y: u31 = res;
@@ -89,7 +88,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// y coordinate on the grid:
+
 		x = res;
 		while (x + res < bigMap.width) : (x += 2*res) {
 			var y: u31 = 0;
@@ -102,7 +101,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// z coordinate on the grid:
+
 		x = res;
 		while (x + res < bigMap.width) : (x += 2*res) {
 			var y: u31 = res;
@@ -115,7 +114,7 @@ fn generateInitializedFractalTerrain(wx: i32, wy: i32, wz: i32, startingScale: u
 				}
 			}
 		}
-		// No coordinate on the grid:
+
 		x = res;
 		while (x < bigMap.width) : (x += 2*res) {
 			var y: u31 = res;

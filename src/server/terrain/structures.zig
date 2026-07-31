@@ -11,7 +11,7 @@ const Tag = main.Tag;
 
 pub const simple_structures = @import("simple_structures/_list.zig");
 
-pub const SimpleStructureModel = struct { // MARK: SimpleStructureModel
+pub const SimpleStructureModel = struct {
 	pub const GenerationMode = enum {
 		floor,
 		ceiling,

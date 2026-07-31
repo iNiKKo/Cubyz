@@ -236,7 +236,6 @@ test "pattern parsing" {
 	defer main.heap.testingAllocator.free(pattern);
 	const expected: []const Segment = &.{.{.literal = "foo:"}, .{.symbol = "bar"}, .{.literal = "/"}, .{.symbol = "baz"}};
 
-	// Can't use expectEqualSlices because segments contain strings.
 	try std.testing.expectEqualDeep(expected, pattern);
 }
 

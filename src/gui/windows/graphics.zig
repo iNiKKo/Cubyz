@@ -40,8 +40,6 @@ fn getResolutionScaleIndex(currentScale: f32) u16 {
 	return bestIndex;
 }
 
-
-
 const leavesQualities = [_]u8{0, 1, 2, 3, 4};
 
 const fpsPresetsValue = [_]u16{5, 10, 15, 30, 50, 60, 75, 90, 100, 120, 144, 165, 170, 180, 200, 240, 260, 280, 300, 360, 480};

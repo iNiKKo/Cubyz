@@ -183,12 +183,12 @@ fn moveCursorLeft(self: *TextInput, mods: main.Window.Key.Modifiers) void {
 		const text = self.currentString.items;
 		if (self.cursor.? == 0) return;
 		self.cursor.? -= 1;
-		// Find end of previous "word":
+
 		while (characterType(text[self.cursor.?]) == .whitespace) {
 			if (self.cursor.? == 0) return;
 			self.cursor.? -= 1;
 		}
-		// Find the start of the previous "word":
+
 		const wordType = characterType(text[self.cursor.?]);
 		while (characterType(text[self.cursor.?]) == wordType) {
 			if (self.cursor.? == 0) return;
@@ -198,7 +198,7 @@ fn moveCursorLeft(self: *TextInput, mods: main.Window.Key.Modifiers) void {
 	} else {
 		while (self.cursor.? > 0) {
 			self.cursor.? -= 1;
-			if ((std.unicode.utf8ByteSequenceLength(self.currentString.items[self.cursor.?]) catch 0) != 0) break; // Ugly hack to check if we found a valid start byte.
+			if ((std.unicode.utf8ByteSequenceLength(self.currentString.items[self.cursor.?]) catch 0) != 0) break;
 		}
 	}
 }
@@ -229,12 +229,12 @@ fn moveCursorRight(self: *TextInput, mods: main.Window.Key.Modifiers) void {
 	if (self.cursor.? < self.currentString.items.len) {
 		if (mods.control) {
 			const text = self.currentString.items;
-			// Find start of next "word":
+
 			while (characterType(text[self.cursor.?]) == .whitespace) {
 				self.cursor.? += 1;
 				if (self.cursor.? >= self.currentString.items.len) return;
 			}
-			// Find the end of the next "word":
+
 			const wordType = characterType(text[self.cursor.?]);
 			while (characterType(text[self.cursor.?]) == wordType) {
 				self.cursor.? += 1;

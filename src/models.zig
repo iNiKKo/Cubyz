@@ -23,11 +23,7 @@ pub const QuadInfo = extern struct {
 	cornerUV: [4][2]f32 align(8),
 	textureSlot: u32,
 	opaqueInLod: u32 = 0,
-	// Distinct from opaqueInLod (which controls LOD dithering / cutout behavior, e.g. for ore veins via
-	// opaqueInLod=2): this controls foliage-specific *shading* (SSS, root-AO, shadow self-occlusion
-	// handling). Both used to be derived from the same `getFaceNeighbor() == null` check in addQuad(),
-	// which meant any non-face-aligned geometry — branches, ore veins — was shaded exactly like grass.
-	// Set explicitly per-model/rotation; defaults to false (regular block shading).
+
 	isFoliage: u32 = 0,
 
 	pub fn normalVec(self: QuadInfo) Vec3f {
@@ -134,7 +130,7 @@ pub const Model = struct {
 			zeroes += @select(u32, corner == @as(Vec3f, @splat(0)), .{1, 1, 1}, .{0, 0, 0});
 			ones += @select(u32, corner == @as(Vec3f, @splat(1)), .{1, 1, 1}, .{0, 0, 0});
 		}
-		// For full coverage there will 2 ones and 2 zeroes for two components, while the other one is constant.
+
 		const hasTwoZeroes = zeroes == @Vector(3, u32){2, 2, 2};
 		const hasTwoOnes = ones == @Vector(3, u32){2, 2, 2};
 		return @popCount(@as(u3, @bitCast(hasTwoOnes))) == 2 and @popCount(@as(u3, @bitCast(hasTwoZeroes))) == 2;
@@ -145,14 +141,14 @@ pub const Model = struct {
 		defer main.stackAllocator.free(adjustedQuads);
 		for (adjustedQuads, quadInfos) |*dest, *src| {
 			dest.* = src.*;
-			// Snap all values to a fixed point grid to make comparisons more accurate.
+
 			for (&dest.corners) |*corner| {
 				corner.* = snapToGrid(corner.*);
 			}
 			for (&dest.cornerUV) |*uv| {
 				uv.* = snapToGrid(uv.*);
 			}
-			// Snap the normals as well:
+
 			dest.normal = snapToGrid(dest.normal);
 		}
 		const modelIndex: ModelIndex = @enumFromInt(models.len);
@@ -681,14 +677,14 @@ fn addQuad(info_: QuadInfo) error{Degenerate}!QuadIndex {
 	if (quadDeduplication.get(std.mem.toBytes(info))) |id| {
 		return id;
 	}
-	// Check if it's degenerate:
+
 	var cornerEqualities: u32 = 0;
 	for (0..4) |i| {
 		for (i + 1..4) |j| {
 			if (@reduce(.And, @as(Vec3f, info.corners[i]) == @as(Vec3f, info.corners[j]))) cornerEqualities += 1;
 		}
 	}
-	if (cornerEqualities >= 2) return error.Degenerate; // One corner equality is fine, since then the quad degenerates to a triangle, which has a non-zero area.
+	if (cornerEqualities >= 2) return error.Degenerate;
 	const index: QuadIndex = @enumFromInt(quads.items.len);
 	if (info.opaqueInLod == 2) {
 		info.opaqueInLod = 0;
@@ -798,17 +794,13 @@ fn addCornerLightSamples(lightSamples: *main.List(LightSample), pos: Vec3i, dire
 
 pub fn registerModel(id: []const u8, data: []const u8, zon: ?main.ZonElement) ModelIndex {
 	const coordinateSystem: vec.CoordinateSystem = if (zon) |z| z.get(vec.CoordinateSystem, "coordinateSystem") orelse .right_handed_z_up else .right_handed_z_up;
-	// Explicit opt-in per model file (assets/cubyz/models/<name>.zig.zon: `.isFoliage = true`), rather than
-	// inferred from geometry: procedurally-built quads (branches, ore veins) also fail the
-	// face-alignment check that used to drive foliage shading, which made them wrongly get grass's
-	// SSS/root-AO/shadow-self-occlusion treatment. Only plant/grass models set this.
+
 	const isFoliage: bool = if (zon) |z| z.get(bool, "isFoliage") orelse false else false;
 	const model = Model.loadModel(data, coordinateSystem, isFoliage);
 	nameToIndex.put(id, model) catch unreachable;
 	return model;
 }
 
-// TODO: Entity models.
 pub fn init() void {
 	models = .init();
 	quadDeduplication = .init(main.globalAllocator.allocator);

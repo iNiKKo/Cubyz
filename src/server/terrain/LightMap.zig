@@ -11,7 +11,6 @@ const TerrainGenerationProfile = terrain.TerrainGenerationProfile;
 pub const MapFragmentPosition = terrain.SurfaceMap.MapFragmentPosition;
 const Biome = terrain.biomes.Biome;
 
-/// Generates and stores the light start position for each block column.
 pub const LightMapFragment = struct {
 	pub const mapShift = 8;
 	pub const mapSize = 1 << mapShift;
@@ -41,8 +40,8 @@ pub const LightMapFragment = struct {
 	}
 };
 
-const cacheSize = 1 << 6; // Must be a power of 2!
-const associativity = 8; // 64MiB MiB Cache size
+const cacheSize = 1 << 6;
+const associativity = 8;
 var cache: Cache(LightMapFragment, cacheSize, associativity, LightMapFragment.deferredDeinit) = .{};
 
 fn cacheInit(pos: MapFragmentPosition) *LightMapFragment {
@@ -53,7 +52,7 @@ fn cacheInit(pos: MapFragmentPosition) *LightMapFragment {
 	for (0..LightMapFragment.mapSize) |x| {
 		for (0..LightMapFragment.mapSize) |y| {
 			const baseHeight: i16 = std.math.lossyCast(i16, surfaceMap.heightMap[x][y]);
-			mapFragment.startHeight[x << LightMapFragment.mapShift | y] = @max(0, baseHeight +| 16); // Simple heuristic. TODO: Update this value once chunks get generated in the region.
+			mapFragment.startHeight[x << LightMapFragment.mapShift | y] = @max(0, baseHeight +| 16);
 		}
 	}
 	return mapFragment;

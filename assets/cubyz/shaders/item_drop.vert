@@ -36,7 +36,6 @@ layout(std430, binding = 4) buffer _quads
 	QuadInfo quads[];
 };
 
-
 const int[24] positions = int[24](
 	0x010,
 	0x110,
@@ -106,7 +105,6 @@ void main() {
 		textureIndex = -1;
 	}
 	voxelModel = voxelModelIndex;
-
 
 	vec4 worldSpace = modelMatrix*vec4(pos, 1);
 	direction = (transpose(mat3(modelMatrix))*worldSpace.xyz).xyz;

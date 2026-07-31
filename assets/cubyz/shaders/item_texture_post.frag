@@ -12,7 +12,7 @@ void main() {
 	fragColor = texture(color, texCoords);
 	if(transparent) {
 		fragColor.a = 1;
-		// TODO: Remove the background color. Somehow?
+
 	}
 	float maxColor = max(1.0, max(fragColor.r, max(fragColor.g, fragColor.b)));
 	fragColor.rgb = fragColor.rgb/maxColor;

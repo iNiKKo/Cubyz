@@ -53,7 +53,7 @@ pub const Gamepad = struct {
 		}
 		var jid: c_int = 0;
 		while (jid < c.GLFW_JOYSTICK_LAST) : (jid += 1) {
-			// Can't initialize with the state, or it will become a reference.
+
 			var oldState: c.GLFWgamepadstate = std.mem.zeroes(c.GLFWgamepadstate);
 			if (gamepadState.get(jid)) |v| {
 				oldState = v.*;
@@ -148,7 +148,7 @@ pub const Gamepad = struct {
 	pub fn wereControllerMappingsDownloaded() bool {
 		return controllerMappingsDownloaded.load(std.builtin.AtomicOrder.acquire);
 	}
-	const ControllerMappingDownloadTask = struct { // MARK: ControllerMappingDownloadTask
+	const ControllerMappingDownloadTask = struct {
 		curTimestamp: i128,
 		var running = std.atomic.Value(bool).init(false);
 		const vtable = main.utils.ThreadPool.VTable{
@@ -161,7 +161,7 @@ pub const Gamepad = struct {
 		pub fn schedule(curTimestamp: i128) void {
 			if (running.swap(true, .monotonic)) {
 				std.log.warn("Attempt to schedule a duplicate controller mapping download task!", .{});
-				return; // Controller mappings are already downloading.
+				return;
 			}
 			controllerMappingsDownloaded.store(false, .monotonic);
 			const task = main.globalAllocator.create(ControllerMappingDownloadTask);
@@ -169,7 +169,7 @@ pub const Gamepad = struct {
 				.curTimestamp = curTimestamp,
 			};
 			main.threadPool.addTask(task, &vtable);
-			// Don't attempt to open the window before the GUI is initialized.
+
 			main.gui.openWindow("download_controller_mappings");
 		}
 
@@ -221,7 +221,7 @@ pub const Gamepad = struct {
 		}
 	};
 	pub fn downloadControllerMappings() void {
-		if (builtin.mode == .Debug) return; // TODO: The http fetch adds ~5 seconds to the compile time, so it's disabled in debug mode, see #24435
+		if (builtin.mode == .Debug) return;
 		var needsDownload: bool = false;
 		const curTimestamp: i96 = std.Io.Clock.Timestamp.now(main.io, .real).raw.nanoseconds;
 		const timestamp: i96 = blk: {
@@ -254,7 +254,7 @@ pub const Gamepad = struct {
 		}
 		const data = main.files.cwd().read(main.stackAllocator, "./gamecontrollerdb.txt") catch |err| {
 			if (err == error.FileNotFound) {
-				return; // Ignore not finding mappings.
+				return;
 			}
 			std.log.err("Error opening gamepad mappings file: {s}", .{@errorName(err)});
 			return;
@@ -281,7 +281,7 @@ pub const GamepadAxis = struct {
 	axis: c_int,
 	positive: bool = true,
 };
-pub const Key = struct { // MARK: Key
+pub const Key = struct {
 	name: []const u8,
 	pressed: bool = false,
 	isToggling: IsToggling = .never,
@@ -492,7 +492,7 @@ pub const Key = struct { // MARK: Key
 		if (typ == .press) self.grabbedOnPress = isGrabbed;
 		if (!self.notifyRequirement.met(self.grabbedOnPress)) return;
 		if (!self.requiredModifiers.satisfiedBy(mods)) return;
-		if (textKeyPressedInTextField and self.requiredModifiers.isEmpty()) return; // Don't send events for keys that are used in writing letters.
+		if (textKeyPressedInTextField and self.requiredModifiers.isEmpty()) return;
 		switch (typ) {
 			.press => if (self.pressAction) |a| a(mods),
 			.release => if (self.releaseAction) |a| a(mods),
@@ -501,7 +501,7 @@ pub const Key = struct { // MARK: Key
 	}
 };
 
-pub const GLFWCallbacks = struct { // MARK: GLFWCallbacks
+pub const GLFWCallbacks = struct {
 	fn errorCallback(errorCode: c_int, description: [*c]const u8) callconv(.c) void {
 		std.log.err("GLFW Error({}): {s}", .{errorCode, description});
 	}
@@ -548,7 +548,7 @@ pub const GLFWCallbacks = struct { // MARK: GLFWCallbacks
 		main.gui.updateGuiScale();
 		main.gui.updateWindowPositions();
 	}
-	// Mouse deltas are averaged over multiple frames using a circular buffer:
+
 	const deltasLen: u2 = 3;
 	var deltas: [deltasLen]Vec2f = @splat(.{0, 0});
 	var deltaBufferPosition: u2 = 0;
@@ -657,8 +657,7 @@ pub fn resetNextInputListenters() void {
 fn updateCursor() void {
 	if (grabbed) {
 		c.glfwSetInputMode(window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
-		// Behavior seems much more intended without this line on MacOS.
-		// Perhaps this is an inconsistency in GLFW due to its fresh XQuartz support?
+
 		if (@import("builtin").target.os.tag != .macos) {
 			if (c.glfwRawMouseMotionSupported() != 0) {
 				c.glfwSetInputMode(window, c.GLFW_RAW_MOUSE_MOTION, c.GLFW_TRUE);
@@ -715,13 +714,12 @@ pub fn setClipboardString(string: []const u8) void {
 	c.glfwSetClipboardString(window, nullTerminatedString.ptr);
 }
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	_ = c.glfwSetErrorCallback(GLFWCallbacks.errorCallback);
 	const windowTitle = "Cubyz " ++ main.settings.version.version;
 
 	if (builtin.target.os.tag == .macos) {
-		// NOTE(blackedout): Since the Vulkan loader is linked statically for Cubyz on macOS, libvulkan*.dylib is part of the Cubyz executable
-		// and GLFW's default attempt to load it dynamically would fail. Instead, tell GLFW where it can find the loader functions directly.
+
 		c.glfwInitVulkanLoader(c.vkGetInstanceProcAddr);
 
 		c.glfwInitHint(c.GLFW_COCOA_CHDIR_RESOURCES, c.GLFW_FALSE);

@@ -5,8 +5,6 @@ const terrain = main.server.terrain;
 const Biome = terrain.biomes.Biome;
 const ValueNoise = terrain.noise.ValueNoise;
 
-/// The eventual client snapshot carries this complete sample. The old rain-intensity packet temporarily
-/// carries `precipitation` for rain-capable climates until that snapshot lands.
 pub const PrecipitationKind = enum(u8) { none, rain, snow, dust };
 
 pub const WeatherSample = struct {
@@ -17,9 +15,6 @@ pub const WeatherSample = struct {
 	kind: PrecipitationKind,
 };
 
-/// Weather is a world-coordinate calculation, never a roll caused by a player entering a biome. The
-/// moving field is sampled by backtracking through the prevailing wind; applying climate at the sampled
-/// destination makes an incoming jungle storm visibly evaporate over desert while never raining there.
 const cloudScale: f32 = 720.0;
 const detailScale: f32 = 180.0;
 const windEpochMillis: i64 = 900_000;
@@ -73,8 +68,7 @@ pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: 
 			kind = .snow;
 		},
 		.frost => {
-			// Snow is intentionally opt-in for visibly snow-covered biomes until terrain accumulation
-			// exists. Cold autumn/grass biomes otherwise look wrong under falling snow.
+
 			precipitation = 0;
 			kind = .none;
 		},
@@ -83,8 +77,7 @@ pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: 
 			precipitation *= 0.12;
 		},
 		.desert => {
-			// Destination climate wins: incoming moisture remains only as a short-lived high mist,
-			// never ground rain. Dust is driven by the same world wind, not a separate random effect.
+
 			cloudCover *= 0.20;
 			precipitation = 0;
 			dust = smoothstep((@sqrt(wind[0]*wind[0] + wind[1]*wind[1]) - 0.70)/0.35)*smoothstep((moisture - 0.38)/0.35);

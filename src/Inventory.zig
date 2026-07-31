@@ -22,7 +22,7 @@ const ProceduralItemTypeIndex = main.items.ProceduralItemTypeIndex;
 
 pub const InventoryId = enum(u32) { _ };
 
-pub const client = struct { // MARK: client
+pub const client = struct {
 	var maxId: InventoryId = @enumFromInt(0);
 	var freeIdList: main.List(InventoryId) = .empty;
 	var serverToClientMap: std.AutoHashMap(InventoryId, Inventory) = undefined;
@@ -32,7 +32,7 @@ pub const client = struct { // MARK: client
 	}
 
 	pub fn deinit() void {
-		std.debug.assert(freeIdList.items.len == @intFromEnum(maxId)); // leak
+		std.debug.assert(freeIdList.items.len == @intFromEnum(maxId));
 		freeIdList.clearAndFree(main.globalAllocator);
 		serverToClientMap.deinit();
 	}
@@ -90,7 +90,7 @@ pub const client = struct { // MARK: client
 	}
 };
 
-pub const server = struct { // MARK: server
+pub const server = struct {
 	const ServerInventory = struct {
 		inv: Inventory,
 		users: main.List(struct { user: *main.server.User, cliendId: InventoryId }),
@@ -171,7 +171,7 @@ pub const server = struct { // MARK: server
 				std.log.err("Leaked inventory with source {}", .{inv.source});
 			}
 		}
-		std.debug.assert(freeIdList.items.len == @intFromEnum(maxId)); // leak
+		std.debug.assert(freeIdList.items.len == @intFromEnum(maxId));
 		freeIdList.clearAndFree(main.globalAllocator);
 		inventories.deinit();
 		maxId = @enumFromInt(0);
@@ -180,7 +180,7 @@ pub const server = struct { // MARK: server
 	pub fn disconnectUser(user: *main.server.User) void {
 		sync.threadContext.assertCorrectContext(.server);
 		while (true) {
-			// Reinitializing the iterator in the loop to allow for removal:
+
 			var iter = user.inventoryClientToServerIdMap.keyIterator();
 			const clientId = iter.next() orelse break;
 			closeInventory(user, clientId.*) catch unreachable;
@@ -214,7 +214,7 @@ pub const server = struct { // MARK: server
 	pub fn destroyExternallyManagedInventory(invId: InventoryId) void {
 		switch (sync.threadContext) {
 			.server => {},
-			.chunkDeiniting => std.debug.assert(inventories.items()[@intFromEnum(invId)].users.items.len == 0), // There should be no users here, since chunks shouldn't be deinited while players are still interacting with them.
+			.chunkDeiniting => std.debug.assert(inventories.items()[@intFromEnum(invId)].users.items.len == 0),
 			else => unreachable,
 		}
 		std.debug.assert(inventories.items()[@intFromEnum(invId)].managed == .externallyManaged);
@@ -299,8 +299,8 @@ pub const server = struct { // MARK: server
 		inventories.items()[@intFromEnum(inventory.inv.id)].addUser(user, clientId);
 
 		switch (source) {
-			.blockInventory => unreachable, // Should be loaded by the block entity
-			.playerInventory, .hand => unreachable, // Should be loaded on player creation
+			.blockInventory => unreachable,
+			.playerInventory, .hand => unreachable,
 			.other => {},
 			.workbench => {},
 			.alreadyFreed => unreachable,
@@ -401,7 +401,7 @@ pub const SourceType = enum(u8) {
 	hand = 3,
 	blockInventory = 5,
 	workbench = 6,
-	other = 0xff, // TODO: List every type separately here.
+	other = 0xff,
 };
 pub const Source = union(SourceType) {
 	alreadyFreed: void,
@@ -412,7 +412,7 @@ pub const Source = union(SourceType) {
 	other: void,
 };
 
-pub const ClientInventory = struct { // MARK: ClientInventory
+pub const ClientInventory = struct {
 	const ClientType = union(enum) {
 		serverShared: void,
 		creative: void,
@@ -565,7 +565,7 @@ pub const ClientInventory = struct { // MARK: ClientInventory
 	}
 };
 
-const Inventory = @This(); // MARK: Inventory
+const Inventory = @This();
 
 id: InventoryId,
 _items: []ItemStack,
@@ -693,7 +693,7 @@ pub const InventoryAndSlot = struct {
 	}
 };
 
-pub const BagInventory = struct { // MARK: BagInventory
+pub const BagInventory = struct {
 	sizeLimit: u32,
 	slots: main.ListManaged(ItemStack),
 
@@ -725,7 +725,6 @@ pub const BagInventory = struct { // MARK: BagInventory
 		}
 	}
 
-	/// returns the remaining amount
 	pub fn push(self: *BagInventory, stack_: ItemStack) u16 {
 		var stack = stack_;
 		if (self.slots.items.len != 0 and std.meta.eql(self.slots.items[self.slots.items.len - 1].item, stack.item)) {
@@ -750,7 +749,7 @@ pub const BagInventory = struct { // MARK: BagInventory
 	}
 };
 
-pub const Inventories = struct { // MARK: Inventories
+pub const Inventories = struct {
 	inventories: []const Inventory,
 
 	pub fn init(alloctor: NeverFailingAllocator, inventories: []const Inventory) Inventories {

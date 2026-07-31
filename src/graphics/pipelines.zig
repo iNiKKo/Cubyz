@@ -7,7 +7,7 @@ const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
 const c = @import("c");
 
-const Shader = struct { // MARK: Shader
+const Shader = struct {
 	id: c_uint,
 
 	const ShaderStage = enum(c.glslang_stage_t) {
@@ -42,7 +42,7 @@ const Shader = struct { // MARK: Shader
 			.forward_compatible = c.false,
 			.messages = c.GLSLANG_MSG_DEFAULT_BIT,
 			.resource = c.glslang_default_resource(),
-			.callbacks = .{}, // TODO: Add support for shader includes
+			.callbacks = .{},
 			.callbacks_ctx = null,
 		};
 		const shader = c.glslang_shader_create(&input);
@@ -233,7 +233,7 @@ const Shader = struct { // MARK: Shader
 	}
 };
 
-const RasterizationState = struct { // MARK: RasterizationState
+const RasterizationState = struct {
 	depthClamp: bool = true,
 	rasterizerDiscard: bool = false,
 	polygonMode: PolygonMode = .fill,
@@ -283,7 +283,7 @@ const RasterizationState = struct { // MARK: RasterizationState
 	}
 };
 
-const MultisampleState = struct { // MARK: MultisampleState
+const MultisampleState = struct {
 	rasterizationSamples: Count = .@"1",
 	sampleShading: bool = false,
 	minSampleShading: f32 = undefined,
@@ -314,7 +314,7 @@ const MultisampleState = struct { // MARK: MultisampleState
 	}
 };
 
-const DepthStencilState = struct { // MARK: DepthStencilState
+const DepthStencilState = struct {
 	depthTest: bool,
 	depthWrite: bool = true,
 	depthCompare: CompareOp = .less,
@@ -391,7 +391,7 @@ const DepthStencilState = struct { // MARK: DepthStencilState
 	}
 };
 
-const ColorBlendAttachmentState = struct { // MARK: ColorBlendAttachmentState
+const ColorBlendAttachmentState = struct {
 	enabled: bool = true,
 	srcColorBlendFactor: BlendFactor,
 	dstColorBlendFactor: BlendFactor,
@@ -409,8 +409,7 @@ const ColorBlendAttachmentState = struct { // MARK: ColorBlendAttachmentState
 		.dstAlphaBlendFactor = .oneMinusSrcAlpha,
 		.alphaBlendOp = .add,
 	};
-	/// Standard premultiplied-alpha composition. Required by off-screen translucent layers so their
-	/// accumulated RGB and alpha can be composited later without applying alpha a second time.
+
 	pub const premultipliedAlphaBlending: ColorBlendAttachmentState = .{
 		.srcColorBlendFactor = .one,
 		.dstColorBlendFactor = .oneMinusSrcAlpha,
@@ -516,7 +515,7 @@ const ColorBlendAttachmentState = struct { // MARK: ColorBlendAttachmentState
 	}
 };
 
-const ColorBlendState = struct { // MARK: ColorBlendState
+const ColorBlendState = struct {
 	logicOp: ?LogicOp = null,
 	attachments: []const ColorBlendAttachmentState,
 	blendConstants: [4]f32 = .{0, 0, 0, 0},
@@ -552,7 +551,7 @@ const ColorBlendState = struct { // MARK: ColorBlendState
 	}
 };
 
-pub const DescriptorSetLayoutBinding = extern struct { // MARK: DescriptorSetLayoutBinding
+pub const DescriptorSetLayoutBinding = extern struct {
 	binding: u32,
 	type: enum(c_int) {
 		sampler = c.VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -606,13 +605,13 @@ pub const DescriptorSetLayoutBinding = extern struct { // MARK: DescriptorSetLay
 	}
 };
 
-pub const Pipeline = struct { // MARK: Pipeline
+pub const Pipeline = struct {
 	shader: Shader,
 	rasterState: RasterizationState,
-	multisampleState: MultisampleState = .{}, // TODO: Not implemented
+	multisampleState: MultisampleState = .{},
 	depthStencilState: DepthStencilState,
 	blendState: ColorBlendState,
-	vulkanCreationSuccessful: bool = false, // TODO: Remove after all Vulkan pipelines compile
+	vulkanCreationSuccessful: bool = false,
 	pipelineLayout: c.VkPipelineLayout = undefined,
 	descriptorSetLayout: c.VkDescriptorSetLayout = undefined,
 	graphicsPipeline: c.VkPipeline = undefined,
@@ -647,7 +646,7 @@ pub const Pipeline = struct { // MARK: Pipeline
 			.dynamicStateCount = @intCast(dynamicStates.len),
 			.pDynamicStates = &dynamicStates,
 		};
-		const bindingDescription: c.VkVertexInputBindingDescription = .{ // TODO: Do we need this as a configurable input? It is only needed for instanced rendering as far as I can tell.
+		const bindingDescription: c.VkVertexInputBindingDescription = .{
 			.binding = 0,
 			.stride = @sizeOf(VertexType),
 			.inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
@@ -661,11 +660,11 @@ pub const Pipeline = struct { // MARK: Pipeline
 		};
 		const inputAssembly: c.VkPipelineInputAssemblyStateCreateInfo = .{
 			.sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-			.topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, // TODO: Make this an input
-			.primitiveRestartEnable = c.VK_FALSE, // TODO: Make this an input
+			.topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+			.primitiveRestartEnable = c.VK_FALSE,
 		};
-		const viewport: c.VkViewport = .{}; // overwritten dynamically
-		const scissor: c.VkRect2D = .{}; // overwritten dynamically
+		const viewport: c.VkViewport = .{};
+		const scissor: c.VkRect2D = .{};
 		const viewportState: c.VkPipelineViewportStateCreateInfo = .{
 			.sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
 			.viewportCount = 1,
@@ -691,7 +690,7 @@ pub const Pipeline = struct { // MARK: Pipeline
 		try vulkan.checkResultErr(c.vkCreateDescriptorSetLayout(vulkan.device, &descriptorSetLayoutInfo, null, &self.descriptorSetLayout));
 		errdefer c.vkDestroyDescriptorSetLayout(vulkan.device, self.descriptorSetLayout, null);
 
-		const pipelineLayoutInfo = c.VkPipelineLayoutCreateInfo{ // TODO: Configure push constants
+		const pipelineLayoutInfo = c.VkPipelineLayoutCreateInfo{
 			.sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
 			.setLayoutCount = 2,
 			.pSetLayouts = &[_]c.VkDescriptorSetLayout{self.descriptorSetLayout, frameUnformDescriptorSetLayout},
@@ -712,7 +711,7 @@ pub const Pipeline = struct { // MARK: Pipeline
 			.pColorBlendState = &blendState,
 			.pDynamicState = &dynamicState,
 			.layout = self.pipelineLayout,
-			.renderPass = graphics.RenderPass.renderToWindow.renderPass, // TODO: Allow configuring this
+			.renderPass = graphics.RenderPass.renderToWindow.renderPass,
 			.subpass = 0,
 		};
 		try vulkan.checkResultErr(c.vkCreateGraphicsPipelines(vulkan.device, null, 1, &pipelineInfo, null, &self.graphicsPipeline));
@@ -720,14 +719,14 @@ pub const Pipeline = struct { // MARK: Pipeline
 	}
 
 	pub fn init(vertexPath: []const u8, fragmentPath: []const u8, defines: []const u8, uniformStruct: anytype, VertexType: type, bindings: []const DescriptorSetLayoutBinding, rasterState: RasterizationState, depthStencilState: DepthStencilState, blendState: ColorBlendState) Pipeline {
-		std.debug.assert(depthStencilState.depthBoundsTest == null); // Only available in Vulkan 1.3
-		std.debug.assert(depthStencilState.stencilTest == null); // TODO: Not yet implemented
-		std.debug.assert(rasterState.lineWidth <= 1); // Larger values are poorly supported among drivers
-		std.debug.assert(blendState.logicOp == null); // TODO: Not yet implemented
+		std.debug.assert(depthStencilState.depthBoundsTest == null);
+		std.debug.assert(depthStencilState.stencilTest == null);
+		std.debug.assert(rasterState.lineWidth <= 1);
+		std.debug.assert(blendState.logicOp == null);
 		var self: Pipeline = .{
 			.shader = .init(vertexPath, fragmentPath, defines, uniformStruct),
 			.rasterState = rasterState,
-			.multisampleState = .{}, // TODO: Not implemented
+			.multisampleState = .{},
 			.depthStencilState = depthStencilState,
 			.blendState = blendState,
 		};
@@ -800,8 +799,6 @@ pub const Pipeline = struct { // MARK: Pipeline
 		}
 		c.glLineWidth(self.rasterState.lineWidth);
 
-		// TODO: Multisampling
-
 		conditionalEnable(c.GL_DEPTH_TEST, self.depthStencilState.depthTest);
 		c.glDepthMask(@intFromBool(self.depthStencilState.depthWrite));
 		c.glDepthFunc(switch (self.depthStencilState.depthCompare) {
@@ -814,9 +811,7 @@ pub const Pipeline = struct { // MARK: Pipeline
 			.greateOrEqual => c.GL_GEQUAL,
 			.always => c.GL_ALWAYS,
 		});
-		// TODO: stencilTest
 
-		// TODO: logicOp
 		for (self.blendState.attachments, 0..) |attachment, i| {
 			c.glColorMask(@intFromBool(attachment.colorWriteMask.r), @intFromBool(attachment.colorWriteMask.g), @intFromBool(attachment.colorWriteMask.b), @intFromBool(attachment.colorWriteMask.a));
 			if (!attachment.enabled) {
@@ -831,7 +826,7 @@ pub const Pipeline = struct { // MARK: Pipeline
 	}
 };
 
-pub const ComputePipeline = struct { // MARK: ComputePipeline
+pub const ComputePipeline = struct {
 	shader: Shader,
 
 	pub fn init(computePath: []const u8, defines: []const u8, uniformStruct: anytype) ComputePipeline {
@@ -851,7 +846,7 @@ pub const ComputePipeline = struct { // MARK: ComputePipeline
 
 var frameUnformDescriptorSetLayout: c.VkDescriptorSetLayout = undefined;
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	if (c.glslang_initialize_process() == c.false) std.log.err("glslang_initialize_process failed", .{});
 
 	if (main.settings.launchConfig.vulkanTestingMode) {
@@ -869,7 +864,7 @@ pub fn init() void { // MARK: init()
 	}
 }
 
-pub fn deinit() void { // MARK: deinit()
+pub fn deinit() void {
 	c.glslang_finalize_process();
 	if (main.settings.launchConfig.vulkanTestingMode) {
 		c.vkDestroyDescriptorSetLayout(vulkan.device, frameUnformDescriptorSetLayout, null);

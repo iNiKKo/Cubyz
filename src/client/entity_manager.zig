@@ -87,10 +87,8 @@ pub fn removeEntity(entity: main.entity.Entity) void {
 	const index: u32 = idMapping.items[@intFromEnum(entity)] orelse return;
 	const ent = entities.items()[index];
 
-	// remove id
 	idMapping.items[@intFromEnum(entity)] = null;
 
-	// remove entity
 	{
 		std.debug.assert(ent.id == entity);
 		ent.deinit(main.globalAllocator);

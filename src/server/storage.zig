@@ -9,7 +9,7 @@ const utils = main.utils;
 const BinaryWriter = utils.BinaryWriter;
 const BinaryReader = utils.BinaryReader;
 
-pub const RegionFile = struct { // MARK: RegionFile
+pub const RegionFile = struct {
 	const version = 0;
 	pub const regionShift = 2;
 	pub const regionSize = 1 << regionShift;
@@ -180,8 +180,7 @@ pub const RegionFile = struct { // MARK: RegionFile
 	}
 };
 
-// MARK: cache
-const cacheSize = 1 << 8; // Must be a power of 2!
+const cacheSize = 1 << 8;
 const associativity = 8;
 var cache: main.utils.Cache(RegionFile, cacheSize, associativity, cacheDeinit) = .{};
 const HashContext = struct {
@@ -196,7 +195,7 @@ var stillUsedHashMap: std.HashMap(chunk.ChunkPosition, *RegionFile, HashContext,
 var hashMapMutex: main.utils.Mutex = .{};
 
 fn cacheDeinit(region: *RegionFile) void {
-	if (region.refCount.load(.monotonic) != 1) { // Someone else might still use it, so we store it in the hashmap.
+	if (region.refCount.load(.monotonic) != 1) {
 		hashMapMutex.lock();
 		defer hashMapMutex.unlock();
 		region.storedInHashMap = true;
@@ -250,7 +249,7 @@ pub fn loadRegionFileAndIncreaseRefCount(wx: i32, wy: i32, wz: i32, voxelSize: u
 	return result;
 }
 
-pub const ChunkCompression = struct { // MARK: ChunkCompression
+pub const ChunkCompression = struct {
 	const ChunkCompressionAlgo = enum(u32) {
 		deflate_with_position_no_block_entities = 0,
 		deflate_no_block_entities = 1,
@@ -260,7 +259,7 @@ pub const ChunkCompression = struct { // MARK: ChunkCompression
 		deflate_with_8bit_palette = 5,
 	};
 	const BlockEntityCompressionAlgo = enum(u8) {
-		raw = 0, // TODO: Maybe we need some basic compression at some point. For now this is good enough though.
+		raw = 0,
 	};
 
 	const Target = enum { toClient, toDisk };

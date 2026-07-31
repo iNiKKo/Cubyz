@@ -100,13 +100,9 @@ pub fn updateOutputSize(outputWidth: u31, outputHeight: u31) void {
 	}
 }
 
-/// Runs FSR 1.0 EASU spatial upsampling and RCAS sharpening compute passes.
-/// Takes inputTexture (e.g. low-res rendered scene/composite texture at inputWidth x inputHeight)
-/// and writes upscaled output to outputTexture (native screen dimensions outputWidth x outputHeight).
 pub fn render(inputWidth: u31, inputHeight: u31, outputWidth: u31, outputHeight: u31, targetFBO: c_uint) void {
 	updateSize(inputWidth, inputHeight, outputWidth, outputHeight);
 
-	// Pass 1: EASU (Edge-Adaptive Spatial Upsampling)
 	easuPipeline.bind();
 
 	const inW: f32 = @floatFromInt(inputWidth);
@@ -132,7 +128,6 @@ pub fn render(inputWidth: u31, inputHeight: u31, outputWidth: u31, outputHeight:
 	c.glDispatchCompute(groupX, groupY, 1);
 	c.glMemoryBarrier(c.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | c.GL_TEXTURE_FETCH_BARRIER_BIT);
 
-	// Pass 2: RCAS (Robust Contrast-Adaptive Sharpening)
 	runRcas(easuTexture, outputWidth, outputHeight, targetFBO);
 }
 

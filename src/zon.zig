@@ -5,7 +5,7 @@ const main = @import("main");
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 const ListManaged = main.ListManaged;
 
-pub const ZonElement = union(enum) { // MARK: Zon
+pub const ZonElement = union(enum) {
 	int: i128,
 	float: f64,
 	string: []const u8,
@@ -133,7 +133,7 @@ pub const ZonElement = union(enum) { // MARK: Zon
 			return;
 		}
 		if (left.* != .object or right != .object) {
-			if (!builtin.is_test) std.log.err("Trying to join zon that isn't an object.", .{}); // TODO: #1275
+			if (!builtin.is_test) std.log.err("Trying to join zon that isn't an object.", .{});
 			return;
 		}
 
@@ -368,7 +368,7 @@ pub const ZonElement = union(enum) { // MARK: Zon
 			},
 			.string, .stringOwned => |value| {
 				if (isValidIdentifierName(value)) {
-					// Can use an enum literal:
+
 					list.append('.');
 					list.appendSlice(value);
 				} else {
@@ -434,7 +434,6 @@ pub const ZonElement = union(enum) { // MARK: Zon
 		return string.toOwnedSlice();
 	}
 
-	/// Ignores all the visual characters(spaces, tabs and newlines) and allows adding a custom prefix(which is for example required by networking).
 	pub fn toStringEfficient(zon: ZonElement, allocator: NeverFailingAllocator, prefix: []const u8) []const u8 {
 		var string: ListManaged(u8) = .init(allocator);
 		string.appendSlice(prefix);
@@ -449,8 +448,8 @@ pub const ZonElement = union(enum) { // MARK: Zon
 	}
 };
 
-const Parser = struct { // MARK: Parser
-	/// All whitespaces from unicode 14.
+const Parser = struct {
+
 	const whitespaces = [_][]const u8{"\u{0009}", "\u{000A}", "\u{000B}", "\u{000C}", "\u{000D}", "\u{0020}", "\u{0085}", "\u{00A0}", "\u{1680}", "\u{2000}", "\u{2001}", "\u{2002}", "\u{2003}", "\u{2004}", "\u{2005}", "\u{2006}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200A}", "\u{2028}", "\u{2029}", "\u{202F}", "\u{205F}", "\u{3000}"};
 
 	fn skipWhitespaceAndComments(chars: []const u8, index: *u32) void {
@@ -471,12 +470,11 @@ const Parser = struct { // MARK: Parser
 				index.* += 1;
 				continue :outerLoop;
 			}
-			// Next character is no whitespace.
+
 			return;
 		}
 	}
 
-	/// Assumes that the region starts with a number character ('+', '-', '.' or a digit).
 	fn parseNumber(chars: []const u8, index: *u32) ZonElement {
 		var sign: i2 = 1;
 		if (chars[index.*] == '-') {
@@ -487,7 +485,7 @@ const Parser = struct { // MARK: Parser
 		}
 		var intPart: i128 = 0;
 		if (index.* + 1 < chars.len and chars[index.*] == '0' and chars[index.* + 1] == 'x') {
-			// Parse hex int
+
 			index.* += 2;
 			while (index.* < chars.len) : (index.* += 1) {
 				switch (chars[index.*]) {
@@ -517,10 +515,9 @@ const Parser = struct { // MARK: Parser
 				},
 			}
 		}
-		if (index.* >= chars.len or (chars[index.*] != '.' and chars[index.*] != 'e' and chars[index.*] != 'E')) { // This is an int
+		if (index.* >= chars.len or (chars[index.*] != '.' and chars[index.*] != 'e' and chars[index.*] != 'E')) {
 			return .{.int = sign*intPart};
 		}
-		// So this is a float apparently.
 
 		var floatPart: f64 = 0;
 		var currentFactor: f64 = 0.1;
@@ -642,7 +639,7 @@ const Parser = struct { // MARK: Parser
 				index.* += 1;
 				return .{.object = map};
 			}
-			if (chars[index.*] == '.') index.* += 1; // Just ignoring the dot in front of identifiers, the file might as well not have for all I care.
+			if (chars[index.*] == '.') index.* += 1;
 			const keyIndex = index.*;
 			const key: []const u8 = parseIdentifierOrStringOrEnumLiteral(allocator, chars, index);
 			skipWhitespaceAndComments(chars, index);
@@ -688,13 +685,13 @@ const Parser = struct { // MARK: Parser
 		}
 		std.log.err("Error in line {}: {s}", .{lineNumber, msg});
 		std.log.err("{s}", .{chars[lineStart..lineEnd]});
-		// Mark the position:
+
 		var message: [512]u8 = undefined;
 		i = lineStart;
 		var outputI: u32 = 0;
 		while (i < index and i < chars.len) : (i += 1) {
 			if ((chars[i] & 128) != 0 and (chars[i] & 64) == 0) {
-				// Not the start of a utf8 character
+
 				continue;
 			}
 			if (chars[i] == '\t') {
@@ -704,7 +701,7 @@ const Parser = struct { // MARK: Parser
 			}
 			outputI += 1;
 			if (outputI >= message.len) {
-				return; // 512 characters is too long for this output to be helpful.
+				return;
 			}
 		}
 		message[outputI] = '^';
@@ -712,7 +709,6 @@ const Parser = struct { // MARK: Parser
 		std.log.err("{s}", .{message[0..outputI]});
 	}
 
-	/// Assumes that the region starts with a non-space character.
 	fn parseElement(allocator: NeverFailingAllocator, filePath: ?[]const u8, chars: []const u8, index: *u32) ZonElement {
 		if (index.* >= chars.len) {
 			printError(filePath, chars, index.*, "Unexpected end of file.");
@@ -722,7 +718,7 @@ const Parser = struct { // MARK: Parser
 			'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '+', '-' => {
 				return parseNumber(chars, index);
 			},
-			't' => { // Value can only be true.
+			't' => {
 				if (index.* + 3 >= chars.len) {
 					printError(filePath, chars, index.*, "Unexpected end of file.");
 				} else if (chars[index.* + 1] != 'r' or chars[index.* + 2] != 'u' or chars[index.* + 3] != 'e') {
@@ -731,7 +727,7 @@ const Parser = struct { // MARK: Parser
 				index.* += 4;
 				return .{.bool = true};
 			},
-			'f' => { // Value can only be false.
+			'f' => {
 				if (index.* + 4 >= chars.len) {
 					printError(filePath, chars, index.*, "Unexpected end of file.");
 				} else if (chars[index.* + 1] != 'a' or chars[index.* + 2] != 'l' or chars[index.* + 3] != 's' or chars[index.* + 4] != 'e') {
@@ -740,7 +736,7 @@ const Parser = struct { // MARK: Parser
 				index.* += 5;
 				return .{.bool = false};
 			},
-			'n' => { // Value can only be null.
+			'n' => {
 				if (index.* + 3 >= chars.len) {
 					printError(filePath, chars, index.*, "Unexpected end of file.");
 				} else if (chars[index.* + 1] != 'u' or chars[index.* + 2] != 'l' or chars[index.* + 3] != 'l') {
@@ -801,10 +797,6 @@ const Parser = struct { // MARK: Parser
 	}
 };
 
-// ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-// MARK: Testing
-// ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-
 test "skipWhitespaceAndComments" {
 	var index: u32 = 0;
 	var testString: []const u8 = "  fbdn  ";
@@ -837,7 +829,7 @@ test "skipWhitespaceAndComments" {
 }
 
 test "number parsing" {
-	// Integers:
+
 	var index: u32 = 0;
 	try std.testing.expectEqual(Parser.parseNumber("0", &index), ZonElement{.int = 0});
 	index = 0;
@@ -850,7 +842,7 @@ test "number parsing" {
 	try std.testing.expectEqual(Parser.parseNumber(" abcd185473896", &index), ZonElement{.int = 185473896});
 	index = 0;
 	try std.testing.expectEqual(Parser.parseNumber("0xff34786056.0", &index), ZonElement{.int = 0xff34786056});
-	// Floats:
+
 	index = 0;
 	try std.testing.expectEqual(Parser.parseNumber("0.0", &index), ZonElement{.float = 0.0});
 	index = 0;
@@ -868,29 +860,28 @@ test "number parsing" {
 test "element parsing" {
 	var wrap = main.heap.ErrorHandlingAllocator.init(std.testing.allocator);
 	const allocator = wrap.allocator();
-	// Integers:
+
 	var index: u32 = 0;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, "0", &index), ZonElement{.int = 0});
 	index = 0;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, "0xff34786056.0, true", &index), ZonElement{.int = 0xff34786056});
-	// Floats:
+
 	index = 10;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, ".{.abcd = 0.0,}", &index), ZonElement{.float = 0.0});
 	index = 0;
 	try std.testing.expectApproxEqAbs((Parser.parseElement(allocator, null, "1543.234589e10", &index)).float, 1543.234589e10, 1.0);
 	index = 5;
 	try std.testing.expectApproxEqAbs((Parser.parseElement(allocator, null, "_____0.0000000000675849301354e10abcdfe", &index)).float, 0.675849301354, 1e-10);
-	// Null:
+
 	index = 0;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, "null", &index), ZonElement{.null = {}});
-	// true:
+
 	index = 0;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, "true", &index), ZonElement{.bool = true});
-	// false:
+
 	index = 0;
 	try std.testing.expectEqual(Parser.parseElement(allocator, null, "false", &index), ZonElement{.bool = false});
 
-	// String:
 	index = 0;
 	var result: ZonElement = Parser.parseElement(allocator, null, "\"abcd\\\"\\\\ħσ→ ↑Φ∫€ ⌬ ε→Π\"", &index);
 	try std.testing.expectEqualStrings("abcd\"\\ħσ→ ↑Φ∫€ ⌬ ε→Π", result.as([]const u8).?);
@@ -900,7 +891,6 @@ test "element parsing" {
 	try std.testing.expectEqualStrings("12345", result.as([]const u8).?);
 	result.deinit(allocator);
 
-	// Object:
 	index = 0;
 	result = Parser.parseElement(allocator, null, ".{.name = 1}", &index);
 	try std.testing.expectEqual(.object, std.meta.activeTag(result));
@@ -920,7 +910,6 @@ test "element parsing" {
 	try std.testing.expectEqual(.array, std.meta.activeTag(result.object.get("\tobject1θ") orelse .null));
 	result.deinit(allocator);
 
-	// Array:
 	index = 0;
 	result = Parser.parseElement(allocator, null, ".{.name,1}", &index);
 	try std.testing.expectEqual(.array, std.meta.activeTag(result));

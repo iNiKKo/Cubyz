@@ -134,7 +134,7 @@ const AudioData = struct {
 	}
 };
 
-var activeTasks: main.List([]const u8) = .empty; // MARK: Music
+var activeTasks: main.List([]const u8) = .empty;
 var taskMutex: main.utils.Mutex = .{};
 
 var musicCache: utils.Cache(AudioData, 4, 4, AudioData.deinit) = .{};
@@ -208,8 +208,6 @@ const MusicLoadTask = struct {
 	}
 };
 
-// TODO: Proper sound and music system
-
 var device: c.ma_device = undefined;
 
 var sampleRate: f32 = 0;
@@ -267,7 +265,7 @@ const currentMusic = struct {
 		const t2 = t*t;
 		const t3 = t2*t;
 		const a = interpolationPolynomial;
-		animationAmplitude = a[0] + a[1]*t + a[2]*t2 + a[3]*t3; // value
+		animationAmplitude = a[0] + a[1]*t + a[2]*t2 + a[3]*t3;
 		animationVelocity = a[1] + 2*a[2]*t + 3*a[3]*t2;
 	}
 };
@@ -297,19 +295,18 @@ fn mixMusic(buffer: []f32) void {
 				activeMusicId = main.globalAllocator.dupe(u8, preferredMusic);
 			}
 		} else if (!currentMusic.animationDecaying) {
-			_ = findMusic(preferredMusic); // Start loading the next music into the cache ahead of time.
+			_ = findMusic(preferredMusic);
 			currentMusic.animationDecaying = true;
 			currentMusic.animationProgress = 0;
 			currentMusic.interpolationPolynomial = utils.unitIntervalSpline(f32, currentMusic.animationAmplitude, currentMusic.animationVelocity, 0, 0);
 		}
-	} else if (currentMusic.animationDecaying) { // We returned to the biome before the music faded away.
+	} else if (currentMusic.animationDecaying) {
 		currentMusic.animationDecaying = false;
 		currentMusic.animationProgress = 0;
 		currentMusic.interpolationPolynomial = utils.unitIntervalSpline(f32, currentMusic.animationAmplitude, currentMusic.animationVelocity, 1, 0);
 	}
 	if (activeMusicId.len == 0) return;
 
-	// Copy the music to the buffer.
 	var i: usize = 0;
 	while (i < buffer.len) : (i += 2) {
 		currentMusic.animationProgress += 1.0/(animationLengthInSeconds*sampleRate);
@@ -341,7 +338,7 @@ fn miniaudioCallback(
 ) callconv(.c) void {
 	_ = input;
 	_ = maDevice;
-	const valuesPerBuffer = 2*frameCount; // Stereo
+	const valuesPerBuffer = 2*frameCount;
 	const buffer = @as([*]f32, @ptrCast(@alignCast(output)))[0..valuesPerBuffer];
 	@memset(buffer, 0);
 	mixMusic(buffer);

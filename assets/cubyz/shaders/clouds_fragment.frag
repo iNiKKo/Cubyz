@@ -14,8 +14,7 @@ uniform float weatherFogStrength;
 void main() {
 	vec3 color = tint*brightness;
 	if (weatherFogStrength > 0.001) {
-		// Clouds are translucent, so they cannot safely enter the opaque depth buffer used by the
-		// deferred fog pass. Apply the same weather distance curve here using the cloud's true position.
+
 		float fogStart = mix(0.60, 0.35, weatherFogStrength)/max(1e-5, fogDensity);
 		float fogAmount = max(0.0, cameraDistance - fogStart)*fogDensity*mix(8.0, 10.0, weatherFogStrength);
 		fogAmount = mix(fogAmount, fogAmount*fogAmount, weatherFogStrength);

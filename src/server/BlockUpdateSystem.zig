@@ -66,7 +66,6 @@ pub fn update(self: *@This(), ch: *main.chunk.ServerChunk) void {
 
 	defer readyList.deinit(main.globalAllocator);
 
-	// handle events
 	for (readyList.items) |event| {
 		ch.mutex.lock();
 		const block = ch.getBlock(event.pos.x, event.pos.y, event.pos.z);

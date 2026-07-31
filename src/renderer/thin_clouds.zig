@@ -11,21 +11,12 @@ const Vec3d = vec.Vec3d;
 
 const c = @import("c");
 
-// A thin, wispy, high-altitude cloud plane layered on top of the main chunky cloud layer (see
-// clouds.zig) — the old flat/planar look brought back as an *additional* layer rather than a
-// replacement, per user request. Deliberately its own file/pipeline/shaders: this is a much simpler,
-// cheaper effect (one static quad, no greedy-meshed 3D geometry, no CPU-side coverage grid) and keeping
-// it separate means it can't tangle with clouds.zig's own state or accidentally regress it.
-
-/// World-space size of one grid cell, along both horizontal axes.
 const planeHalfSize: f32 = 4096.0;
-/// World Z — Layer 3: high-altitude thin cloud plane above the raised 3D cloud deck.
+
 const planeHeight: f32 = 640.0;
-/// World Z — Layer 4: top of all cloud layers.
+
 const stormPlaneHeight: f32 = 680.0;
 
-/// blocks/second, deliberately different from clouds.zig's windVelocity (2.0, 0.8) so the layers
-/// visibly drift apart instead of moving in lockstep.
 const windVelocity = Vec2f{3.0, 1.4};
 
 const Vertex = extern struct {
@@ -49,8 +40,6 @@ var uniforms: struct {
 } = undefined;
 var vao: graphics.VertexArray = undefined;
 
-/// Reference point for wind animation — see clouds.zig's identical field for why this uses real elapsed
-/// time rather than the (coarser, tick-based) game-time clock.
 var startTimestamp: std.Io.Timestamp = undefined;
 
 pub fn init() void {
@@ -96,8 +85,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	const noiseOrigin = playerXY + windOffset;
 
 	const neutralWhite = Vec3f{0.98, 0.98, 1.0};
-	// Match the volumetric deck's atmosphere lighting: thin clouds should remain muted blue-grey at
-	// night and should not turn into a solid white sheet in full daylight.
+
 	const cloudLight = @min(Vec3f{0.86, 0.89, 0.93}, ambientLight*@as(Vec3f, @splat(0.55)) + Vec3f{0.30, 0.33, 0.38});
 	const localWeather = if (game.world) |world| world.weatherGrid.sampleAt(playerPos[0], playerPos[1]) else game.WeatherGrid.Sample{};
 	const weatherFogStrength: f32 = if (game.world) |world| world.dayTime.weatherVisibility else 0.0;
@@ -110,7 +98,6 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	}
 	const fogDensity: f32 = if (weatherFogStrength > 0.001) weatherFogStrength / (if (game.world) |world| world.dayTime.weatherFogRange else 96.0) else 0.0;
 
-	// Layer 3: High-altitude 2D thin cloud layer (Z = 480)
 	{
 		const planeHeightRelative: f32 = @floatCast(@as(f64, planeHeight) - playerPos[2]);
 		c.glUniform1f(uniforms.planeHeightRelative, planeHeightRelative);
@@ -126,7 +113,6 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 		c.glDrawElements(c.GL_TRIANGLES, 6, c.GL_UNSIGNED_INT, null);
 	}
 
-	// Layer 4: Top-of-all-layers Storm 2D Planar Cloud Layer — darker, heavy sky coverage, spawns during rain (Z = 520)
 	const rainIntensity: f32 = if (game.world) |w| w.dayTime.rainIntensity else 0.0;
 	if (rainIntensity > 0.02) {
 		const stormAlpha = rainIntensity * 0.85*aerialFade;
@@ -134,9 +120,9 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 			const stormPlaneHeightRelative: f32 = @floatCast(@as(f64, stormPlaneHeight) - playerPos[2]);
 			c.glUniform1f(uniforms.planeHeightRelative, stormPlaneHeightRelative);
 
-			const darkStormTint = tint * @as(Vec3f, @splat(0.35)); // Dark stormy tint
+			const darkStormTint = tint * @as(Vec3f, @splat(0.35));
 			c.glUniform3fv(uniforms.tint, 1, @ptrCast(&darkStormTint));
-			c.glUniform1f(uniforms.coverageThreshold, 0.20); // Heavy overcast coverage across sky
+			c.glUniform1f(uniforms.coverageThreshold, 0.20);
 			c.glUniform1f(uniforms.maxAlpha, stormAlpha);
 
 			const stormNoiseOrigin = noiseOrigin * @as(Vec2f, @splat(1.15));

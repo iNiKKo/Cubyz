@@ -129,14 +129,14 @@ fn generateMap(map: *CaveMapFragment, output: Array3D(f32), biomeNoiseStrength: 
 				const val101 = getValue(noise, outerSizeShift, x + outerSize, y, z + outerSize);
 				const val110 = getValue(noise, outerSizeShift, x + outerSize, y + outerSize, z);
 				const val111 = getValue(noise, outerSizeShift, x + outerSize, y + outerSize, z + outerSize);
-				// Test if they are all inside or all outside the cave to skip these cases:
+
 				const measureForEquality = @as(f32, sign(val000)) + @as(f32, sign(val001)) + @as(f32, sign(val010)) + @as(f32, sign(val011)) + @as(f32, sign(val100)) + @as(f32, sign(val101)) + @as(f32, sign(val110)) + @as(f32, sign(val111));
 				if (measureForEquality == 8) {
-					// No cave in here :)
+
 					continue;
 				}
 				if (measureForEquality == -8) {
-					// All cave in here :)
+
 					var dx: u31 = 0;
 					while (dx < outerSize) : (dx += map.pos.voxelSize) {
 						var dy: u31 = 0;
@@ -145,8 +145,7 @@ fn generateMap(map: *CaveMapFragment, output: Array3D(f32), biomeNoiseStrength: 
 						}
 					}
 				} else {
-					// Uses trilinear interpolation for the details.
-					// Luckily due to the blocky nature of the game there is no visible artifacts from it.
+
 					var dx: u31 = 0;
 					while (dx < outerSize) : (dx += map.pos.voxelSize) {
 						var dy: u31 = 0;
@@ -155,16 +154,16 @@ fn generateMap(map: *CaveMapFragment, output: Array3D(f32), biomeNoiseStrength: 
 							const iy = @as(f32, @floatFromInt(dy))/outerSizeFloat;
 							const lowerVal = ((1 - ix)*(1 - iy)*val000 + (1 - ix)*iy*val010 + ix*(1 - iy)*val100 + ix*iy*val110);
 							const upperVal = ((1 - ix)*(1 - iy)*val001 + (1 - ix)*iy*val011 + ix*(1 - iy)*val101 + ix*iy*val111);
-							// TODO: Determine the range that needs to be removed, and remove it in one go.
-							if (upperVal*lowerVal > 0) { // All z values have the same sign → the entire column is the same.
+
+							if (upperVal*lowerVal > 0) {
 								if (upperVal < 0) {
-									// All cave in here :)
+
 									mode.modifyRange(map, x + dx, y + dy, z, z + outerSize);
 								} else {
-									// No cave in here :)
+
 								}
 							} else {
-								// Could be more efficient, but I'm lazy right now and I'll just go through the entire range:
+
 								var dz: u31 = 0;
 								while (dz < outerSize) : (dz += map.pos.voxelSize) {
 									const iz = @as(f32, @floatFromInt(dz))/outerSizeFloat;

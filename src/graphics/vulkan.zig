@@ -7,10 +7,10 @@ const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 const c = @import("c");
 
 comptime {
-	std.debug.assert(@as(u1, 1) == c.VK_TRUE and @as(u1, 0) == c.VK_FALSE); // Allows using @intFromBool to convert to vulkan types
+	std.debug.assert(@as(u1, 1) == c.VK_TRUE and @as(u1, 0) == c.VK_FALSE);
 }
 
-const VkResultEnum = enum(c_int) { // MARK: VkResultEnum
+const VkResultEnum = enum(c_int) {
 	VK_SUCCESS = 0,
 	VK_NOT_READY = 1,
 	VK_TIMEOUT = 2,
@@ -106,8 +106,6 @@ fn allocEnumerationGeneric(function: anytype, allocator: NeverFailingAllocator, 
 	}
 }
 
-// MARK: Enumerators
-
 pub fn enumerateInstanceLayerProperties(allocator: NeverFailingAllocator) []c.VkLayerProperties {
 	return allocEnumerationGeneric(c.vkEnumerateInstanceLayerProperties, allocator, .{});
 }
@@ -136,8 +134,6 @@ pub fn getPhysicalDeviceSurfacePresentModesKHR(allocator: NeverFailingAllocator,
 	return allocEnumerationGeneric(c.vkGetPhysicalDeviceSurfacePresentModesKHR, allocator, .{dev, surface});
 }
 
-// MARK: globals
-
 var instance: c.VkInstance = undefined;
 var surface: c.VkSurfaceKHR = undefined;
 var physicalDevice: c.VkPhysicalDevice = undefined;
@@ -153,18 +149,16 @@ pub var version: packed struct(u32) {
 } = @bitCast(@as(u32, 0));
 
 pub var interestingExtensions: struct {
-	VK_KHR_buffer_device_address: bool = false, // #2960
-	VK_EXT_fragment_shader_interlock: bool = false, // #817
-	VK_EXT_descriptor_buffer: bool = false, // for bindless
-	VK_EXT_descriptor_heap: bool = false, // for bindless
-	VK_EXT_descriptor_indexing: bool = false, // for bindless
-	VK_EXT_mutable_descriptor_type: bool = false, // also for bindless
+	VK_KHR_buffer_device_address: bool = false,
+	VK_EXT_fragment_shader_interlock: bool = false,
+	VK_EXT_descriptor_buffer: bool = false,
+	VK_EXT_descriptor_heap: bool = false,
+	VK_EXT_descriptor_indexing: bool = false,
+	VK_EXT_mutable_descriptor_type: bool = false,
 } = .{};
 
-// MARK: init
-
 pub fn init(window: ?*c.GLFWwindow) !void {
-	// NOTE(blackedout): glad is currently not used on macOS
+
 	if (builtin.target.os.tag != .macos) {
 		if (c.gladLoaderLoadVulkan(null, null, null) == 0) {
 			@panic("GLAD failed to load Vulkan functions");
@@ -193,8 +187,6 @@ pub fn deinit() void {
 	c.vkDestroySurfaceKHR(instance, surface, null);
 	c.vkDestroyInstance(instance, null);
 }
-
-// MARK: Instance
 
 const validationLayers: []const [*:0]const u8 = &.{
 	"VK_LAYER_KHRONOS_validation",
@@ -243,7 +235,7 @@ pub fn createInstance() void {
 	extensions.appendSlice(glfwExtensions[0..glfwExtensionCount]);
 
 	if (builtin.target.os.tag == .macos) {
-		// NOTE(blackedout): These constants may not be available for other targets because currently only macOS uses higher version headers
+
 		extensions.appendSlice(&.{
 			c.VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
 			c.VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,
@@ -263,8 +255,6 @@ pub fn createInstance() void {
 	checkResult(c.vkCreateInstance(&createInfo, null, &instance));
 }
 
-// MARK: Physical Device
-
 const deviceExtensions = blk: {
 	const baseDeviceExtensions = [_][*:0]const u8{
 		c.VK_KHR_SWAPCHAIN_EXTENSION_NAME,
@@ -276,13 +266,13 @@ const deviceExtensions = blk: {
 };
 
 const deviceFeatures: c.VkPhysicalDeviceFeatures = .{
-	// needed for indirect chunk rendering
+
 	.multiDrawIndirect = c.VK_TRUE,
 	.vertexPipelineStoresAndAtomics = c.VK_TRUE,
 	.fragmentStoresAndAtomics = c.VK_TRUE,
-	// needed for colored glass
+
 	.dualSrcBlend = c.VK_TRUE,
-	// needed to prevent near-plane clipping
+
 	.depthClamp = c.VK_TRUE,
 };
 
@@ -397,8 +387,6 @@ fn pickPhysicalDevice() !void {
 	std.log.info("Selected device {s}", .{@as([*:0]const u8, @ptrCast(&properties.deviceName))});
 }
 
-// MARK: Logical Device
-
 fn createLogicalDevice() void {
 	const indices = findQueueFamilies(physicalDevice);
 	var uniqueFamilies: std.AutoHashMapUnmanaged(u32, void) = .{};
@@ -433,7 +421,7 @@ fn createLogicalDevice() void {
 	c.vkGetDeviceQueue(device, indices.presentFamily.?, 0, &presentQueue);
 }
 
-pub const SwapChain = struct { // MARK: SwapChain
+pub const SwapChain = struct {
 	var swapChain: c.VkSwapchainKHR = null;
 	var images: []c.VkImage = undefined;
 	var imageViews: []c.VkImageView = undefined;
@@ -468,7 +456,7 @@ pub const SwapChain = struct { // MARK: SwapChain
 		}
 
 		fn chooseSwapPresentMode(self: SupportDetails) c.VkPresentModeKHR {
-			_ = self; // TODO: Use MAILBOX if vsync is disabled
+			_ = self;
 			return c.VK_PRESENT_MODE_FIFO_KHR;
 		}
 

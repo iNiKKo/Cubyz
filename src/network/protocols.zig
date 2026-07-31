@@ -28,7 +28,7 @@ var serverReceiveList: [256]?*const fn (*Connection, *utils.BinaryReader) anyerr
 pub var bytesReceived: [256]Atomic(usize) = @splat(.init(0));
 pub var bytesSent: [256]Atomic(usize) = @splat(.init(0));
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	inline for (@typeInfo(@This()).@"struct".decls) |decl| {
 		const Protocol = @field(@This(), decl.name);
 		if (@TypeOf(Protocol) == type and @hasDecl(Protocol, "id")) {
@@ -47,7 +47,7 @@ pub fn init() void { // MARK: init()
 	}
 }
 
-pub fn onReceive(conn: *Connection, protocolIndex: u8, data: []const u8) !void { // MARK: onReceive()
+pub fn onReceive(conn: *Connection, protocolIndex: u8, data: []const u8) !void {
 	if (conn.handShakeState.raw != .complete and protocolIndex != handShake.id) return error.HandshakeIncomplete;
 	const protocolReceive = blk: {
 		if (conn.isServerSide()) break :blk serverReceiveList[protocolIndex] orelse return error.Invalid;
@@ -63,7 +63,7 @@ pub fn onReceive(conn: *Connection, protocolIndex: u8, data: []const u8) !void {
 	_ = bytesReceived[protocolIndex].fetchAdd(data.len, .monotonic);
 }
 
-pub const reload = struct { // MARK: reload
+pub const reload = struct {
 	pub const id: u8 = 0;
 
 	pub fn informClientOfRestart(conn: *Connection) void {
@@ -88,7 +88,7 @@ pub const reload = struct { // MARK: reload
 	}
 };
 
-pub const handShake = struct { // MARK: handShake
+pub const handShake = struct {
 	pub const id: u8 = 1;
 	var assetsLoadedCondition: main.utils.Condition = .{};
 	var hasFinishedLoadingAssets: bool = false;
@@ -119,7 +119,7 @@ pub const handShake = struct { // MARK: handShake
 				},
 				.assets => {
 					std.log.info("Received assets.", .{});
-					main.files.cubyzDir().deleteTree("serverAssets") catch {}; // Delete old assets.
+					main.files.cubyzDir().deleteTree("serverAssets") catch {};
 					var dir = try main.files.cubyzDir().openDir("serverAssets");
 					defer dir.close();
 					try utils.Compression.unpack(dir, reader.remaining);
@@ -128,7 +128,7 @@ pub const handShake = struct { // MARK: handShake
 					handshakeZon = ZonElement.parseFromString(main.stackAllocator, null, reader.remaining);
 					defer handshakeZon.deinit(main.stackAllocator);
 					conn.handShakeState.store(.complete, .monotonic);
-					conn.handShakeWaiting.broadcast(); // Notify the waiting client thread.
+					conn.handShakeWaiting.broadcast();
 					conn.mutex.lock();
 					while (!hasFinishedLoadingAssets) {
 						assetsLoadedCondition.wait(&conn.mutex);
@@ -139,7 +139,7 @@ pub const handShake = struct { // MARK: handShake
 				.start, .complete => {},
 			}
 		} else {
-			// Ignore packages that refer to an unexpected state. Normally those might be packages that were resent by the other side.
+
 		}
 	}
 
@@ -198,7 +198,7 @@ pub const handShake = struct { // MARK: handShake
 						}
 						conn.user.?.state = .connectedVerified;
 					} else {
-						// check if player is attempting to reload without logging in (or in an otherwise unexpected state).
+
 						if (conn.user.?.state != .awaitingReloadVerified) return error.KeysNotVerified;
 					}
 					{
@@ -220,7 +220,7 @@ pub const handShake = struct { // MARK: handShake
 				.start, .complete => {},
 			}
 		} else {
-			// Ignore packages that refer to an unexpected state. Normally those might be packages that were resent by the other side.
+
 		}
 	}
 
@@ -295,7 +295,7 @@ pub const handShake = struct { // MARK: handShake
 	}
 };
 
-pub const chunkRequest = struct { // MARK: chunkRequest
+pub const chunkRequest = struct {
 	pub const id: u8 = 2;
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
@@ -331,11 +331,11 @@ pub const chunkRequest = struct { // MARK: chunkRequest
 			writer.writeInt(i8, @intCast((req.wz -% (basePosition[2] & positionMask)) >> voxelSizeShift + chunk.chunkShift));
 			writer.writeInt(u5, voxelSizeShift);
 		}
-		conn.send(.secure, id, writer.data.items); // TODO: Can this use the slow channel?
+		conn.send(.secure, id, writer.data.items);
 	}
 };
 
-pub const chunkTransmission = struct { // MARK: chunkTransmission
+pub const chunkTransmission = struct {
 	pub const id: u8 = 3;
 
 	pub const MeshGenerationTask = struct {
@@ -351,12 +351,12 @@ pub const chunkTransmission = struct { // MARK: chunkTransmission
 		};
 
 		pub fn getPriority(self: *MeshGenerationTask) f32 {
-			return self.pos.getPriority(game.Player.getPosBlocking()); // TODO: This is called in loop, find a way to do this without calling the mutex every time.
+			return self.pos.getPriority(game.Player.getPosBlocking());
 		}
 
 		pub fn isStillNeeded(self: *MeshGenerationTask) bool {
 			if (main.game.world == null or main.game.world.?.paused) return false;
-			const distanceSqr = self.pos.getMinDistanceSquared(@trunc(game.Player.getPosBlocking())); // TODO: This is called in loop, find a way to do this without calling the mutex every time.
+			const distanceSqr = self.pos.getMinDistanceSquared(@trunc(game.Player.getPosBlocking()));
 			var maxRenderDistance = settings.renderDistance*chunk.chunkSize*self.pos.voxelSize;
 			maxRenderDistance += 2*self.pos.voxelSize*chunk.chunkSize;
 			return distanceSqr < maxRenderDistance*maxRenderDistance;
@@ -404,14 +404,14 @@ pub const chunkTransmission = struct { // MARK: chunkTransmission
 		writer.writeInt(i32, ch.super.pos.wz);
 		writer.writeInt(u31, ch.super.pos.voxelSize);
 		writer.writeSlice(chunkData);
-		conn.send(.secure, id, writer.data.items); // TODO: Can this use the slow channel?
+		conn.send(.secure, id, writer.data.items);
 	}
 	pub fn sendChunk(conn: *Connection, ch: *chunk.ServerChunk) void {
 		sendChunkOverTheNetwork(conn, ch);
 	}
 };
 
-pub const playerPosition = struct { // MARK: playerPosition
+pub const playerPosition = struct {
 	pub const id: u8 = 4;
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
@@ -420,7 +420,7 @@ pub const playerPosition = struct { // MARK: playerPosition
 	var lastPositionSent: u16 = 0;
 	pub fn send(conn: *Connection, playerPos: Vec3d, playerVel: Vec3d, time: u16) void {
 		if (time -% lastPositionSent < 50) {
-			return; // Only send at most once every 50 ms.
+			return;
 		}
 		lastPositionSent = time;
 		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 62);
@@ -439,7 +439,7 @@ pub const playerPosition = struct { // MARK: playerPosition
 	}
 };
 
-pub const entityPosition = struct { // MARK: entityPosition
+pub const entityPosition = struct {
 	pub const id: u8 = 6;
 	const Type = enum(u8) {
 		noVelocityEntity = 0,
@@ -530,7 +530,7 @@ pub const entityPosition = struct { // MARK: entityPosition
 	}
 };
 
-pub const blockUpdate = struct { // MARK: blockUpdate
+pub const blockUpdate = struct {
 	pub const id: u8 = 7;
 
 	fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
@@ -556,7 +556,7 @@ pub const blockUpdate = struct { // MARK: blockUpdate
 	}
 };
 
-pub const entity = struct { // MARK: entity
+pub const entity = struct {
 	pub const id: u8 = 8;
 
 	fn clientReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
@@ -597,7 +597,7 @@ pub const entity = struct { // MARK: entity
 	}
 };
 
-pub const genericUpdate = struct { // MARK: genericUpdate
+pub const genericUpdate = struct {
 	pub const id: u8 = 9;
 
 	const UpdateType = enum(u8) {
@@ -652,11 +652,11 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 				var curTime = world.gameTime.load(.monotonic);
 				if (@abs(curTime -% expectedTime) >= 10) {
 					world.gameTime.store(expectedTime, .monotonic);
-				} else if (curTime < expectedTime) { // world.gameTime++
+				} else if (curTime < expectedTime) {
 					while (world.gameTime.cmpxchgWeak(curTime, curTime +% 1, .monotonic, .monotonic)) |actualTime| {
 						curTime = actualTime;
 					}
-				} else { // world.gameTime--
+				} else {
 					while (world.gameTime.cmpxchgWeak(curTime, curTime -% 1, .monotonic, .monotonic)) |actualTime| {
 						curTime = actualTime;
 					}
@@ -840,11 +840,11 @@ pub const genericUpdate = struct { // MARK: genericUpdate
 	}
 
 	pub fn sendClear(conn: *Connection, cleartype: ClearType) void {
-		conn.send(.lossy, id, &.{@intFromEnum(UpdateType.clear), @intFromEnum(cleartype)}); // TODO change channel afer #1879
+		conn.send(.lossy, id, &.{@intFromEnum(UpdateType.clear), @intFromEnum(cleartype)});
 	}
 };
 
-pub const chat = struct { // MARK: chat
+pub const chat = struct {
 	pub const id: u8 = 10;
 
 	fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
@@ -874,7 +874,7 @@ pub const chat = struct { // MARK: chat
 	}
 };
 
-pub const lightMapRequest = struct { // MARK: lightMapRequest
+pub const lightMapRequest = struct {
 	pub const id: u8 = 11;
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
@@ -902,11 +902,11 @@ pub const lightMapRequest = struct { // MARK: lightMapRequest
 			writer.writeInt(i32, req.wy);
 			writer.writeInt(u8, req.voxelSizeShift);
 		}
-		conn.send(.secure, id, writer.data.items); // TODO: Can this use the slow channel?
+		conn.send(.secure, id, writer.data.items);
 	}
 };
 
-pub const lightMapTransmission = struct { // MARK: lightMapTransmission
+pub const lightMapTransmission = struct {
 	pub const id: u8 = 12;
 
 	const LightMapTask = struct {
@@ -997,18 +997,18 @@ pub const lightMapTransmission = struct { // MARK: lightMapTransmission
 		writer.writeInt(i32, map.pos.wy);
 		writer.writeInt(u8, map.pos.voxelSizeShift);
 		writer.writeSlice(compressedData);
-		conn.send(.secure, id, writer.data.items); // TODO: Can this use the slow channel?
+		conn.send(.secure, id, writer.data.items);
 	}
 };
 
-pub const inventory = struct { // MARK: inventory
+pub const inventory = struct {
 	pub const id: u8 = 13;
 
 	fn clientReceive(_: *Connection, reader: *utils.BinaryReader) !void {
 		const typ = try reader.readInt(u8);
-		if (typ == 0xff) { // Confirmation
+		if (typ == 0xff) {
 			try main.sync.client.receiveConfirmation(reader);
-		} else if (typ == 0xfe) { // Failure
+		} else if (typ == 0xfe) {
 			main.sync.client.receiveFailure();
 		} else {
 			try main.sync.client.receiveSyncOperation(reader);
@@ -1050,7 +1050,7 @@ pub const inventory = struct { // MARK: inventory
 	}
 };
 
-pub const blockEntityUpdate = struct { // MARK: blockEntityUpdate
+pub const blockEntityUpdate = struct {
 	pub const id: u8 = 14;
 
 	fn serverReceive(_: *Connection, reader: *utils.BinaryReader) !void {
@@ -1113,7 +1113,7 @@ pub const blockEntityUpdate = struct { // MARK: blockEntityUpdate
 	}
 };
 
-pub const EntityComponentUpdate = struct { // MARK: EntityComponentUpdate
+pub const EntityComponentUpdate = struct {
 	pub const id: u8 = 15;
 
 	const ActionType = enum(u8) {
@@ -1150,7 +1150,7 @@ pub const EntityComponentUpdate = struct { // MARK: EntityComponentUpdate
 		writer.writeVarInt(u32, @intFromEnum(entityId));
 		writer.writeVarInt(u32, componentId);
 		writer.writeEnum(ActionType, ActionType.load);
-		// specific to `load`
+
 		writer.writeVarInt(u32, version);
 		writer.writeSlice(componentData);
 
@@ -1158,8 +1158,6 @@ pub const EntityComponentUpdate = struct { // MARK: EntityComponentUpdate
 	}
 };
 
-/// Cosmetic held-item replication. The server remains authoritative for world lighting, but this
-/// state lets every client render another player's selected block or procedural tool.
 pub const heldLight = struct {
 	pub const id: u8 = 16;
 
@@ -1178,8 +1176,7 @@ pub const heldLight = struct {
 		const toolRotationYZ = try reader.readVec(main.vec.Vec2f);
 		const toolScale = try reader.readFloat(f32);
 		const miningSwing = try reader.readFloat(f32);
-		// This is cosmetic state. Actual voxel illumination remains client-side and derives only from
-		// a carried block's normal Block.light() value.
+
 		const user = conn.user.?;
 		user.heldItem.deinit();
 		user.heldItem = item;

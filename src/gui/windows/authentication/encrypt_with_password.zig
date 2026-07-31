@@ -104,7 +104,7 @@ pub fn update() void {
 }
 
 pub fn onClose() void {
-	// Make sure there remains no trace of the account code or password in memory
+
 	accountCode.deinit();
 	main.Window.setClipboardString("");
 	gui.openWindow("clipboard_deleted");

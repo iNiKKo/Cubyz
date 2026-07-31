@@ -20,17 +20,17 @@ pub const generatorSeed = 0x9b450ffb0d415317;
 pub const defaultState = .enabled;
 
 const crystalColor = [_][]const u8{
-	"red", "orange", "yellow", "lime", "green", "cyan", "aqua", "blue", "pink", "magenta", "violet", // 8 Base colors
-	"crimson", "viridian", "indigo", "purple", "brown", // 5 darker colors
-	"white", "grey", "dark_grey", "black", // 4 grayscale colors
+	"red", "orange", "yellow", "lime", "green", "cyan", "aqua", "blue", "pink", "magenta", "violet",
+	"crimson", "viridian", "indigo", "purple", "brown",
+	"white", "grey", "dark_grey", "black",
 };
 var glowCrystals: [crystalColor.len]u16 = undefined;
 
-const surfaceDist = 2; // How far away crystal can spawn from the wall.
+const surfaceDist = 2;
 
 pub fn init(parameters: ZonElement) void {
 	_ = parameters;
-	// Find all the glow crystal ores:
+
 	inline for (crystalColor[0..], glowCrystals[0..]) |color, *block| {
 		const oreID = "cubyz:glow_crystal/" ++ color;
 		block.* = main.blocks.getTypeById(oreID);
@@ -40,7 +40,7 @@ pub fn init(parameters: ZonElement) void {
 pub fn generate(worldSeed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap.CaveMapView, biomeMap: CaveBiomeMap.CaveBiomeMapView) void {
 	if (chunk.super.pos.voxelSize > 2) return;
 	const size = chunk.super.width;
-	// Generate caves from all nearby chunks:
+
 	var x = chunk.super.pos.wx -% main.chunk.chunkSize;
 	while (x != chunk.super.pos.wx +% size +% main.chunk.chunkSize) : (x +%= main.chunk.chunkSize) {
 		var y = chunk.super.pos.wy -% main.chunk.chunkSize;
@@ -63,14 +63,14 @@ fn considerCrystal(x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, seed:
 	const relY: f32 = @floatFromInt(y -% chunk.super.pos.wy);
 	const relZ: f32 = @floatFromInt(z -% chunk.super.pos.wz);
 	const typ = types[random.nextIntBounded(u32, seed, @as(u32, @intCast(types.len)))];
-	// Make some crystal spikes in random directions:
+
 	var spikes: f32 = 4;
 	if (useNeedles) spikes += 2;
-	spikes += random.nextFloat(seed)*spikes; // Use somewhat between spikes and 2*spikes spikes.
+	spikes += random.nextFloat(seed)*spikes;
 	var _spike: f32 = 0;
 	while (_spike < spikes) : (_spike += 1) {
 		const length = 8 + random.nextFloat(seed)*24;
-		// Choose a random direction:
+
 		const theta = 2*std.math.pi*random.nextFloat(seed);
 		const phi = std.math.acos(1 - 2*random.nextFloat(seed));
 		const delX = @sin(phi)*@cos(theta);
@@ -112,8 +112,8 @@ fn considerCrystal(x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, seed:
 				}
 			}
 			if (size > 2) size = 2;
-			j += size/2; // Make sure there are no crystal bits floating in the air.
-			if (size < 0.5) break; // Also preventing floating crystal bits.
+			j += size/2;
+			if (size < 0.5) break;
 		}
 	}
 }
@@ -124,9 +124,9 @@ fn considerCoordinates(x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, c
 	random.scrambleSeed(seed);
 	var differendColors: u32 = 1;
 	if (random.nextInt(u1, seed) != 0) {
-		// ¹⁄₄ Chance that a cave has multiple crystals.
+
 		while (random.nextInt(u1, seed) != 0 and differendColors < 32) {
-			differendColors += 1; // Exponentially diminishing chance to have more differend crystals per cavern.
+			differendColors += 1;
 		}
 	}
 	var _colors: [32]u16 = undefined;
@@ -134,21 +134,21 @@ fn considerCoordinates(x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, c
 	for (colors) |*color| {
 		color.* = glowCrystals[random.nextIntBounded(u16, seed, glowCrystals.len)];
 	}
-	const useNeedles = random.nextInt(u1, seed) != 0; // Different crystal type.
-	// Spawn the crystals using the old position specific seed:
+	const useNeedles = random.nextInt(u1, seed) != 0;
+
 	seed.* = oldSeed;
 	for (0..crystalSpawns) |_| {
-		// Choose some in world coordinates to start generating:
+
 		const worldX = x + random.nextIntBounded(u31, seed, main.chunk.chunkSize);
 		const worldY = y + random.nextIntBounded(u31, seed, main.chunk.chunkSize);
 		const worldZ = z + random.nextIntBounded(u31, seed, main.chunk.chunkSize);
 		const relX = worldX -% chunk.super.pos.wx;
 		const relY = worldY -% chunk.super.pos.wy;
 		const relZ = worldZ -% chunk.super.pos.wz;
-		if (caveMap.isSolid(relX, relY, relZ)) { // Only start crystal in solid blocks
-			// Only start crystal when they are close to the surface (±SURFACE_DIST blocks)
+		if (caveMap.isSolid(relX, relY, relZ)) {
+
 			if ((worldX - x >= surfaceDist and !caveMap.isSolid(relX - surfaceDist, relY, relZ)) or (worldX - x < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX + surfaceDist, relY, relZ)) or (worldY - y >= surfaceDist and !caveMap.isSolid(relX, relY - surfaceDist, relZ)) or (worldY - y < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX, relY + surfaceDist, relZ)) or (worldZ - z >= surfaceDist and !caveMap.isSolid(relX, relY, relZ - surfaceDist)) or (worldZ - z < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX, relY, relZ + surfaceDist))) {
-				// Generate the crystal:
+
 				considerCrystal(worldX, worldY, worldZ, chunk, seed, useNeedles, colors);
 			}
 		}

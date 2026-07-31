@@ -69,7 +69,6 @@ pub const ClimateMapFragment = struct {
 	}
 };
 
-/// Generates the climate(aka Biome) map, which is a rough representation of the world.
 pub const ClimateMapGenerator = struct {
 	init: *const fn (parameters: ZonElement) void,
 	generateMapFragment: *const fn (fragment: *ClimateMapFragment, seed: u64) void,
@@ -95,8 +94,8 @@ pub const ClimateMapGenerator = struct {
 	}
 };
 
-const cacheSize = 1 << 5; // Must be a power of 2!
-const associativity = 8; // ~400 MiB
+const cacheSize = 1 << 5;
+const associativity = 8;
 var cache: Cache(ClimateMapFragment, cacheSize, associativity, ClimateMapFragment.deferredDeinit) = .{};
 var profile: TerrainGenerationProfile = undefined;
 
@@ -134,10 +133,10 @@ pub fn getBiomeMap(allocator: NeverFailingAllocator, wx: i32, wy: i32, width: u3
 		var y = wzStart;
 		while (wzEnd -% y >= 0) : (y +%= ClimateMapFragment.mapSize) {
 			const mapPiece = getOrGenerateFragment(x, y);
-			// Offset of the indices in the result map:
+
 			const xOffset = (x -% wx) >> MapFragment.biomeShift;
 			const yOffset = (y -% wy) >> MapFragment.biomeShift;
-			// Go through all indices in the mapPiece:
+
 			for (&mapPiece.map, 0..) |*col, lx| {
 				const resultX = @as(i32, @intCast(lx)) + xOffset;
 				if (resultX < 0 or resultX >= width >> MapFragment.biomeShift) continue;

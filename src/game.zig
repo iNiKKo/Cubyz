@@ -28,16 +28,16 @@ const Block = main.blocks.Block;
 const physics = main.physics;
 const KeyBoard = main.KeyBoard;
 
-pub const camera = struct { // MARK: camera
+pub const camera = struct {
 	pub var rotation: Vec3f = Vec3f{0, 0, 0};
 	pub var direction: Vec3f = Vec3f{0, 0, 0};
 	pub var viewMatrix: Mat4f = Mat4f.identity();
 	pub fn moveRotation(mouseX: f32, mouseY: f32) void {
-		// Mouse movement along the y-axis rotates the image along the x-axis.
+
 		rotation[0] += mouseY;
 		const bound = std.math.pi/2.0 - 0.001;
 		rotation[0] = std.math.clamp(rotation[0], -bound, bound);
-		// Mouse movement along the x-axis rotates the image along the z-axis.
+
 		rotation[2] += mouseX;
 	}
 
@@ -50,7 +50,7 @@ pub const camera = struct { // MARK: camera
 pub const Gamemode = enum(u8) { survival = 0, creative = 1 };
 
 pub const DamageType = enum(u8) {
-	heal = 0, // For when you are adding health
+	heal = 0,
 	kill = 1,
 	fall = 2,
 	heat = 3,
@@ -67,7 +67,7 @@ pub const DamageType = enum(u8) {
 	}
 };
 
-pub const Player = struct { // MARK: Player
+pub const Player = struct {
 	pub const EyeData = struct {
 		pos: Vec3d = .{0, 0, 0},
 		vel: Vec3d = .{0, 0, 0},
@@ -235,7 +235,6 @@ pub const Player = struct { // MARK: Player
 				}
 			} else return;
 
-			// Check if there is already a slot with that item type
 			for (0..12) |slotIdx| {
 				if (std.meta.eql(inventory.getItem(slotIdx), item)) {
 					if (isCreative()) {
@@ -249,7 +248,7 @@ pub const Player = struct { // MARK: Player
 			if (isCreative()) {
 				const targetSlot = blk: {
 					if (inventory.getItem(selectedSlot) == .null) break :blk selectedSlot;
-					// Look for an empty slot
+
 					for (0..12) |slotIdx| {
 						if (inventory.getItem(slotIdx) == .null) {
 							break :blk slotIdx;
@@ -265,8 +264,6 @@ pub const Player = struct { // MARK: Player
 	}
 };
 
-/// Server-authoritative weather sampled over nearby world cells. Rendering will interpolate/sample this
-/// map rather than treating the player's own precipitation as the state of the whole sky.
 pub const WeatherGrid = struct {
 	pub const dimension: usize = 5;
 	pub const cell_count: usize = dimension*dimension;
@@ -298,14 +295,9 @@ pub const WeatherGrid = struct {
 	cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
 	revision: u64 = 0,
 	time_millis: i64 = 0,
-	/// Smoothed copy of `cells`, eased toward each newly received grid rather than snapping to it
-	/// instantly - a server experiencing tick-pacing stalls (irregular gaps between ticks, e.g. from OS
-	/// scheduling hiccups outside this game's control) can only send weather updates at irregular real-time
-	/// intervals; since each update is still a technically-correct sample of real elapsed time, a big gap
-	/// produces a big jump in the raw grid, which read as clouds/rain flickering on and off abruptly. This
-	/// smooths what's actually SAMPLED for rendering, independent of how choppy the underlying updates are.
+
 	displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
-	displayOriginCell: Vec2i = .{std.math.minInt(i32), std.math.minInt(i32)}, // Forces a snap on first use.
+	displayOriginCell: Vec2i = .{std.math.minInt(i32), std.math.minInt(i32)},
 	lastDisplayUpdate: ?std.Io.Timestamp = null,
 
 	pub fn update(self: *WeatherGrid, origin_cell: Vec2i, wind: Vec2f, time_millis: i64, cells: [cell_count]Cell) void {
@@ -318,17 +310,10 @@ pub const WeatherGrid = struct {
 		self.time_millis = time_millis;
 	}
 
-	/// Advances `displayCells` toward `cells`, called once per client frame with real elapsed time - not
-	/// tied to how often new grids arrive from the server, so rendering stays smooth even when updates
-	/// come in bursts or with irregular gaps.
 	pub fn advanceDisplay(self: *WeatherGrid, now: std.Io.Timestamp) void {
 		self.mutex.lock();
 		defer self.mutex.unlock();
-		// If the grid re-centered (player moved far enough that the server shifted origin_cell), the same
-		// index in displayCells no longer corresponds to the same physical cell as before the shift -
-		// blending across that would smooth between two unrelated locations' weather. Snap instantly in
-		// that case instead; the origin only moves when the player has physically travelled into new
-		// territory, where an instant weather change reads as arriving somewhere new, not a glitch.
+
 		if (!std.meta.eql(self.displayOriginCell, self.origin_cell)) {
 			self.displayOriginCell = self.origin_cell;
 			for (&self.displayCells, self.cells) |*display, cell| {
@@ -345,8 +330,7 @@ pub const WeatherGrid = struct {
 		const last = self.lastDisplayUpdate orelse now;
 		self.lastDisplayUpdate = now;
 		const dt: f32 = @max(0.0, @as(f32, @floatFromInt(last.durationTo(now).toNanoseconds()))*1e-9);
-		// Fully catches up within ~1.5 seconds regardless of update cadence; a fixed cap keeps a huge dt
-		// (e.g. after a stall or the very first frame) from producing an instant snap either.
+
 		const t = 1 - @exp(-2.5*@min(dt, 1.5));
 		for (&self.displayCells, self.cells) |*display, cell| {
 			const target: Sample = .{
@@ -358,8 +342,7 @@ pub const WeatherGrid = struct {
 			display.cloud_cover += (target.cloud_cover - display.cloud_cover)*t;
 			display.precipitation += (target.precipitation - display.precipitation)*t;
 			display.dust += (target.dust - display.dust)*t;
-			// kind (rain/snow/dust/none) is categorical, not eased - swap immediately once the dominant
-			// precipitation type actually changes, since interpolating between categories has no meaning.
+
 			display.kind = target.kind;
 		}
 	}
@@ -370,8 +353,6 @@ pub const WeatherGrid = struct {
 		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis, .displayCells = self.displayCells};
 	}
 
-	/// Returns the server-authoritative weather at this world position. Outside the most recent snapshot
-	/// is deliberately clear: renderers must not invent a second client-only weather pattern at the edge.
 	pub fn sampleAt(self: *WeatherGrid, wx: f64, wy: f64) Sample {
 		return sampleSnapshot(self.snapshot(), wx, wy);
 	}
@@ -382,28 +363,17 @@ pub const WeatherGrid = struct {
 		const rel_x = cell_x - weather_snapshot.origin_cell[0];
 		const rel_y = cell_y - weather_snapshot.origin_cell[1];
 		if (rel_x < 0 or rel_x >= dimension or rel_y < 0 or rel_y >= dimension) return .{};
-		// Read the smoothed display value, not the raw just-received cell - see displayCells' doc comment
-		// on WeatherGrid for why (irregular server tick pacing can otherwise make weather visibly snap).
+
 		return weather_snapshot.displayCells[@as(usize, @intCast(rel_y))*dimension + @as(usize, @intCast(rel_x))];
 	}
 };
 
-/// Weather precipitation and its local atmosphere live below the low storm deck. Keep this shared with
-/// the rain renderer so climbing/flying above the deck never leaves rain, haze, storm dimming, or
-/// disabled god rays active in otherwise clear air.
 pub const weatherCloudBaseHeight: f64 = 448.0;
 
-/// Smooth only the last few blocks below the cloud base, then fully disable local weather above it.
-/// The short fade avoids a one-frame fog/light pop when crossing the deck in flight.
 pub fn weatherExposureAtAltitude(z: f64) f32 {
 	return std.math.clamp(@as(f32, @floatCast((weatherCloudBaseHeight - z)/8.0)), 0.0, 1.0);
 }
 
-/// Weather is an outdoor effect. The propagated sunlight field is present in open air (including at
-/// night, because it represents sky exposure rather than the current time-of-day brightness) but falls
-/// away under solid roofs and into caves. Requiring a strong local sky-light value prevents miners from
-/// receiving rain, storm fog, dim daylight, or other surface weather merely because their X/Y lies in a
-/// rainy weather cell.
 pub fn weatherExposureAtPosition(pos: Vec3d) f32 {
 	const altitudeExposure = weatherExposureAtAltitude(pos[2]);
 	if (altitudeExposure <= 0.0) return 0.0;
@@ -412,13 +382,12 @@ pub fn weatherExposureAtPosition(pos: Vec3d) f32 {
 	const z: i32 = @intFromFloat(@floor(pos[2]));
 	const light = renderer.mesh_storage.getLight(x, y, z) orelse return 0.0;
 	const skyLight: u8 = @max(light[0], @max(light[1], light[2]));
-	// A brief fade at cave mouths avoids a hard fog wall, while normal shaded terrain and foliage remain
-	// weather-exposed. Direct outdoor sky light is 255.
+
 	const skyExposure = std.math.clamp((@as(f32, @floatFromInt(skyLight)) - 96.0)/128.0, 0.0, 1.0);
 	return altitudeExposure*skyExposure;
 }
 
-pub const World = struct { // MARK: World
+pub const World = struct {
 	conn: *Connection,
 	manager: *ConnectionManager,
 	name: []const u8,
@@ -435,12 +404,7 @@ pub const World = struct { // MARK: World
 	entityComponentPalette: *assets.Palette = undefined,
 	itemDrops: ClientItemDropManager = undefined,
 	playerBiome: Atomic(*const main.server.terrain.biomes.Biome) = undefined,
-	/// Last rain-intensity value ([0, 1]) received from the server for the biome patch the player currently
-	/// occupies. Written by network/protocols.zig's genericUpdate.clientReceive whenever the server-side
-	/// eased value (see server/WeatherMap.zig) moves enough to resend. DayTime.rainIntensity (below) is
-	/// what actually gets read by rendering — it eases toward this target every frame client-side too, the
-	/// same double-smoothing "server eases, client also eases toward whatever it last heard" pattern
-	/// already used for playerBiome's fog color, so sparse network updates never look like a step either.
+
 	rainIntensityTarget: Atomic(f32) = .init(0),
 	weatherGrid: WeatherGrid = .{},
 
@@ -499,7 +463,6 @@ pub const World = struct { // MARK: World
 
 		self.paused = true;
 
-		// TODO: Close all world related guis.
 		main.gui.inventory.deinit();
 		main.gui.deinit();
 		main.gui.init();
@@ -529,7 +492,6 @@ pub const World = struct { // MARK: World
 		errdefer self.conn.deinit();
 		errdefer self.itemDrops.deinit();
 
-		// TODO: Consider using a per-world allocator.
 		self.blockPalette = try assets.Palette.init(main.globalAllocator, zon.getChild("blockPalette"), "cubyz:air");
 		errdefer self.blockPalette.deinit();
 		self.biomePalette = try assets.Palette.init(main.globalAllocator, zon.getChild("biomePalette"), null);
@@ -577,107 +539,61 @@ pub const World = struct { // MARK: World
 		self.dayTime.update(deltaTime);
 	}
 
-	pub const DayTime = struct { // MARK: DayTime
-		const dayCycleLength = 12000; // Length of one in-game day in 100ms. Midnight is at DAY_CYCLE/2. Sunrise and sunset each take about 1/16 of the day. Currently set to 20 minutes
+	pub const DayTime = struct {
+		const dayCycleLength = 12000;
 		const minimumAmbientLight: f32 = 0.1;
 		pub const nightStart = dayCycleLength/4 + dayCycleLength/16;
 		pub const dayStart = dayCycleLength/2 + dayCycleLength/4 + dayCycleLength/16;
 
 		biomeFog: Fog = Fog{.skyColor = .{0.8, 0.8, 1}, .fogColor = .{0.8, 0.8, 1}, .density = 1.0/15.0/128.0, .fogLower = 100, .fogHigher = 1000},
 		fog: Fog = Fog{.skyColor = .{0.8, 0.8, 1}, .fogColor = .{0.8, 0.8, 1}, .density = 1.0/15.0/128.0, .fogLower = 100, .fogHigher = 1000},
-		/// Rendered rain intensity ([0, 1]), eased every frame toward World.rainIntensityTarget (see that
-		/// field's doc comment) — read by renderer/clouds.zig and renderer/rain.zig.
+
 		rainIntensity: f32 = 0,
-		/// Smoothed local rain/snow/dust visibility loss, [0, 1]. Kept separate from precipitation
-		/// so weather packets can update at a low rate without fog or daylight stepping.
+
 		weatherVisibility: f32 = 0,
-		/// Horizontal weather-fog scale in blocks. Rain deliberately reaches farther than snow; both values
-		/// are eased so crossing a weather-cell boundary cannot make the visibility wall jump.
+
 		weatherFogRange: f32 = 96,
-		/// Weather needs its own colour memory as well as its smoothed density. Rebuilding the tint from
-		/// the clear biome every frame made the horizon snap from storm haze to sky blue on crossing a
-		/// weather-cell boundary, even while `weatherVisibility` was still visibly fading out.
+
 		weatherHazeColor: Vec3f = .{0.58, 0.65, 0.74},
 		weatherSkyHazeColor: Vec3f = .{0.58, 0.65, 0.74},
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
-		/// How far (0-1) between `dayTime`'s current tick and the next, in real time — `dayTime` itself
-		/// only advances once every 100ms (see World.update()'s tick loop), so anything sampling it
-		/// directly holds a stale value for ~6 frames at 60fps and then jumps. getDayProgress() blends
-		/// this fraction in so the sun sweeps continuously instead.
+
 		dayTimeFraction: f32 = 0,
 
 		pub fn getDayProgress(self: *DayTime) f32 {
 			return (@as(f32, @floatFromInt(self.dayTime)) + self.dayTimeFraction)/@as(f32, @floatFromInt(dayCycleLength));
 		}
 
-		/// Direction pointing from the world toward the sun. Matches the rotation used by the star field
-		/// in Skybox.render() so the sun/moon stay visually consistent with the sky: zenith (+Z) at noon
-		/// (progress 0), nadir (-Z) at midnight (progress 0.5).
 		pub fn getSunDirection(self: *DayTime) Vec3f {
 			return vec.rotateX(Vec3f{0, 0, 1}, 2*std.math.pi*self.getDayProgress());
 		}
 
-		/// True (unclamped) direction of whichever celestial body is currently above the horizon — same
-		/// body selection as getShadowLightDirection(), but without its elevation clamp. Use this wherever
-		/// something needs to visually track the sun/moon's *real* position (e.g. god rays converging on
-		/// its actual screen position, or fading in lockstep with Skybox's own billboard/horizonFade)
-		/// rather than the shading-stabilized direction — getShadowLightDirection()'s clamp intentionally
-		/// makes shading disagree with the true position near the horizon, which is exactly wrong for
-		/// anything trying to visually follow the sun/moon itself.
 		pub fn getVisibleCelestialDirection(self: *DayTime) Vec3f {
 			const sunDir = self.getSunDirection();
 			return if (sunDir[2] >= 0) sunDir else -sunDir;
 		}
 
-		/// Direction of whichever celestial body (sun or moon) is currently above the horizon, for use
-		/// as the shadow-casting light direction. Falls back to the sun direction when both are below
-		/// the horizon (shouldn't normally happen, but keeps the result well-defined).
 		pub fn getShadowLightDirection(self: *DayTime) Vec3f {
 			var dir = self.getVisibleCelestialDirection();
-			// Clamp light elevation to a minimum of 0.35 (~20.5 degrees) to keep light projections
-			// stable and prevent infinite shadow stretching at sunset/sunrise. This also caps how long a
-			// caster's shadow can get: shadow length is roughly height/tan(elevation), so 0.35 caps that
-			// ratio at ~2.7x the caster's height (0.18, the previous value, allowed ~5.5x — a tall tree
-			// could throw a shadow that stretched for tens of blocks at low sun).
+
 			dir[2] = @max(dir[2], 0.35);
 			return vec.normalize(dir);
 		}
 
-		/// Whether getShadowLightDirection() is currently returning the sun's direction rather than the
-		/// moon's. Needed anywhere that treats sun-light and moonlight differently (color, intensity) —
-		/// checking getShadowLightDirection()[2] >= 0 does *not* work for this, since both the sun's and
-		/// the moon's direction satisfy that whenever *they* are the one currently active/above horizon.
 		pub fn isSunlight(self: *DayTime) bool {
 			return self.getSunDirection()[2] >= 0;
 		}
 
-		/// [0,1] weight: 1.0 = full normal shadow/god-ray strength, 0.0 = faded to a neutral, near-flat
-		/// state right at the sun/moon crossing (dayProgress 0.25 = sunset, 0.75 = sunrise). Verified
-		/// numerically that getVisibleCelestialDirection()'s `sunDir[2] >= 0` selection flips the active
-		/// light's direction by a full 180 degrees in a single frame at exactly this crossing — with no
-		/// mitigation, that reads as shadows/god-rays instantly snapping to a new direction instead of
-		/// sweeping. Rather than rendering both bodies' shadows simultaneously and cross-fading them (a
-		/// bigger change requiring two full CSM render passes to share this project's compute/indirect-
-		/// draw GPU buffers within one frame — the same category of shared-GL-state risk that caused the
-		/// MSAA shadow-rebind bug earlier this project), this fades shadow/god-ray *strength* down to
-		/// near-zero right at the crossing and back up afterward: the direction still flips instantly
-		/// underneath, but it does so while shadows are barely visible, hiding the snap inside a brief,
-		/// deliberate fade rather than showing it as a hard pop.
-		///
-		/// Mirrors getSkyColorFactor()/updateAmbientLight()'s windowed-ramp technique, but measures
-		/// distance from the CROSSING itself (dayProgress 0.25/0.75), not from midnight (dayCycleLength/2)
-		/// like those two — they center on midnight because that's their day/night plateau's center; here
-		/// the crossing is what needs softening, not the plateau.
 		pub fn getShadowTransitionFade(self: *DayTime) f32 {
 			const progress = self.getDayProgress();
 			const distFromDawn = @abs(progress - 0.25);
 			const distFromDusk = @abs(progress - 0.75);
 			const distFromCrossing = @min(distFromDawn, distFromDusk);
-			const windowWidth: f32 = 1.0/24.0; // ~1/24 of a full day/night cycle on each side of the crossing.
+			const windowWidth: f32 = 1.0/24.0;
 			if (distFromCrossing >= windowWidth) return 1.0;
-			const t = distFromCrossing/windowWidth; // 0 at the crossing itself, 1 at the window edge.
-			return t*t*(3.0 - 2.0*t); // smoothstep: eases toward 1.0, zero derivative at both ends.
+			const t = distFromCrossing/windowWidth;
+			return t*t*(3.0 - 2.0*t);
 		}
 
 		pub fn getStarOpacity(self: *DayTime) f32 {
@@ -708,8 +624,7 @@ pub const World = struct { // MARK: World
 
 		fn updateTimeOfDay(self: *DayTime) void {
 			self.dayTime = @intCast(@mod(world.?.gameTime.load(.monotonic), dayCycleLength));
-			// Real time elapsed since the last 100ms tick boundary World.update() advanced past, as a
-			// 0-1 fraction of the next tick — see dayTimeFraction's doc comment for why this matters.
+
 			const newTime: i64 = main.timestamp().toMilliseconds();
 			const millisSinceTick: f32 = @floatFromInt(newTime -% world.?.milliTime);
 			self.dayTimeFraction = std.math.clamp(millisSinceTick/100.0, 0.0, 1.0);
@@ -724,13 +639,13 @@ pub const World = struct { // MARK: World
 				return @splat(1);
 			}
 			var skyColorFactor: Vec3f = undefined;
-			// b:
+
 			if (dayTime > dayCycleLength/4) {
 				skyColorFactor[2] = @as(f32, @floatFromInt(dayTime - dayCycleLength/4))/@as(f32, @floatFromInt(dayCycleLength/16));
 			} else {
 				skyColorFactor[2] = 0;
 			}
-			// g:
+
 			if (dayTime > dayCycleLength/4 + dayCycleLength/32) {
 				skyColorFactor[1] = 1;
 			} else if (dayTime > dayCycleLength/4 - dayCycleLength/32) {
@@ -738,7 +653,7 @@ pub const World = struct { // MARK: World
 			} else {
 				skyColorFactor[1] = 0;
 			}
-			// r:
+
 			if (dayTime > dayCycleLength/4) {
 				skyColorFactor[0] = 1;
 			} else {
@@ -774,29 +689,21 @@ pub const World = struct { // MARK: World
 			const clearFogColor = self.fog.fogColor;
 			const clearSkyColor = self.fog.skyColor;
 
-			// Sandstorm visibility is local to the same server weather cell that emits dust particles.
-			// It must not tint/fog a player standing in a neighbouring clear biome.
 			const playerPos = Player.getPosBlocking();
 			world.?.weatherGrid.advanceDisplay(main.timestamp());
 			const localWeather = world.?.weatherGrid.sampleAt(playerPos[0], playerPos[1]);
-			// Local cells still retain their server weather above the cloud deck so players below can see
-			// the same storm, but this camera is in clear air: weather particles are already altitude-gated
-			// in rain.zig, and its fog/dimming counterpart must use the identical gate here.
+
 			const weatherExposure = weatherExposureAtPosition(playerPos);
 			const dust = localWeather.dust*weatherExposure;
 			const precipitationVisibility = if (localWeather.kind == 1 or localWeather.kind == 2) localWeather.precipitation*weatherExposure else 0.0;
-			// WeatherMap commonly produces gentle rain in the 0.05-0.15 range. A linear response made
-			// that visually indistinguishable from clear weather, so use a square-root perceptual curve:
-			// light rain gains a readable haze while full storms still remain substantially stronger.
+
 			const visibilityTarget = @sqrt(@max(precipitationVisibility, dust));
 			self.weatherVisibility += (visibilityTarget - self.weatherVisibility)*t;
-			// Deliberately distinct atmosphere palettes. These targets are smoothed independently of
-			// the local cell, so walking out of a storm carries its haze into clear air and dissolves it
-			// naturally instead of immediately replacing it with the clear-sky colour.
+
 			const weatherHazeTarget: Vec3f = switch (localWeather.kind) {
-				1 => .{0.34, 0.43, 0.56}, // rain: cool blue-grey
-				2 => .{0.84, 0.89, 0.96}, // snow: pale, neutral-white haze
-				3 => .{0.76, 0.52, 0.25}, // dust: warm yellow-orange sand
+				1 => .{0.34, 0.43, 0.56},
+				2 => .{0.84, 0.89, 0.96},
+				3 => .{0.76, 0.52, 0.25},
 				else => clearFogColor,
 			};
 			const weatherSkyHazeTarget: Vec3f = switch (localWeather.kind) {
@@ -809,9 +716,9 @@ pub const World = struct { // MARK: World
 			self.weatherHazeColor += (weatherHazeTarget - self.weatherHazeColor)*@as(Vec3f, @splat(hazeT));
 			self.weatherSkyHazeColor += (weatherSkyHazeTarget - self.weatherSkyHazeColor)*@as(Vec3f, @splat(hazeT));
 			const weatherFogRangeTarget: f32 = switch (localWeather.kind) {
-				1 => 96, // rain: preserve more mid-distance visibility than snow.
-				2 => 64, // snow: retain the denser, closer white-out requested by the player.
-				3 => 56, // dust: sandstorms remain the most locally obscuring weather.
+				1 => 96,
+				2 => 64,
+				3 => 56,
 				else => 96,
 			};
 			self.weatherFogRange += (weatherFogRangeTarget - self.weatherFogRange)*t;
@@ -819,17 +726,15 @@ pub const World = struct { // MARK: World
 				const hazeStrength = std.math.clamp(self.weatherVisibility * 0.92, 0.0, 0.82);
 				self.fog.fogColor += (self.weatherHazeColor - self.fog.fogColor)*@as(Vec3f, @splat(hazeStrength));
 				self.fog.skyColor += (self.weatherSkyHazeColor - self.fog.skyColor)*@as(Vec3f, @splat(hazeStrength * 0.72));
-				// Strong weather hides distant terrain through ordinary depth fog, not an abrupt circular
-				// wall. Fog density rises while its upper distance contracts, both eased above.
+
 				self.fog.density *= std.math.lerp(1.0, 30.0, self.weatherVisibility);
-				// Dense precipitation removes most direct daylight even at noon. Renderer shadow settings may
-				// boost ambient slightly afterward, so this target deliberately leaves a stronger storm dim.
+
 				self.ambientLight *= std.math.lerp(1.0, 0.42, self.weatherVisibility);
 			}
 		}
 	};
 };
-pub var testWorld: World = undefined; // TODO:
+pub var testWorld: World = undefined;
 pub var world: ?*World = null;
 
 pub var projectionMatrix: Mat4f = Mat4f.identity();
@@ -893,7 +798,7 @@ pub fn getBlockWithSide(comptime side: main.sync.Side, x: i32, y: i32, z: i32) ?
 	}
 }
 
-pub fn update(deltaTime: f64) void { // MARK: update()
+pub fn update(deltaTime: f64) void {
 	if (world.?.shouldRestart.load(.acquire)) {
 		restart();
 	}
@@ -912,7 +817,7 @@ pub fn update(deltaTime: f64) void { // MARK: update()
 
 	var jumping = false;
 	Player.jumpCooldown -= deltaTime;
-	// At equillibrium we want to have dv/dt = a - λv = 0 → a = λ*v
+
 	const fricMul = speedMultiplier*Player.friction.mobile;
 
 	const horizontalForward = vec.rotateZ(Vec3d{0, 1, 0}, -camera.rotation[2]);

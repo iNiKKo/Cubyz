@@ -44,7 +44,7 @@ pub fn generate(map: *CaveMapFragment, worldSeed: u64) void {
 				height,
 			);
 			const relativeHeight: i32 = height -% map.pos.wz;
-			if (smallestHeight < 1) { // Seal off caves that intersect the ocean floor.
+			if (smallestHeight < 1) {
 				map.addRange(x, y, smallestHeight -% map.pos.voxelSize -% map.pos.wz, relativeHeight);
 			}
 		}

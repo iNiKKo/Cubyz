@@ -4,7 +4,6 @@ layout(location = 0) in vec4 vertex_pos;
 
 layout(location = 0) flat out vec4 color;
 
-// in pixel
 layout(location = 0) uniform vec2 start;
 layout(location = 1) uniform vec2 size;
 layout(location = 2) uniform vec2 screen;
@@ -13,7 +12,7 @@ layout(location = 3) uniform float lineWidth;
 layout(location = 4) uniform int rectColor;
 
 void main() {
-	// Convert to opengl coordinates:
+
 	vec2 position_percentage = (start + vertex_pos.xy*size + vertex_pos.zw*lineWidth)/screen;
 
 	vec2 position = vec2(position_percentage.x, -position_percentage.y)*2+vec2(-1, 1);

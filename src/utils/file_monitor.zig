@@ -41,7 +41,7 @@ const NoImpl = struct {
 	fn removePath(_: [:0]const u8) void {}
 };
 
-const LinuxImpl = struct { // MARK: LinuxImpl
+const LinuxImpl = struct {
 	const DirectoryInfo = struct {
 		callback: CallbackFunction,
 		userData: usize,
@@ -125,7 +125,7 @@ const LinuxImpl = struct { // MARK: LinuxImpl
 			std.log.err("Error while reading inotify event: {}", .{std.posix.errno(readBytes)});
 			return;
 		}
-		var triggeredCallbacks = std.AutoHashMap(*DirectoryInfo, void).init(main.stackAllocator.allocator); // Avoid duplicate calls
+		var triggeredCallbacks = std.AutoHashMap(*DirectoryInfo, void).init(main.stackAllocator.allocator);
 		defer triggeredCallbacks.deinit();
 		var offset: usize = 0;
 		while (offset < available) {
@@ -204,7 +204,7 @@ const LinuxImpl = struct { // MARK: LinuxImpl
 	}
 };
 
-const WindowsImpl = struct { // MARK: WindowsImpl
+const WindowsImpl = struct {
 	const HANDLE = std.os.windows.HANDLE;
 	var notificationHandlers: std.StringHashMap(*DirectoryInfo) = undefined;
 	var callbacks: main.ListManaged(*DirectoryInfo) = undefined;

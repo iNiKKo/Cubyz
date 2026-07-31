@@ -85,7 +85,7 @@ pub fn execute(msg: []const u8, source: Source) void {
 }
 
 pub const Coordinate = union(enum) {
-	relative: f64, // Relative coordinates are indicated by leading `~`.
+	relative: f64,
 	absolute: f64,
 
 	pub fn parse(_: NeverFailingAllocator, name: []const u8, arg: []const u8, errorMessage: *ListManaged(u8)) error{ParseError}!Coordinate {
@@ -111,7 +111,7 @@ pub fn resolveCoordinates(x: Coordinate, y: Coordinate, z: Coordinate, source: S
 		return error.InvalidArg;
 	}
 	return .{
-		// TODO: Remove clamp after #310 is implemented
+
 		std.math.clamp(if (x == .relative) source.user.player().pos[0] + x.relative else x.absolute, -1e9, 1e9),
 		std.math.clamp(if (y == .relative) source.user.player().pos[1] + y.relative else y.absolute, -1e9, 1e9),
 		std.math.clamp(if (z == .relative) source.user.player().pos[2] + z.relative else z.absolute, -1e9, 1e9),
@@ -138,7 +138,6 @@ pub const Target = struct {
 	}
 };
 
-/// Get current selection from user data. This function will output appropriate error to chat upon failure.
 pub fn getCurrentSelection(source: *User) !Blueprint.Selection {
 	const pos1 = source.worldEditData.selectionPosition1 orelse {
 		source.sendMessage("#ff0000Position 1 isn't set", .{});

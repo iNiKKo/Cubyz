@@ -16,7 +16,7 @@ pub const playerAirTerminalVelocity = 90.0;
 pub const airDensity = 0.001;
 pub const playerDensity = 1.2;
 
-pub const epsilon: f64 = 1.0/@as(comptime_float, 1 << (std.math.floatMantissaBits(f64) - 31)); // Should be the last bit when at the integer limit
+pub const epsilon: f64 = 1.0/@as(comptime_float, 1 << (std.math.floatMantissaBits(f64) - 31));
 
 pub const collision = struct {
 	pub const Box = struct {
@@ -236,7 +236,7 @@ pub const collision = struct {
 					volumeSum += gridVolume;
 
 					if (main.game.getBlockWithSide(side, x, y, z)) |block| {
-						const collisionBox: Box = .{ // TODO: Check all AABBs individually
+						const collisionBox: Box = .{
 							.min = totalBox.min + main.blocks.meshes.model(block).model().min,
 							.max = totalBox.min + main.blocks.meshes.model(block).model().max,
 						};
@@ -269,7 +269,6 @@ pub const collision = struct {
 	pub fn collideOrStep(comptime side: main.sync.Side, comptime dir: Direction, amount: f64, pos: Vec3d, hitBox: Box, steppingHeight: f64) Vec3d {
 		const index = @intFromEnum(dir);
 
-		// First argument is amount we end up moving in dir, second argument is how far up we step
 		var resultingMovement: Vec3d = .{0, 0, 0};
 		resultingMovement[index] = amount;
 		var checkPos = pos;
@@ -279,16 +278,15 @@ pub const collision = struct {
 			const newFloor = box.max[2] + hitBox.max[2] + epsilon;
 			const heightDifference = newFloor - checkPos[2];
 			if (heightDifference <= steppingHeight) {
-				// If we collide but might be able to step up
+
 				checkPos[2] = newFloor;
 				if (collision.collides(side, dir, -amount, checkPos, hitBox) == null) {
-					// If there's no new collision then we can execute the step-up
+
 					resultingMovement[2] = heightDifference;
 					return resultingMovement;
 				}
 			}
 
-			// Otherwise move as close to the container as possible
 			if (amount < 0) {
 				resultingMovement[index] = box.max[index] - hitBox.min[index] - pos[index] + epsilon;
 			} else {
@@ -383,32 +381,17 @@ pub fn calculateMotion(comptime side: main.sync.Side, deltaTime: f64, friction: 
 
 		const baseFrictionCoefficient: f32 = friction.current;
 
-		// This our model for movement on a single frame:
-		// dv/dt = a - λ·v
-		// dx/dt = v
-		// Where a is the acceleration and λ is the friction coefficient
 		inline for (0..3) |i| {
 			var frictionCoefficient = baseFrictionCoefficient;
-			if (i == 2 and jumpHeight > 0.0) { // No friction while jumping
-				// Here we want to ensure a specified jump height under air friction.
+			if (i == 2 and jumpHeight > 0.0) {
+
 				const jumpVelocity = @sqrt(jumpHeight*baseGravity*2);
 				velocity[i] = @max(jumpVelocity, velocity[i] + jumpVelocity);
 				frictionCoefficient = volumeFrictionCoeffecient;
 			}
 			const v_0 = velocity[i];
 			const a = acc[i];
-			// Here the solution can be easily derived:
-			// dv/dt = a - λ·v
-			// (1 - a)/v dv = -λ dt
-			// (1 - a)ln(v) + C = -λt
-			// v(t) = a/λ + c_1 e^(λ (-t))
-			// v(0) = a/λ + c_1 = v₀
-			// c_1 = v₀ - a/λ
-			// x(t) = ∫v(t) dt
-			// x(t) = ∫a/λ + c_1 e^(λ (-t)) dt
-			// x(t) = a/λt - c_1/λ e^(λ (-t)) + C
-			// With x(0) = 0 we get C = c_1/λ
-			// x(t) = a/λt - c_1/λ e^(λ (-t)) + c_1/λ
+
 			const c_1 = v_0 - a/frictionCoefficient;
 			velocity[i] = a/frictionCoefficient + c_1*@exp(-frictionCoefficient*deltaTime);
 			move[i] = a/frictionCoefficient*deltaTime - c_1/frictionCoefficient*@exp(-frictionCoefficient*deltaTime) + c_1/frictionCoefficient;
@@ -421,7 +404,7 @@ pub fn calculateEyeMovement(comptime side: main.sync.Side, deltaTime: f64, pos: 
 	if (main.game.getBlockWithSide(side, @floor(pos[0]), @floor(pos[1]), @floor(pos[2])) != null) {
 		var directionalFrictionCoefficients: Vec3f = @splat(0);
 		var acc: Vec3d = @splat(0);
-		// Apply springs to the eye position:
+
 		var springConstants = Vec3d{0, 0, 0};
 		{
 			const forceMultipliers = Vec3d{
@@ -442,10 +425,6 @@ pub fn calculateEyeMovement(comptime side: main.sync.Side, deltaTime: f64, pos: 
 			acc += force;
 		}
 
-		// This our model for movement of the eye position on a single frame:
-		// dv/dt = a - k*x - λ·v
-		// dx/dt = v
-		// Where a is the acceleration, k is the spring constant and λ is the friction coefficient
 		inline for (0..3) |i| blk: {
 			if (eye.step[i]) {
 				const oldPos = eye.pos[i];
@@ -464,31 +443,11 @@ pub fn calculateEyeMovement(comptime side: main.sync.Side, deltaTime: f64, pos: 
 			const v_0 = eye.vel[i];
 			const k = springConstants[i];
 			const a = acc[i];
-			// here we need to solve the full equation:
-			// The solution of this differential equation is given by
-			// x(t) = a/k + c_1 e^(1/2 t (-c_3 - λ)) + c_2 e^(1/2 t (c_3 - λ))
-			// With c_3 = sqrt(λ^2 - 4 k) which can be imaginary
-			// v(t) is just the derivative, given by
-			// v(t) = 1/2 (-c_3 - λ) c_1 e^(1/2 t (-c_3 - λ)) + (1/2 (c_3 - λ)) c_2 e^(1/2 t (c_3 - λ))
-			// Now for simplicity we set x(0) = 0 and v(0) = v₀
-			// a/k + c_1 + c_2 = 0 → c_1 = -a/k - c_2
-			// (-c_3 - λ) c_1 + (c_3 - λ) c_2 = 2v₀
-			// → (-c_3 - λ) (-a/k - c_2) + (c_3 - λ) c_2 = 2v₀
-			// → (-c_3 - λ) (-a/k) - (-c_3 - λ)c_2 + (c_3 - λ) c_2 = 2v₀
-			// → ((c_3 - λ) - (-c_3 - λ))c_2 = 2v₀ - (c_3 + λ) (a/k)
-			// → (c_3 - λ + c_3 + λ)c_2 = 2v₀ - (c_3 + λ) (a/k)
-			// → 2 c_3 c_2 = 2v₀ - (c_3 + λ) (a/k)
-			// → c_2 = (2v₀ - (c_3 + λ) (a/k))/(2 c_3)
-			// → c_2 = v₀/c_3 - (1 + λ/c_3)/2 (a/k)
-			// In total we get:
-			// c_3 = sqrt(λ^2 - 4 k)
-			// c_2 = (2v₀ - (c_3 + λ) (a/k))/(2 c_3)
-			// c_1 = -a/k - c_2
+
 			const c_3 = vec.Complex.fromSqrt(frictionCoefficient*frictionCoefficient - 4*k);
 			const c_2 = (((c_3.addScalar(frictionCoefficient).mulScalar(-a/k)).addScalar(2*v_0)).div(c_3.mulScalar(2)));
 			const c_1 = c_2.addScalar(a/k).negate();
-			// v(t) = 1/2 (-c_3 - λ) c_1 e^(1/2 t (-c_3 - λ)) + (1/2 (c_3 - λ)) c_2 e^(1/2 t (c_3 - λ))
-			// x(t) = a/k + c_1 e^(1/2 t (-c_3 - λ)) + c_2 e^(1/2 t (c_3 - λ))
+
 			const firstTerm = c_1.mul((c_3.negate().subScalar(frictionCoefficient)).mulScalar(deltaTime/2).exp());
 			const secondTerm = c_2.mul((c_3.subScalar(frictionCoefficient)).mulScalar(deltaTime/2).exp());
 			eye.vel[i] = firstTerm.mul(c_3.negate().subScalar(frictionCoefficient).mulScalar(0.5)).add(secondTerm.mul((c_3.subScalar(frictionCoefficient)).mulScalar(0.5))).val[0];
@@ -577,7 +536,6 @@ pub fn calculateVerticalCollision(comptime side: main.sync.Side, deltaTime: f64,
 			vel[2] = 0;
 		}
 
-		// Always unstuck upwards for now
 		while (collision.collides(side, .z, 0, pos.*, hitBox)) |_| {
 			pos[2] += 1;
 		}
@@ -603,9 +561,7 @@ pub fn calculateVerticalCollisionEyeMovement(deltaTime: f64, eye: *Player.EyeDat
 			eye.vel[2] *= 2.0;
 		}
 	} else if (wasOnGround and motion[2] < 0) {
-		// If the player drops off a ledge, they might just be walking over a small gap, so lock the y position of the eyes that long.
-		// This calculates how long the player has to fall until we know they're not walking over a small gap.
-		// We add deltaTime because we subtract deltaTime at the bottom of update
+
 		eye.coyote = @sqrt(2*steppingHeight/baseGravity) + deltaTime;
 		eye.pos[2] -= motion[2];
 	} else if (Player.eye.coyote > 0) {

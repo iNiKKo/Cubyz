@@ -37,8 +37,6 @@ uniform float handLightRadius;
 uniform vec3 remoteHandLightPositionRelative;
 uniform vec3 remoteHandLightColor;
 
-// Real-time point light following the player's held item or dropped item — see chunk_fragment.frag's
-// identical function for the full explanation.
 vec3 handLightContribution(vec3 worldPosRelative) {
 	if (handLightRadius == 0.0) return vec3(0.0);
 
@@ -115,9 +113,7 @@ void main() {
 	vec3 selfEmission = (handLightRadius > 0.0) ? activeLightColor * 0.7 : vec3(0.0);
 	vec3 light = min(max(directSunAndShadow + handLight + outBlockLight, selfEmission), vec3(1.0));
 	vec4 albedo = texture(textureSampler, outTexCoord);
-	// Entity textures exported by Blockbench are hard alpha-mask assets (not translucent sprites).
-	// Keep their 0/1 coverage exact: partial alpha-to-coverage was blending the transparent black
-	// texels into the pixel-art silhouette and left dark MSAA strings on Snale/Cubert-style models.
+
 	if (albedo.a < 0.05) discard;
 	fragColor = albedo*vec4(light*lightVariation(normal), 1);
 	fragColor.a = 1.0;

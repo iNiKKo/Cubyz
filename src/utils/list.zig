@@ -209,7 +209,7 @@ pub fn ListManaged(comptime T: type) type {
 		}
 
 		pub fn print(self: *@This(), comptime fmt: []const u8, args: anytype) void {
-			var writer = std.Io.Writer.Allocating.init(main.stackAllocator.allocator); // TODO: Is there no easier way to make this without an extra copy?
+			var writer = std.Io.Writer.Allocating.init(main.stackAllocator.allocator);
 			defer writer.deinit();
 			writer.writer.print(fmt, args) catch unreachable;
 			self.appendSlice(writer.written());
@@ -414,7 +414,6 @@ pub fn List(comptime T: type) type {
 		pub fn print(self: *@This(), allocator: NeverFailingAllocator, comptime fmt: []const u8, args: anytype) void {
 			var buffer: std.ArrayList(u8) = .{.items = self.items, .capacity = self.capacity};
 			var writer = std.Io.Writer.Allocating.fromArrayList(allocator.allocator, &buffer);
-			// We don't deinit, we will keep the ownership of the array later on!
 
 			writer.writer.print(fmt, args) catch unreachable;
 			buffer = writer.toArrayList();
@@ -466,9 +465,6 @@ test "List.print multiple prints" {
 	const oldAddress = list.items.ptr;
 	defer list.deinit(main.stackAllocator);
 
-	// The tricky part of the implementation is to correctly reassign buffer bounds, so every time
-	// we use the list as print destination, we want to make sure it retains normal list behavior
-	// by inserting a single element.
 	list.append(main.stackAllocator, '\n');
 	list.print(main.stackAllocator, "BarFooSpam {}", .{0.3});
 	list.append(main.stackAllocator, '\n');
@@ -489,8 +485,6 @@ test "List.print multiple prints" {
 	try std.testing.expect(list.items.len <= list.capacity);
 }
 
-/// Holds multiple arrays sequentially in memory.
-/// Allows addressing and remove each subarray individually, as well as iterating through all of them at once.
 pub fn MultiArray(T: type, Range: type) type {
 	const size = @typeInfo(Range).@"enum".fields.len;
 	std.debug.assert(@typeInfo(Range).@"enum".is_exhaustive);

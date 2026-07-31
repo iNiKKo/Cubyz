@@ -15,80 +15,38 @@ const c = @import("c");
 
 const mesh_storage = @import("mesh_storage.zig");
 
-// MARK: Rain — see settings.rain's doc comment: a first, deliberately simple pass, not a full weather
-// system. Real falling raindrop quads (unlike the god-ray glow, which is a screen-space fake — clouds.zig
-// established the pattern of using actual geometry instead), spawned only in a small AOE grid around the
-// player rather than across the whole loaded world.
-//
-// Each grid cell either has one falling drop or doesn't (a per-cell hash decides, fixed for that cell —
-// same "coverage never flip-flops, only the animation moves" idea clouds.zig uses for wind). An active
-// cell's drop falls in a continuous loop from a height above the player down to that *column's actual
-// ground* (see findGroundZ — not a fixed height below the player, so rain over a cliff edge keeps
-// falling past where the player is standing instead of stopping level with their feet), wrapping back to
-// the top the instant it reaches the ground, with a per-cell phase offset so drops don't all reset in
-// unison. Every drop is a small thin quad billboarded around the vertical axis only (built CPU-side each
-// frame from one shared camera-derived horizontal "right" vector, not a full per-drop billboard), which
-// reads as a rectangle from any horizontal viewing angle without needing per-vertex billboard math.
-
-/// World-space size of one grid cell, along both horizontal axes.
 const cellSize: f32 = 0.50;
-/// Half-extent (blocks) of the square AOE grid around the player.
+
 const gridRadius: f32 = 22.0;
-/// Upper bound on cells per side.
+
 const maxGridDim: u32 = 96;
 
 const dropWidth: f32 = 0.08;
 const dropHeight: f32 = 0.75;
-const fallSpeed: f32 = 36.0; // blocks/second
-/// How far above the player each column's fall starts. Raised so rain visibly falls from well overhead
-/// rather than seeming to start right at head height, especially now that the fall can extend much
-/// further down than this near a cliff edge (see findGroundZ).
+const fallSpeed: f32 = 36.0;
+
 const fallRangeAbovePlayer: f64 = 22.0;
-/// How far above the player to start searching for the actual ground below each drop (see findGroundZ) —
-/// not the fall's start height, just a margin covering slopes/small rises so the search doesn't have to
-/// begin all the way up at fallRangeAbovePlayer.
+
 const groundScanAboveMargin: f64 = 8.0;
-/// How far below the player findGroundZ gives up looking for solid ground (a deep cliff/ravine/void) and
-/// just lets the drop fall that far before looping — keeps the worst case bounded instead of scanning
-/// indefinitely into open air.
+
 const groundScanMaxDepth: f64 = 12.0;
-/// The player's *eye* Z (what playerPos below actually is — see main.zig's `render(game.Player.
-/// getEyePosBlocking(), ...)`) bobs with crouch (Player.eye.desiredPos shifts smoothly but with no
-/// change to the player's real world position at all) and rises through a jump's arc. Using it directly
-/// as the vertical anchor for the fall range made the *entire* rain pattern visibly shift on both —
-/// topZ/groundZ's search window would recompute every frame relative to whatever the eye happened to be
-/// doing, rather than staying anchored to the world. Instead, the anchor is the player's true physics
-/// position (`game.Player.getPosBlocking()`, unaffected by crouch's eye-only offset) snapped down to the
-/// nearest verticalAnchorSnap — so small, continuous vertical motion (crouch bob entirely, and a normal
-/// jump's ~1.25-block arc in all but the rare case of already sitting right at a snap boundary) doesn't
-/// shift the rain pattern at all, while a real sustained elevation change (climbing, falling, teleporting)
-/// still eventually moves it once it crosses a snap boundary.
+
 const verticalAnchorSnap: f64 = 4.0;
-/// Fraction of grid cells that actually contain a falling drop, at full (1.0) rain intensity — scaled
-/// down linearly by the current rainIntensity in update() so light drizzle looks sparser than a downpour.
+
 const maxActiveDensity: f32 = 0.95;
 const dropColor = Vec3f{0.6, 0.7, 0.9};
-const dropAlpha: f32 = 0.40; // Translucent liquid raindrops
+const dropAlpha: f32 = 0.40;
 
-/// Returns how strongly each precipitation type is carried by the world wind.  The weather grid's
-/// wind is intentionally a gentle, stable direction vector rather than a physical velocity, so these
-/// values turn it into a readable visual drift without making ordinary rain look horizontal.
 fn windDriftScale(isSnow: bool, isDust: bool) f32 {
-	// Snow is heavier/denser than the old tiny flakes but remains recognisably falling. Sand is light
-	// enough to be blown hard across the scene during a storm.
+
 	return if (isDust) 36.0 else if (isSnow) 4.0 else 10.0;
 }
 
-/// Extra coverage for the two weather types that should read as a substantial event, even when the
-/// server reports a moderate weather strength.
 fn precipitationDensity(intensity: f32, isSnow: bool, isDust: bool) f32 {
 	const multiplier: f32 = if (isDust) 0.78 else if (isSnow) 1.30 else 1.0;
 	return std.math.clamp(intensity*maxActiveDensity*multiplier, 0.0, 0.985);
 }
 
-/// The quad's long axis follows the same downwind trajectory its centre uses.  A point lower in a
-/// falling streak has existed longer, so it must be farther downwind than its top; this is what makes
-/// rain, snow and dust visibly fall at an angle instead of merely sliding as vertical sprites.
 fn precipitationHalfHeight(wind: Vec2f, fallSpeedForType: f32, driftScale: f32, height: f32) Vec3f {
 	const halfTravelSeconds = height*0.5/fallSpeedForType;
 	return .{
@@ -139,8 +97,6 @@ pub fn deinit() void {
 	vao.deinit();
 }
 
-/// Cheap deterministic per-cell hash, purely for "does this cell have a drop"/"what's its phase" — not
-/// used for anything requiring real randomness quality.
 fn hashCell(gx: i64, gy: i64) f32 {
 	const ux: u64 = @bitCast(gx);
 	const uy: u64 = @bitCast(gy);
@@ -151,9 +107,6 @@ fn hashCell(gx: i64, gy: i64) f32 {
 	return @as(f32, @floatFromInt(h & 0xFFFFFF))/@as(f32, @floatFromInt(@as(u32, 0xFFFFFF)));
 }
 
-/// Height (world Z) a drop falling straight down through this column actually lands at, i.e. the top of
-/// the first solid block found scanning downward from above the fall range top. Starts scanning from
-/// above fallRangeAbovePlayer so tree canopies, leaves, and roofs above head height are properly hit.
 fn findGroundZ(worldX: f64, worldY: f64, anchorZ: f64) f64 {
 	const blockX: i32 = @intFromFloat(@floor(worldX));
 	const blockY: i32 = @intFromFloat(@floor(worldY));
@@ -167,9 +120,8 @@ fn findGroundZ(worldX: f64, worldY: f64, anchorZ: f64) f64 {
 	return anchorZ - 4.0;
 }
 
-/// Rebuilds the raindrop-quad mesh every frame with per-voxel light sampling.
 pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
-	// Above the low storm deck this camera is in clear air, so no local precipitation spawns.
+
 	if (!settings.rain or game.weatherExposureAtPosition(playerPos) <= 0.0) {
 		indexCount = 0;
 		return;
@@ -206,8 +158,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const worldY: f64 = (@as(f64, @floatFromInt(worldCellY)) + 0.5)*cellSize + jitterY;
 
 			const weather = game.world.?.weatherGrid.sampleAt(worldX, worldY);
-			// `1` rain, `2` snow, `3` dust. All share the cheap quad pipeline but use distinct
-			// strength, colour, and geometry below rather than being represented as blue rain.
+
 			if (weather.kind != 1 and weather.kind != 2 and weather.kind != 3) continue;
 			const isSnow = weather.kind == 2;
 			const isDust = weather.kind == 3;
@@ -216,16 +167,13 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const activeDensity = precipitationDensity(cellRainIntensity, isSnow, isDust);
 			if (hashCell(worldCellX, worldCellY) > activeDensity) continue;
 
-			// Distance-from-player fade so drops don't just pop in/out at the AOE grid's square edge.
 			const dx: f32 = @floatCast(worldX - playerPos[0]);
 			const dy: f32 = @floatCast(worldY - playerPos[1]);
 			const edgeDist = @sqrt(dx*dx + dy*dy)/gridRadius;
 			if (edgeDist >= 1.0) continue;
 
 			const groundZ: f64 = findGroundZ(worldX, worldY, anchorZ);
-			// Sandstorms are ground transport, not cloud precipitation. Each grain occupies a stable
-			// random height inside a shallow 0–5 block surface layer: this reads as wind lifting sand
-			// off dunes instead of a paper-thin line on the ground or a cloud-born particle shower.
+
 			const dustHeight = 0.15 + hashCell(worldCellX +% 401, worldCellY +% 809)*5.0;
 			const topZ: f64 = if (isDust)
 				groundZ + @as(f64, dustHeight)
@@ -239,11 +187,9 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 				groundZ + @as(f64, dustHeight)
 			else
 				topZ - @as(f64, loopFrac*range);
-			// Dust moves continuously along the ground in a long, bounded cycle. This avoids the rapid
-			// visible wrap that made grains appear to spawn/disappear while the camera was still.
+
 			const fallSeconds: f32 = if (isDust)
-				// A long cycle keeps each grain travelling for eight seconds before it wraps. The previous
-				// two-second loop made sand visibly spawn and disappear while the camera was still.
+
 				@mod(elapsedSeconds*0.125 + phase, 1.0)
 			else
 				@as(f32, @floatCast(topZ - dropZ))/cellFallSpeed;
@@ -255,7 +201,6 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 				@floatCast(dropZ - playerPos[2]),
 			};
 
-			// Real-time voxel light sampling at the drop's world position
 			const dropBlockX: i32 = @intFromFloat(@floor(worldX));
 			const dropBlockY: i32 = @intFromFloat(@floor(worldY));
 			const dropBlockZ: i32 = @intFromFloat(@floor(dropZ));
@@ -286,9 +231,6 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 		}
 	}
 
-	// A sparse distant tier makes a rain/snow cell readable from outside its biome. It deliberately uses
-	// only a few long-lived streaks per 512-block weather cell; the dense, ground-aware grid above remains
-	// the close-range effect and prevents a distant weather cell from becoming a solid square curtain.
 	const farTopZ: f64 = @min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 	const farGroundZ: f64 = anchorZ - 4.0;
 	const farRange: f32 = @max(@as(f32, @floatCast(farTopZ - farGroundZ)), 1.0);
@@ -298,9 +240,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 		const wyCell = weatherSnapshot.origin_cell[1] + @as(i32, @intCast(weatherIndex / game.WeatherGrid.dimension));
 		const isSnow = weatherCell.kind == 2;
 		const isDust = weatherCell.kind == 3;
-		// A distant sand curtain would have no terrain height information and therefore appears to hang
-		// in the sky. The close ground-aware tier above supplies the visible grains; weather fog carries
-		// the sandstorm atmosphere beyond it.
+
 		if (isDust) continue;
 		const weatherStrength = if (isDust) weatherCell.dust else weatherCell.precipitation;
 		if (weatherStrength == 0) continue;

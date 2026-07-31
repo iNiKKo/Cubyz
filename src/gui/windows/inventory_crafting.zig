@@ -66,12 +66,12 @@ fn findAvailableRecipes(list: *VerticalList) bool {
 	for (itemAmount.items) |*amount| {
 		amount.* = 0;
 	}
-	// Figure out what items are available in the inventory:
+
 	for (0..main.game.Player.inventory.size()) |i| {
 		addItemStackToAvailable(main.game.Player.inventory.getStack(i));
 	}
 	if (std.mem.eql(u32, oldAmounts, itemAmount.items)) return false;
-	// Remove no longer present items:
+
 	var i: u32 = 0;
 	while (i < availableItems.items.len) : (i += 1) {
 		if (itemAmount.items[i] == 0) {
@@ -83,7 +83,7 @@ fn findAvailableRecipes(list: *VerticalList) bool {
 		inv.deinit(main.globalAllocator);
 	}
 	inventories.clearRetainingCapacity();
-	// Find all recipes the player can make:
+
 	outer: for (items.getRecipes()) |*recipe| {
 		middle: for (recipe.sourceItems, recipe.sourceAmounts) |sourceItem, sourceAmount| {
 			for (availableItems.items, itemAmount.items) |availableItem, availableAmount| {
@@ -91,9 +91,9 @@ fn findAvailableRecipes(list: *VerticalList) bool {
 					continue :middle;
 				}
 			}
-			continue :outer; // Ingredient not found.
+			continue :outer;
 		}
-		// All ingredients found: Add it to the list.
+
 		const inv = ClientInventory.init(main.globalAllocator, recipe.sourceItems.len + 1, .{.crafting = recipe}, .other, .{});
 
 		for (0..recipe.sourceAmounts.len) |index| {

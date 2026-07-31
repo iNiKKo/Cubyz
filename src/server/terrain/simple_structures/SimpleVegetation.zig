@@ -42,14 +42,14 @@ pub fn generate(self: *SimpleVegetation, _: GenerationMode, x: i32, y: i32, z: i
 	const height = self.height0 + random.nextIntBounded(u31, seed, self.deltaHeight + 1);
 	var pz: i32 = chunk.startIndex(z);
 	if (isCeiling) {
-		if (z - height <= caveMap.findTerrainChangeBelow(x, y, z)) return; // Space is too small.
+		if (z - height <= caveMap.findTerrainChangeBelow(x, y, z)) return;
 		while (pz > z - height) : (pz -= chunk.super.pos.voxelSize) {
 			if (chunk.liesInChunk(x, y, pz)) {
 				chunk.updateBlockIfDegradable(x, y, pz, self.block);
 			}
 		}
 	} else {
-		if (z + height >= caveMap.findTerrainChangeAbove(x, y, z)) return; // Space is too small.
+		if (z + height >= caveMap.findTerrainChangeAbove(x, y, z)) return;
 		while (pz < z + height) : (pz += chunk.super.pos.voxelSize) {
 			if (chunk.liesInChunk(x, y, pz)) {
 				chunk.updateBlockIfDegradable(x, y, pz, self.block);

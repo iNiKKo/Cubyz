@@ -17,8 +17,6 @@ const Vec2f = vec.Vec2f;
 
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
-// Generates the climate map using a fluidynamics simulation, with a circular heat distribution.
-
 pub const id = "cubyz:single_biome";
 
 var biome: *const Biome = undefined;

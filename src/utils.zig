@@ -15,7 +15,7 @@ pub const Condition = @import("utils/Condition.zig");
 pub const Futex = @import("utils/Futex.zig");
 pub const Semaphore = @import("utils/Semaphore.zig");
 
-pub const Compression = struct { // MARK: Compression
+pub const Compression = struct {
 	pub fn deflate(allocator: NeverFailingAllocator, data: []const u8, level: std.compress.flate.Compress.Options) []u8 {
 		var result = std.Io.Writer.Allocating.initCapacity(allocator.allocator, 16) catch unreachable;
 		var buffer: [65536]u8 = undefined;
@@ -43,7 +43,7 @@ pub const Compression = struct { // MARK: Compression
 		while (try walker.next(main.io)) |entry| {
 			if (entry.kind == .file) {
 				var relPath: []const u8 = entry.path;
-				if (builtin.os.tag == .windows) { // I hate you
+				if (builtin.os.tag == .windows) {
 					const copy = main.stackAllocator.dupe(u8, relPath);
 					std.mem.replaceScalar(u8, copy, '\\', '/');
 					relPath = copy;
@@ -95,8 +95,7 @@ pub const Compression = struct { // MARK: Compression
 	}
 };
 
-/// Implementation of https://en.wikipedia.org/wiki/Alias_method
-pub fn AliasTable(comptime T: type) type { // MARK: AliasTable
+pub fn AliasTable(comptime T: type) type {
 	return struct {
 		const AliasData = struct {
 			chance: u16,
@@ -195,8 +194,7 @@ pub fn AliasTable(comptime T: type) type { // MARK: AliasTable
 	};
 }
 
-/// A list that is always sorted in ascending order based on T.lessThan(lhs, rhs).
-pub fn SortedList(comptime T: type) type { // MARK: SortedList
+pub fn SortedList(comptime T: type) type {
 	return struct {
 		const Self = @This();
 
@@ -224,7 +222,7 @@ pub fn SortedList(comptime T: type) type { // MARK: SortedList
 				self.increaseCapacity(allocator);
 			}
 			var i = self.len;
-			while (i != 0) { // Find the point to insert and move the rest out of the way.
+			while (i != 0) {
 				if (object.lessThan(self.ptr[i - 1])) {
 					self.ptr[i] = self.ptr[i - 1];
 				} else {
@@ -244,7 +242,7 @@ pub fn SortedList(comptime T: type) type { // MARK: SortedList
 	};
 }
 
-pub fn Array2D(comptime T: type) type { // MARK: Array2D
+pub fn Array2D(comptime T: type) type {
 	return struct {
 		const Self = @This();
 		mem: []T,
@@ -285,7 +283,7 @@ pub fn Array2D(comptime T: type) type { // MARK: Array2D
 	};
 }
 
-pub fn Array3D(comptime T: type) type { // MARK: Array3D
+pub fn Array3D(comptime T: type) type {
 	return struct {
 		const Self = @This();
 		mem: []T,
@@ -329,7 +327,7 @@ pub fn Array3D(comptime T: type) type { // MARK: Array3D
 	};
 }
 
-pub fn FixedSizeCircularBuffer(T: type, capacity: comptime_int) type { // MARK: FixedSizeCircularBuffer
+pub fn FixedSizeCircularBuffer(T: type, capacity: comptime_int) type {
 	std.debug.assert(capacity - 1 & capacity == 0 and capacity > 0);
 	const mask = capacity - 1;
 	return struct {
@@ -464,7 +462,7 @@ pub fn FixedSizeCircularBuffer(T: type, capacity: comptime_int) type { // MARK: 
 	};
 }
 
-pub fn CircularBufferQueue(comptime T: type) type { // MARK: CircularBufferQueue
+pub fn CircularBufferQueue(comptime T: type) type {
 	return struct {
 		const Self = @This();
 		mem: []T,
@@ -589,8 +587,7 @@ pub fn CircularBufferQueue(comptime T: type) type { // MARK: CircularBufferQueue
 	};
 }
 
-/// Basically just a regular queue with a mutex. TODO: Find a good lock-free implementation.
-pub fn ConcurrentQueue(comptime T: type) type { // MARK: ConcurrentQueue
+pub fn ConcurrentQueue(comptime T: type) type {
 	return struct {
 		const Self = @This();
 		super: CircularBufferQueue(T),
@@ -626,10 +623,7 @@ pub fn ConcurrentQueue(comptime T: type) type { // MARK: ConcurrentQueue
 	};
 }
 
-/// A simple binary heap.
-/// Thread safe.
-/// Expects T to have a `biggerThan(T) bool` function
-pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
+pub fn ConcurrentMaxHeap(comptime T: type) type {
 	return struct {
 		const initialSize = 16;
 		size: usize,
@@ -650,24 +644,22 @@ pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
 			self.* = undefined;
 		}
 
-		/// Moves an element from a given index down the heap, such that all children are always smaller than their parents.
 		fn siftDown(self: *@This(), _i: usize) void {
 			self.mutex.assertLocked();
 			var i = _i;
 			while (2*i + 1 < self.size) {
 				const biggest = if (2*i + 2 < self.size and self.array[2*i + 2].biggerThan(self.array[2*i + 1])) 2*i + 2 else 2*i + 1;
-				// Break if all childs are smaller.
+
 				if (self.array[i].biggerThan(self.array[biggest])) return;
-				// Swap it:
+
 				const local = self.array[biggest];
 				self.array[biggest] = self.array[i];
 				self.array[i] = local;
-				// goto the next node:
+
 				i = biggest;
 			}
 		}
 
-		/// Moves an element from a given index up the heap, such that all children are always smaller than their parents.
 		fn siftUp(self: *@This(), _i: usize) void {
 			self.mutex.assertLocked();
 			var i = _i;
@@ -681,7 +673,6 @@ pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
 			}
 		}
 
-		/// Needs to be called after updating the priority of all elements.
 		pub fn updatePriority(self: *@This()) void {
 			self.mutex.lock();
 			defer self.mutex.unlock();
@@ -690,14 +681,12 @@ pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
 			}
 		}
 
-		/// Returns the i-th element in the heap. Useless for most applications.
 		pub fn get(self: *@This(), i: usize) ?T {
 			self.mutex.assertLocked();
 			if (i >= self.size) return null;
 			return self.array[i];
 		}
 
-		/// Adds a new element to the heap.
 		pub fn add(self: *@This(), elem: T) void {
 			self.mutex.lock();
 			defer self.mutex.unlock();
@@ -731,8 +720,6 @@ pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
 			self.siftDown(i);
 		}
 
-		/// Returns the biggest element and removes it from the heap.
-		/// If empty blocks until a new object is added or the datastructure is closed.
 		pub fn extractMax(self: *@This()) ?T {
 			self.mutex.lock();
 			defer self.mutex.unlock();
@@ -756,7 +743,7 @@ pub fn ConcurrentMaxHeap(comptime T: type) type { // MARK: ConcurrentMaxHeap
 	};
 }
 
-pub const ThreadPool = struct { // MARK: ThreadPool
+pub const ThreadPool = struct {
 	pub const TaskType = enum(usize) {
 		blockUpdate,
 		chunkgen,
@@ -809,7 +796,7 @@ pub const ThreadPool = struct { // MARK: ThreadPool
 			return self.*;
 		}
 	};
-	const refreshTime: std.Io.Duration = .fromMilliseconds(100); // The time after which all priorities get refreshed.
+	const refreshTime: std.Io.Duration = .fromMilliseconds(100);
 
 	threads: []std.Thread,
 	currentTasks: []Atomic(?*const VTable),
@@ -850,7 +837,7 @@ pub const ThreadPool = struct { // MARK: ThreadPool
 
 	pub fn deinit(self: *ThreadPool) void {
 		self.running.store(false, .monotonic);
-		// Clear the remaining tasks:
+
 		while (self.loadList.extractAny()) |task| {
 			task.vtable.clean(task.self);
 		}
@@ -897,7 +884,7 @@ pub const ThreadPool = struct { // MARK: ThreadPool
 				i += 1;
 			}
 		}
-		// Wait for active tasks:
+
 		for (self.currentTasks) |*task| {
 			while (task.load(.monotonic) == vtable) {
 				main.io.sleep(.fromMilliseconds(1), .awake) catch {};
@@ -1027,9 +1014,7 @@ pub fn deinitDynamicIntArrayStorage() void {
 	dynamicIntArrayAllocator.deinit();
 }
 
-/// An packed array of integers with dynamic bit size.
-/// The bit size can be changed using the `resize` function.
-pub fn DynamicPackedIntArray(size: comptime_int) type { // MARK: DynamicPackedIntArray
+pub fn DynamicPackedIntArray(size: comptime_int) type {
 	std.debug.assert(std.math.isPowerOfTwo(size));
 	return struct {
 		data: []align(64) Atomic(u32) = &.{},
@@ -1038,7 +1023,7 @@ pub fn DynamicPackedIntArray(size: comptime_int) type { // MARK: DynamicPackedIn
 		const Self = @This();
 
 		pub fn initCapacity(bitSize: u5) Self {
-			std.debug.assert(bitSize == 0 or bitSize & bitSize - 1 == 0); // Must be a power of 2
+			std.debug.assert(bitSize == 0 or bitSize & bitSize - 1 == 0);
 			return .{
 				.data = dynamicIntArrayAllocator.allocator().alignedAlloc(Atomic(u32), .@"64", @as(usize, @divExact(size, @bitSizeOf(u32)))*bitSize),
 				.bitSize = bitSize,
@@ -1117,7 +1102,7 @@ pub fn DynamicPackedIntArray(size: comptime_int) type { // MARK: DynamicPackedIn
 	};
 }
 
-pub fn PaletteCompressedRegion(T: type, size: comptime_int) type { // MARK: PaletteCompressedRegion
+pub fn PaletteCompressedRegion(T: type, size: comptime_int) type {
 	const Impl = struct {
 		data: DynamicPackedIntArray(size) = .{},
 		palette: []Atomic(T),
@@ -1241,7 +1226,7 @@ pub fn PaletteCompressedRegion(T: type, size: comptime_int) type { // MARK: Pale
 					var newSelf: Self = undefined;
 					newSelf.initCapacity(impl.paletteLength*2);
 					const newImpl = newSelf.impl.raw;
-					// TODO: Resize stuff
+
 					newImpl.data.resizeOnceFrom(&impl.data);
 					@memcpy(newImpl.palette[0..impl.palette.len], impl.palette);
 					@memcpy(newImpl.paletteOccupancy[0..impl.paletteOccupancy.len], impl.paletteOccupancy);
@@ -1351,8 +1336,7 @@ pub fn PaletteCompressedRegion(T: type, size: comptime_int) type { // MARK: Pale
 	};
 }
 
-/// Implements a simple set associative cache with LRU replacement strategy.
-pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSize: u32, comptime deinitFunction: fn (*T) void) type { // MARK: Cache
+pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSize: u32, comptime deinitFunction: fn (*T) void) type {
 	const hashMask = numberOfBuckets - 1;
 	if (numberOfBuckets & hashMask != 0) @compileError("The number of buckets should be a power of 2!");
 
@@ -1374,7 +1358,6 @@ pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSiz
 			return null;
 		}
 
-		/// Returns the object that got kicked out of the cache. This must be deinited by the user.
 		fn add(self: *@This(), item: *T) ?*T {
 			self.mutex.assertLocked();
 			const previous = self.items[bucketSize - 1];
@@ -1422,7 +1405,6 @@ pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSiz
 		cacheRequests: Atomic(usize) = .init(0),
 		cacheMisses: Atomic(usize) = .init(0),
 
-		///  Tries to find the entry that fits to the supplied hashable.
 		pub fn find(self: *@This(), compareAndHash: anytype, comptime postGetFunction: ?fn (*T) void) ?*T {
 			const index: u32 = compareAndHash.hashCode() & hashMask;
 			_ = @atomicRmw(usize, &self.cacheRequests.raw, .Add, 1, .monotonic);
@@ -1436,7 +1418,6 @@ pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSiz
 			return null;
 		}
 
-		/// Clears all elements calling the deinitFunction for each element.
 		pub fn clear(self: *@This()) void {
 			for (&self.buckets) |*bucket| {
 				bucket.clear();
@@ -1449,7 +1430,6 @@ pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSiz
 			}
 		}
 
-		/// Returns the object that got kicked out of the cache. This must be deinited by the user.
 		pub fn addToCache(self: *@This(), item: *T, hash: u32) ?*T {
 			const index = hash & hashMask;
 			self.buckets[index].mutex.lock();
@@ -1468,8 +1448,7 @@ pub fn Cache(comptime T: type, comptime numberOfBuckets: u32, comptime bucketSiz
 	};
 }
 
-///  https://en.wikipedia.org/wiki/Cubic_Hermite_spline#Unit_interval_(0,_1)
-pub fn unitIntervalSpline(comptime Float: type, p0: Float, m0: Float, p1: Float, m1: Float) [4]Float { // MARK: unitIntervalSpline()
+pub fn unitIntervalSpline(comptime Float: type, p0: Float, m0: Float, p1: Float, m1: Float) [4]Float {
 	return .{
 		p0,
 		m0,
@@ -1478,7 +1457,7 @@ pub fn unitIntervalSpline(comptime Float: type, p0: Float, m0: Float, p1: Float,
 	};
 }
 
-pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: GenericInterpolation
+pub fn GenericInterpolation(comptime elements: comptime_int) type {
 	const frames: u32 = 8;
 	return struct {
 		lastPos: [frames][elements]f64,
@@ -1506,7 +1485,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 		}
 
 		fn evaluateSplineAt(_t: f64, tScale: f64, p0: f64, _m0: f64, p1: f64, _m1: f64) [2]f64 {
-			//  https://en.wikipedia.org/wiki/Cubic_Hermite_spline#Unit_interval_(0,_1)
+
 			const t = _t/tScale;
 			const m0 = _m0*tScale;
 			const m1 = _m1*tScale;
@@ -1514,8 +1493,8 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 			const t3 = t2*t;
 			const a = unitIntervalSpline(f64, p0, m0, p1, m1);
 			return [_]f64{
-				a[0] + a[1]*t + a[2]*t2 + a[3]*t3, // value
-				(a[1] + 2*a[2]*t + 3*a[3]*t2)/tScale, // first derivative
+				a[0] + a[1]*t + a[2]*t2 + a[3]*t3,
+				(a[1] + 2*a[2]*t + 3*a[3]*t2)/tScale,
 			};
 		}
 
@@ -1523,7 +1502,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 			if (self.outVel[i] == 0 and self.lastVel[self.currentPoint.?][i] == 0) {
 				self.outPos[i] += (self.lastPos[self.currentPoint.?][i] - self.outPos[i])*t/tScale;
 			} else {
-				// Use cubic interpolation to interpolate the velocity as well.
+
 				const newValue = evaluateSplineAt(t, tScale, self.outPos[i], self.outVel[i], self.lastPos[self.currentPoint.?][i], self.lastVel[self.currentPoint.?][i]);
 				self.outPos[i] = newValue[0];
 				self.outVel[i] = newValue[1];
@@ -1532,7 +1511,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 
 		fn determineNextDataPoint(self: *@This(), time: i16, lastTime: *i16) void {
 			if (self.currentPoint != null and self.lastTimes[self.currentPoint.?] -% time <= 0) {
-				// Jump to the last used value and adjust the time to start at that point.
+
 				lastTime.* = self.lastTimes[self.currentPoint.?];
 				@memcpy(self.outPos, &self.lastPos[self.currentPoint.?]);
 				@memcpy(self.outVel, &self.lastVel[self.currentPoint.?]);
@@ -1540,11 +1519,11 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 			}
 
 			if (self.currentPoint == null) {
-				// Need a new point:
+
 				var smallestTime: i16 = std.math.maxInt(i16);
 				var smallestIndex: ?u31 = null;
 				for (self.lastTimes, 0..) |lastTimeI, i| {
-					//                   ↓ Only using a future time value that is far enough away to prevent jumping.
+
 					if (lastTimeI -% time >= 50 and lastTimeI -% time < smallestTime) {
 						smallestTime = lastTimeI -% time;
 						smallestIndex = @intCast(i);
@@ -1568,9 +1547,9 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 			if (self.currentPoint == null) {
 				const drag = std.math.pow(f64, 0.5, deltaTime);
 				for (self.outPos, self.outVel) |*pos, *vel| {
-					// Just move on with the current velocity.
+
 					pos.* += (vel.*)*deltaTime;
-					// Add some drag to prevent moving far away on short connection loss.
+
 					vel.* *= drag;
 				}
 			} else {
@@ -1598,9 +1577,9 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 				for (indices) |i| {
 					const index = @as(usize, i)*coordinatesPerIndex;
 					for (0..coordinatesPerIndex) |j| {
-						// Just move on with the current velocity.
+
 						self.outPos[index + j] += self.outVel[index + j]*deltaTime;
-						// Add some drag to prevent moving far away on short connection loss.
+
 						self.outVel[index + j] *= drag;
 					}
 				}
@@ -1618,7 +1597,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type { // MARK: Gen
 	};
 }
 
-pub const TimeDifference = struct { // MARK: TimeDifference
+pub const TimeDifference = struct {
 	difference: Atomic(i16) = .init(0),
 	firstValue: bool = true,
 
@@ -1637,8 +1616,7 @@ pub const TimeDifference = struct { // MARK: TimeDifference
 	}
 };
 
-/// A wrapper over Zig's mutex to avoid having to pass the io everywhere
-pub const Mutex = struct { // MARK: Mutex
+pub const Mutex = struct {
 	super: if (builtin.os.tag == .windows) @import("utils/Mutex.zig") else std.Io.Mutex = .init,
 
 	pub fn tryLock(self: *Mutex) bool {
@@ -1670,7 +1648,7 @@ pub const Mutex = struct { // MARK: Mutex
 
 const endian: std.builtin.Endian = .big;
 
-pub const BinaryReader = struct { // MARK: BinaryReader
+pub const BinaryReader = struct {
 	remaining: []const u8,
 
 	pub const AllErrors = error{ OutOfBounds, IntOutOfBounds, InvalidEnumTag, InvalidFloat };
@@ -1711,7 +1689,7 @@ pub const BinaryReader = struct { // MARK: BinaryReader
 
 	pub fn readVarInt(self: *BinaryReader, T: type) error{ OutOfBounds, IntOutOfBounds }!T {
 		comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
-		comptime std.debug.assert(@bitSizeOf(T) > 8); // Why would you use a VarInt for this?
+		comptime std.debug.assert(@bitSizeOf(T) > 8);
 		var result: T = 0;
 		var shift: std.meta.Int(.unsigned, std.math.log2_int_ceil(usize, @bitSizeOf(T))) = 0;
 		while (true) {
@@ -1757,7 +1735,7 @@ pub const BinaryReader = struct { // MARK: BinaryReader
 	}
 };
 
-pub const BinaryWriter = struct { // MARK: BinaryWriter
+pub const BinaryWriter = struct {
 	data: main.ListManaged(u8),
 
 	pub fn init(allocator: NeverFailingAllocator) BinaryWriter {
@@ -1799,7 +1777,7 @@ pub const BinaryWriter = struct { // MARK: BinaryWriter
 
 	pub fn writeVarInt(self: *BinaryWriter, T: type, value: T) void {
 		comptime std.debug.assert(@typeInfo(T).int.signedness == .unsigned);
-		comptime std.debug.assert(@bitSizeOf(T) > 8); // Why would you use a VarInt for this?
+		comptime std.debug.assert(@bitSizeOf(T) > 8);
 		var remaining: T = value;
 		while (true) {
 			var writeByte: u8 = @intCast(remaining & 0x7f);
@@ -2069,7 +2047,7 @@ pub fn DenseId(comptime IdType: type) type {
 	};
 }
 
-pub fn SparseSet(comptime T: type, comptime IdType: type) type { // MARK: SparseSet
+pub fn SparseSet(comptime T: type, comptime IdType: type) type {
 	std.debug.assert(@intFromEnum(IdType.noValue) == std.math.maxInt(@typeInfo(IdType).@"enum".tag_type));
 
 	return struct {

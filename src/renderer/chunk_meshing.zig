@@ -28,23 +28,17 @@ const mesh_storage = @import("mesh_storage.zig");
 
 var pipeline: graphics.Pipeline = undefined;
 var transparentPipeline: graphics.Pipeline = undefined;
-/// A dedicated, opaque mask of water surfaces viewed from below.  Regular transparent water cannot
-/// carry this information through the deferred fog pass because it deliberately does not write depth.
+
 var waterSurfacePipeline: graphics.Pipeline = undefined;
-/// Reference point for water-reflection ripple animation (transparent_fragment.frag) — same
-/// real-elapsed-time pattern clouds.zig/thin_clouds.zig use for their own wind animation.
-/// pub: also read by renderer.zig's CascadedShadowMap.update so the shadow depth pass's foliage sway
-/// computes from the exact same time reference as the main color pass — they must produce byte-identical
-/// waterTime values within one frame, or shadow-casting geometry desyncs from what's actually visible.
+
 pub var startTimestamp: std.Io.Timestamp = undefined;
 const UniformStruct = struct {
 	screenSize: c_int,
 	ambientLight: c_int,
 	weatherShadowFade: c_int,
-	/// Used only by transparent water to turn strong atmospheric haze into water-surface extinction.
+
 	weatherFogStrength: c_int,
-	/// Water-surface post-fog mask controls. These are intentionally separate from ordinary transparent
-	/// water: the mask is only drawn for underwater orientation or weather-distance occlusion.
+
 	weatherWaterSurfaceMask: c_int,
 	weatherFogColor: c_int,
 	contrast: c_int,
@@ -64,25 +58,20 @@ const UniformStruct = struct {
 	isSunlight: c_int,
 	shadowDarkness: c_int,
 	shadowTransitionFade: c_int,
-	/// Only meaningfully used by transparentPipeline's water-reflection ripple (see
-	/// transparent_fragment.frag) — harmless unused uniform location on the opaque pipeline, kept in
-	/// this shared struct rather than a second near-duplicate struct just for one extra field.
+
 	waterTime: c_int,
-	/// Texture handle for the sole material allowed to use the water-only path in
-	/// transparent_fragment.frag. This must not be inferred from transparency or reflectivity:
-	/// ice, glass, and future transparent foliage are separate materials.
+
 	waterTextureIndex: c_int,
-	/// Snow gets a local diffuse-shadow treatment because its bright albedo makes ordinary terrain
-	/// shadows read much harsher than on surrounding materials.
+
 	snowTextureIndex: c_int,
 	reflectionsEnabled: c_int,
 	waterReflectionDistance: c_int,
 	foliageSway: c_int,
 	weatherWind: c_int,
-	// CSM uniforms (replacing the old DDA raymarch uniforms):
-	csmLightSpaceMatrix: c_int, // mat4[3] at location 44
-	csmCascadeFar: c_int,       // float[3] at location 47
-	csmTexelSize: c_int,         // vec3 at location 50 (one texel size per cascade)
+
+	csmLightSpaceMatrix: c_int,
+	csmCascadeFar: c_int,
+	csmTexelSize: c_int,
 	csmActiveCascades: c_int,
 	handLightPositionRelative: c_int,
 	handLightColor: c_int,
@@ -124,19 +113,14 @@ pub var occlusionTestPipeline: graphics.Pipeline = undefined;
 pub var vao: graphics.VertexArray = undefined;
 pub var faceBuffers: [settings.highestSupportedLod + 1]graphics.LargeBuffer(FaceData) = undefined;
 pub var lightBuffers: [settings.highestSupportedLod + 1]graphics.LargeBuffer(u32) = undefined;
-/// LOD0-only per-chunk voxel occupancy for the sun/moon shadow raymarch (see shadow.glsl). Three
-/// bit-planes back to back per chunk — opaque, leaf, coarse (4x4x4-block "any occupancy" for the
-/// raymarch's mip-accelerated skip-empty-space stepping) — see ChunkMesh.uploadOccupancy for the exact
-/// layout. Consumed by renderer.zig's per-frame chunk-index window (ShadowRaymarch), not by
-/// chunkBuffer/ChunkData — a shadow ray needs to look up occupancy by *world position*, not by the
-/// draw-time chunkID this buffer's siblings are keyed on.
+
 pub var occupancyBuffer: graphics.LargeBuffer(u32) = undefined;
 pub var chunkBuffer: graphics.LargeBuffer(ChunkData) = undefined;
 pub var commandBuffer: graphics.LargeBuffer(IndirectData) = undefined;
 pub var chunkIDBuffer: graphics.LargeBuffer(u32) = undefined;
 pub var quadsDrawn: usize = 0;
 pub var transparentQuadsDrawn: usize = 0;
-pub const maxQuadsInIndexBuffer = 3 << (3*chunk.chunkShift); // maximum 3 faces/block
+pub const maxQuadsInIndexBuffer = 3 << (3*chunk.chunkShift);
 
 pub fn init() void {
 	startTimestamp = main.timestamp();
@@ -214,7 +198,7 @@ pub fn init() void {
 		faceBuffers[i].init(main.globalAllocator, 1 << 20, 3);
 		lightBuffers[i].init(main.globalAllocator, 1 << 20, 10);
 	}
-	occupancyBuffer.init(main.globalAllocator, 1 << 16, 20); // 20, not 11 — see shadow.glsl's binding comment for why
+	occupancyBuffer.init(main.globalAllocator, 1 << 16, 20);
 	chunkBuffer.init(main.globalAllocator, 1 << 20, 6);
 	commandBuffer.init(main.globalAllocator, 1 << 20, 8);
 	chunkIDBuffer.init(main.globalAllocator, 1 << 20, 9);
@@ -268,8 +252,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 
 	c.glUniform3f(locations.ambientLight, ambient[0], ambient[1], ambient[2]);
 	const weatherVisibility: f32 = if (main.game.world) |world| world.dayTime.weatherVisibility else 0.0;
-	// Storms diffuse the sun through a thick cloud ceiling, so sharply defined CSM/cloud shadows should
-	// progressively flatten rather than remain black stripes on otherwise dim terrain.
+
 	c.glUniform1f(locations.weatherShadowFade, std.math.clamp(weatherVisibility*1.1, 0.0, 0.9));
 
 	c.glUniform1f(locations.zNear, renderer.zNear);
@@ -285,14 +268,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform3fv(locations.sunDirection, 1, @ptrCast(&sunDirection));
 	c.glUniform1i(locations.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
 	c.glUniform1f(locations.shadowDarkness, main.settings.shadowDarkness);
-	// sunDirection above is getShadowLightDirection()'s output, which clamps elevation to >= 0.35 (see
-	// that function's doc comment) — meaning shadow.glsl's own horizonFade (which fades shadow contrast
-	// out as abs(sunDirection.z) approaches 0, meant to hide the sun/moon crossing's instantaneous
-	// direction flip) can never actually engage: the clamp keeps sunDirection.z comfortably outside
-	// horizonFade's 0.02-0.18 window at all times, defeating that safety net exactly when it's needed
-	// most. shadowTransitionFade is a second, independent signal for "how close are we to the crossing"
-	// that isn't affected by the elevation clamp (see DayTime.getShadowTransitionFade's doc comment) —
-	// shadow.glsl blends toward fully-lit using this instead of (in addition to) horizonFade.
+
 	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 	c.glUniform1i(locations.reflectionsEnabled, @intFromBool(main.settings.reflections));
 	c.glUniform1f(locations.waterReflectionDistance, main.settings.waterReflectionDistance);
@@ -307,10 +283,9 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	const weatherWind = game.world.?.weatherGrid.snapshot().wind;
 	c.glUniform2fv(locations.weatherWind, 1, @ptrCast(&weatherWind));
 
-	// CSM: upload the 3 cascade light-space matrices and cascade split distances.
 	{
 		const csm = &renderer.CascadedShadowMap;
-		// Upload flat array of 3×16 floats (column-major mat4 order as GL expects)
+
 		c.glUniformMatrix4fv(locations.csmLightSpaceMatrix, 3, c.GL_FALSE, @ptrCast(&csm.lightSpaceMatricesGL));
 		c.glUniform1fv(locations.csmCascadeFar, 3, @ptrCast(&csm.cascadeFarDistances));
 		const csmTexelSizes = [3]f32{
@@ -320,14 +295,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 		};
 		c.glUniform3fv(locations.csmTexelSize, 1, @ptrCast(&csmTexelSizes));
 		c.glUniform1i(locations.csmActiveCascades, @intCast(csm.activeCascadeCount));
-		// Bind the 3 shadow map textures to bindings 6, 7, 8 UNCONDITIONALLY, even with
-		// settings.shadows off - chunk_fragment.frag's sampler2DShadow uniforms (csmMap0/1/2) always
-		// exist at these bindings and shadow.glsl's own `if (!shadowsEnabled) return 1.0;` is only a
-        // runtime branch, not something the shader compiler proves unreachable. If nothing is bound to
-        // these units while shadows are disabled (as this used to do by skipping this whole block), GL's
-		// validation layer correctly flags reading an empty/wrong-format texture through a shadow
-		// sampler as undefined behaviour, even though the sampled value is always discarded afterward.
-		// Keeping the (possibly stale, all-border-color) depth textures bound here is cheap and harmless.
+
 		c.glActiveTexture(c.GL_TEXTURE6);
 		c.glBindTexture(c.GL_TEXTURE_2D, csm.shadowFBs[0].depthTexture);
 		c.glActiveTexture(c.GL_TEXTURE7);
@@ -373,14 +341,12 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	transparentPipeline.bind(null);
 
 	c.glUniform3fv(transparentUniforms.@"fog.color", 1, @ptrCast(&game.world.?.dayTime.fog.fogColor));
-	// The deferred renderer has a dedicated ground-only aerial fade above 6k. Do not let this separate
-	// transparent-material fog path reintroduce the old dense world mist over nearby sky islands.
+
 	const playerPos = game.Player.getEyePosBlocking();
 	const skyIslandAir = playerPos[2] > 2000.0;
 	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
 	var fogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
-	// Match deferred terrain fog's weather-density floor. Without it, distant transparent water stayed
-	// clear while the opaque lake bed behind it was already strongly fogged, visually erasing the water.
+
 	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
 	fogDensity = @max(fogDensity, weatherVisibility/game.world.?.dayTime.weatherFogRange);
 	c.glUniform1f(transparentUniforms.@"fog.density", fogDensity);
@@ -402,9 +368,7 @@ fn bindWaterSurfaceShaderAndUniforms(ambient: Vec3f) void {
 	const playerPos = game.Player.getEyePosBlocking();
 	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
 	c.glUniform1f(waterSurfaceUniforms.weatherFogStrength, weatherVisibility);
-	// Must exactly follow the deferred terrain weather fog tint. The raw biome fog colour can be very
-	// pale, which made the weather-water mask show up as a separate white sheet rather than dissolve
-	// into the blue-grey atmospheric haze.
+
 	var weatherFogColor = game.world.?.dayTime.fog.skyColor;
 	const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
 	weatherFogColor += (game.world.?.dayTime.fog.fogColor - weatherFogColor) * @as(Vec3f, @splat(weatherFogTint));
@@ -426,9 +390,6 @@ pub fn drawChunksIndirect(chunkIds: *const [main.settings.highestSupportedLod + 
 	}
 }
 
-/// Replays the already prepared transparent mesh into a private target while submerged. The fragment
-/// shader discards every face except a water top face above the camera, making an explicit inside-facing
-/// water ceiling without changing ordinary water blending or its depth behaviour.
 pub fn drawWaterSurfaceMask(chunkIds: *const [main.settings.highestSupportedLod + 1]main.ListManaged(u32), ambient: Vec3f, weatherMask: bool) void {
 	for (0..chunkIds.len) |i| {
 		const lod = main.settings.highestSupportedLod - i;
@@ -497,13 +458,11 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) voi
 	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
 	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 
-	// Occlusion tests:
 	occlusionTestPipeline.bind(null);
 	vao.bind();
 	c.glDrawElementsBaseVertex(c.GL_TRIANGLES, @intCast(6*6*chunkIDs.len), c.GL_UNSIGNED_INT, null, chunkIDAllocation.start*24);
 	c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT);
 
-	// Draw again:
 	commandPipeline.bind();
 	c.glUniform1i(commandUniforms.onlyDrawPreviouslyInvisible, 1);
 	c.glDispatchCompute(@intCast(@divFloor(chunkIDs.len + 63, 64)), 1, 1);
@@ -582,7 +541,7 @@ const FaceGroups = enum(u32) {
 	}
 };
 
-const PrimitiveMesh = struct { // MARK: PrimitiveMesh
+const PrimitiveMesh = struct {
 	completeList: main.MultiArray(FaceData, FaceGroups) = .{},
 	bufferAllocation: graphics.SubAllocation = .{.start = 0, .len = 0},
 	vertexCount: u31 = 0,
@@ -643,7 +602,7 @@ const PrimitiveMesh = struct { // MARK: PrimitiveMesh
 
 		const fullBuffer = faceBuffers[self.lod].allocateAndMapRange(len, &self.bufferAllocation);
 		defer faceBuffers[self.lod].unmapRange(fullBuffer);
-		// Sort the faces by normal to allow for backface culling on the GPU:
+
 		var i: u32 = 0;
 		var iStart = i;
 		for (0..7) |normal| {
@@ -687,7 +646,7 @@ const PrimitiveMesh = struct { // MARK: PrimitiveMesh
 	}
 };
 
-const SortingData = struct { // MARK: SortingData
+const SortingData = struct {
 	face: FaceData,
 	distance: u32,
 	isBackFace: bool,
@@ -709,14 +668,14 @@ const SortingData = struct { // MARK: SortingData
 		} else {
 			self.shouldBeCulled = dotVal > 0;
 		}
-		const fullDx = dx - @as(i32, @trunc(normalVector[0])); // TODO: This calculation should only be done for border faces.
+		const fullDx = dx - @as(i32, @trunc(normalVector[0]));
 		const fullDy = dy - @as(i32, @trunc(normalVector[1]));
 		const fullDz = dz - @as(i32, @trunc(normalVector[2]));
 		self.distance = @abs(fullDx) + @abs(fullDy) + @abs(fullDz);
 	}
 };
 
-pub const ChunkMesh = struct { // MARK: ChunkMesh
+pub const ChunkMesh = struct {
 	pos: chunk.ChunkPosition,
 	size: i32,
 	chunk: *chunk.Chunk,
@@ -731,8 +690,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 	lightList: []u32 = &.{},
 	lightAllocation: graphics.SubAllocation = .{.start = 0, .len = 0},
 
-	/// Only ever allocated for LOD0 (voxelSize == 1) meshes — stays {0, 0} (a safe no-op to free) for
-	/// every other LOD. See occupancyBuffer's doc comment.
 	occupancyAllocation: graphics.SubAllocation = .{.start = 0, .len = 0},
 
 	blockUpdateQueue: main.utils.CircularBufferQueue(Vec3i) = undefined,
@@ -748,7 +705,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 
 	needsLightRefresh: std.atomic.Value(bool) = .init(false),
 	needsMeshUpdate: bool = false,
-	finishedMeshing: bool = false, // Must be synced with node.finishedMeshing in mesh_storage.zig
+	finishedMeshing: bool = false,
 	finishedLighting: bool = false,
 	litNeighbors: Atomic(u32) = .init(0),
 	mutex: main.utils.Mutex = .{},
@@ -862,7 +819,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		self.finishedLighting = true;
 		self.mutex.unlock();
 
-		// Only generate a mesh if the surrounding 27 chunks finished the light generation steps.
 		var dx: i32 = -1;
 		while (dx <= 1) : (dx += 1) {
 			var dy: i32 = -1;
@@ -877,7 +833,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 
 					const shiftSelf: u5 = @intCast(((dx + 1)*3 + dy + 1)*3 + dz + 1);
 					const shiftOther: u5 = @intCast(((-dx + 1)*3 + -dy + 1)*3 + -dz + 1);
-					if (neighborMesh.litNeighbors.fetchOr(@as(u27, 1) << shiftOther, .monotonic) ^ @as(u27, 1) << shiftOther == ~@as(u27, 0)) { // Trigger mesh creation for neighbor
+					if (neighborMesh.litNeighbors.fetchOr(@as(u27, 1) << shiftOther, .monotonic) ^ @as(u27, 1) << shiftOther == ~@as(u27, 0)) {
 						neighborMesh.generateMesh(&lightRefreshList);
 					}
 					neighborMesh.mutex.lock();
@@ -895,13 +851,9 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		}
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// MARK: mesh generation
-	// --------------------------------------------------------------------------------------------
-
 	fn canBeSeenThroughOtherBlock(block: Block, other: Block, neighbor: chunk.Neighbor) bool {
 		const rotatedModel = blocks.meshes.model(block).model();
-		_ = rotatedModel; // TODO: Check if the neighbor model occludes this one. (maybe not that relevant)
+		_ = rotatedModel;
 		return block.typ != 0 and (other.typ == 0 or (block.typ != other.typ and other.viewThrough()) or other.alwaysViewThrough() or !blocks.meshes.model(other).model().isNeighborOccluded[neighbor.reverse().toInt()]);
 	}
 
@@ -975,7 +927,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 			result.alwaysViewThrough = block.alwaysViewThrough() and block.opaqueVariant() != block.typ;
 			paletteCache[i] = result;
 		}
-		// Generate the bitMasks:
+
 		for (0..chunk.chunkVolume) |index| {
 			const pos = chunk.BlockPos.fromIndex(@intCast(index));
 			const paletteId = self.chunk.data.impl.raw.data.getValue(index);
@@ -1036,7 +988,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				}
 			}
 		}
-		// Generate the meshes:
+
 		{
 			const neighbor = chunk.Neighbor.dirNegX;
 			for (1..chunk.chunkSize) |x| {
@@ -1050,15 +1002,9 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							// Same-type-and-same-data neighbors are assumed to share identical geometry (two
-							// full water blocks side by side don't need an interior wall). The `data` half of
-							// this check matters now that water's fluid level (stored in `data`) drives a
-							// shorter/taller model (see the cubyz:fluid rotation mode) - two same-`typ` water
-							// blocks at different levels are NOT the same shape, so their shared face must
-							// still render. Every other transparent block type keeps `data` at 0 always, so
-							// this is a no-op there (identical to the old typ-only check).
+
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
 						if (block.transparent()) {
@@ -1086,7 +1032,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
@@ -1115,7 +1061,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
@@ -1144,7 +1090,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
@@ -1173,7 +1119,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
@@ -1202,7 +1148,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 						bitMask &= ~setBit;
 						var block = self.chunk.data.getValue(pos.toIndex());
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
-						if (block.viewThrough() and !block.alwaysViewThrough()) { // Needs to check the neighbor block
+						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
 						}
@@ -1310,7 +1256,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 					self.lastNeighborsSameLod[neighbor.toInt()] = null;
 				}
 			}
-			// lod border:
+
 			if (self.pos.voxelSize == @as(u31, 1) << settings.highestLod) continue;
 			const neighborMesh = mesh_storage.getNeighbor(self.pos, 2*self.pos.voxelSize, neighbor) orelse {
 				self.mutex.lock();
@@ -1398,10 +1344,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		}
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// MARK: block updates
-	// --------------------------------------------------------------------------------------------
-
 	fn updateBlockLight(self: *ChunkMesh, pos: chunk.BlockPos, newBlock: Block, lightRefreshList: *main.ListManaged(chunk.ChunkPosition)) void {
 		for (self.lightingData[0..]) |lightingData| {
 			lightingData.propagateLightsDestructive(&.{pos}, lightRefreshList);
@@ -1457,7 +1399,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		self.updateBlockLight(blockPos, newBlock, lightRefreshList);
 
 		self.mutex.lock();
-		// Update neighbor chunks:
+
 		if (blockPos.x == 0) {
 			self.lastNeighborsHigherLod[chunk.Neighbor.dirNegX.toInt()] = null;
 			self.lastNeighborsSameLod[chunk.Neighbor.dirNegX.toInt()] = null;
@@ -1544,7 +1486,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		}
 
 		pub fn getPriority(self: *BlockUpdateTask) f32 {
-			return 1000000 + self.pos.getPriority(game.Player.getPosBlocking()); // TODO: This is called in loop, find a way to do this without calling the mutex every time.
+			return 1000000 + self.pos.getPriority(game.Player.getPosBlocking());
 		}
 
 		pub fn isStillNeeded(_: *BlockUpdateTask) bool {
@@ -1590,10 +1532,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 			main.globalAllocator.destroy(self);
 		}
 	};
-
-	// --------------------------------------------------------------------------------------------
-	// MARK: light refresh
-	// --------------------------------------------------------------------------------------------
 
 	pub fn scheduleLightRefresh(pos: chunk.ChunkPosition) void {
 		if (mesh_storage.getMesh(pos)) |mesh| {
@@ -1668,10 +1606,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		self.max = @max(self.opaqueMesh.max, self.transparentMesh.max);
 	}
 
-	// --------------------------------------------------------------------------------------------
-	// MARK: data upload
-	// --------------------------------------------------------------------------------------------
-
 	pub fn uploadData(self: *ChunkMesh) void {
 		if (!self.meshUploadMutex.tryLock()) return;
 		defer self.meshUploadMutex.unlock();
@@ -1690,16 +1624,10 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 		self.uploadChunkPosition();
 	}
 
-	/// One bit per voxel, packed x*1024 + y*32 + z (matches chunk.BlockPos.toIndex()'s own order, so
-	/// `chunk.data.getValue(index)` iterated 0..chunkVolume walks in exactly the order needed — no
-	/// reshuffling). Two fine planes back to back — [0, wordsPerFinePlane) opaque (solid blocks),
-	/// [wordsPerFinePlane, 2*wordsPerFinePlane) foliage & leaves (grass/flowers/leaves — `viewThrough` or `leafTag`)
-	/// — followed by one coarse plane: one bit per 4x4x4 voxel group, set if *any* shadow-casting voxel
-	/// exists in that group so the raymarch coarse stepper enters coarse cells with foliage or solid blocks.
-	const wordsPerFinePlane = chunk.chunkVolume/32; // 1024
-	const coarseGroupsPerAxis = chunk.chunkSize/4; // 8
-	const coarseGroupCount = coarseGroupsPerAxis*coarseGroupsPerAxis*coarseGroupsPerAxis; // 512
-	const wordsPerCoarsePlane = coarseGroupCount/32; // 16
+	const wordsPerFinePlane = chunk.chunkVolume/32;
+	const coarseGroupsPerAxis = chunk.chunkSize/4;
+	const coarseGroupCount = coarseGroupsPerAxis*coarseGroupsPerAxis*coarseGroupsPerAxis;
+	const wordsPerCoarsePlane = coarseGroupCount/32;
 	const occupancyWordsPerChunk = 2*wordsPerFinePlane + wordsPerCoarsePlane;
 
 	fn uploadOccupancy(self: *ChunkMesh) void {
@@ -1737,10 +1665,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 			.oldVisibilityState = 0,
 		}}, &self.chunkAllocation);
 	}
-
-	// --------------------------------------------------------------------------------------------
-	// MARK: rendering
-	// --------------------------------------------------------------------------------------------
 
 	pub fn prepareRendering(self: *ChunkMesh, chunkLists: *[main.settings.highestSupportedLod + 1]main.ListManaged(u32)) void {
 		if (self.opaqueMesh.vertexCount == 0) return;
@@ -1820,7 +1744,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				self.blockBreakingFacesSortingData[i].update(updatePos[0], updatePos[1], updatePos[2]);
 			}
 
-			// Sort by back vs front face:
 			var backFaceStart: usize = 0;
 			{
 				var i: usize = 0;
@@ -1840,7 +1763,6 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				self.culledSortingCount = @intCast(culledStart);
 			}
 
-			// Sort it using bucket sort:
 			var buckets: [34*3]u32 = undefined;
 			@memset(&buckets, 0);
 			for (self.blockBreakingFacesSortingData) |val| {
@@ -1855,13 +1777,13 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				val.* = prefixSum;
 				prefixSum += copy;
 			}
-			// Move it over into a new buffer:
+
 			for (0..backFaceStart) |i| {
 				const bucket = 34*3 - 1 - self.currentSorting[i].distance;
 				self.sortingOutputBuffer[buckets[bucket]] = self.currentSorting[i].face;
 				buckets[bucket] += 1;
 			}
-			// Block breaking faces should be drawn after front faces, but before the corresponding backfaces.
+
 			for (self.blockBreakingFacesSortingData) |val| {
 				const bucket = 34*3 - 1 - val.distance;
 				self.sortingOutputBuffer[buckets[bucket]] = val.face;
@@ -1873,7 +1795,7 @@ pub const ChunkMesh = struct { // MARK: ChunkMesh
 				buckets[bucket] += 1;
 			}
 			self.culledSortingCount += @intCast(self.blockBreakingFaces.items.len);
-			// Upload:
+
 			faceBuffers[self.transparentMesh.lod].uploadData(self.sortingOutputBuffer[0..self.culledSortingCount], &self.transparentMesh.bufferAllocation);
 			self.uploadChunkPosition();
 		}

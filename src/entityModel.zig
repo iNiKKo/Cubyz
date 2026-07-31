@@ -113,7 +113,6 @@ pub const EntityModel = struct {
 			playerEntityModels.append(main.worldArena, index);
 		}
 
-		// get TexturePath
 		{
 			self.texturePath = &.{};
 			const fileEnding = ".png";

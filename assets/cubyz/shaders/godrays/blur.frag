@@ -5,14 +5,12 @@ layout(location = 0) out vec4 fragColor;
 
 layout(binding = 3) uniform sampler2D maskColor;
 
-uniform vec2 sunScreenPos; // texcoord-space ([0,1]) screen position of the sun/moon this frame
-uniform float strength; // combined godRayIntensity * horizon-fade * screen-center-proximity fade
+uniform vec2 sunScreenPos;
+uniform float strength;
 
 const int sampleCount = 32;
 const float decay = 0.96;
 
-// Interleaved gradient noise (Jorge Jimenez) — cheap, no texture lookup, breaks up the banding a fixed
-// 32-tap geometric-decay march would otherwise show as visible rings radiating from the sun.
 float ditherNoise(vec2 screenPos) {
 	return fract(52.9829189*fract(dot(screenPos, vec2(0.06711056, 0.00583715))));
 }

@@ -42,8 +42,6 @@ pub fn generate(self: *GroundPatch, mode: GenerationMode, x: i32, y: i32, z: i32
 	const orientation = 2*std.math.pi*random.nextFloat(seed);
 	const ellipseParam = 1 + random.nextFloat(seed);
 
-	// Orientation of the major and minor half axis of the ellipse.
-	// For now simply use a minor axis 1/ellipseParam as big as the major.
 	const xMain = @sin(orientation)/width;
 	const yMain = @cos(orientation)/width;
 	const xSecn = ellipseParam*@cos(orientation)/width;

@@ -41,7 +41,7 @@ pub var scale: f32 = undefined;
 
 pub var hoveredItemSlot: ?*ItemSlot = null;
 
-const GuiCommandQueue = struct { // MARK: GuiCommandQueue
+const GuiCommandQueue = struct {
 	const Action = enum {
 		open,
 		openModal,
@@ -147,7 +147,7 @@ pub fn deinitWindowList() void {
 	GuiCommandQueue.deinit();
 }
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	inline for (@typeInfo(windowlist).@"struct".decls) |decl| {
 		const windowStruct = @field(windowlist, decl.name);
 		if (@hasDecl(windowStruct, "init")) {
@@ -193,7 +193,7 @@ pub fn deinit() void {
 	}
 }
 
-pub fn save() void { // MARK: save()
+pub fn save() void {
 	var guiZon = ZonElement.initObject(main.stackAllocator);
 	defer guiZon.deinit(main.stackAllocator);
 	for (windowList.items) |window| {
@@ -228,7 +228,6 @@ pub fn save() void { // MARK: save()
 		guiZon.put(window.id, windowZon);
 	}
 
-	// Merge with the old settings file to preserve unknown settings.
 	var oldZon: ZonElement = main.files.cubyzDir().readToZon(main.stackAllocator, "gui_layout.zig.zon") catch |err| blk: {
 		if (err != error.FileNotFound) {
 			std.log.err("Could not read gui_layout.zig.zon: {s}", .{@errorName(err)});
@@ -509,7 +508,6 @@ pub fn mainButtonPressed(_: main.Window.Key.Modifiers) void {
 		return;
 	}
 
-	// reverse order of rendering, the last-rendered element is the first one that we should try to interact with
 	var i: usize = openWindows.items.len;
 	while (i > 0) {
 		i -= 1;
@@ -542,7 +540,7 @@ pub fn mainButtonReleased(_: main.Window.Key.Modifiers) void {
 			selectedWindow = window;
 		}
 	}
-	if (selectedWindow != oldWindow) { // Unselect the window if the mouse left it.
+	if (selectedWindow != oldWindow) {
 		selectedWindow = null;
 	}
 	if (oldWindow) |_oldWindow| {
@@ -583,7 +581,7 @@ pub fn updateAndRenderGui() void {
 			selected.updateSelected(mousePos);
 		}
 		hoveredItemSlot = null;
-		// reverse order of rendering, the last-rendered element is the first one that we should try to interact with
+
 		var i: usize = openWindows.items.len;
 		while (i != 0) {
 			i -= 1;
@@ -632,7 +630,7 @@ pub fn toggleGameMenu() void {
 	main.Window.setMouseGrabbed(!main.Window.grabbed);
 	if (!main.Window.grabbed) {
 		hideGui = false;
-	} else { // Take of the currently held item stack and close some windows
+	} else {
 		inventory.carried.depositOrDrop(&.{main.game.Player.inventory});
 		hoveredItemSlot = null;
 		var i: usize = 0;
@@ -650,7 +648,7 @@ pub fn toggleGameMenu() void {
 	}
 }
 
-pub const inventory = struct { // MARK: inventory
+pub const inventory = struct {
 	const ItemStack = main.items.ItemStack;
 	const ClientInventory = main.items.Inventory.ClientInventory;
 	pub var carried: ClientInventory = undefined;
@@ -834,7 +832,7 @@ pub const inventory = struct { // MARK: inventory
 		if (!initialized) return;
 		carriedItemSlot.pos = mousePos - Vec2f{12, 12};
 		carriedItemSlot.render(.{0, 0});
-		// Draw tooltip:
+
 		const hovered = hoveredItemSlot orelse return;
 		if (carried.getAmount(0) == 0) {
 			if (hovered.inventory.getItem(hovered.itemSlot).getTooltip()) |tooltipContent| {

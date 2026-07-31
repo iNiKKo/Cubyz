@@ -308,7 +308,7 @@ pub const StructureBuildingBlock = struct {
 		return self;
 	}
 	pub fn postResolutionChecks(self: StructureBuildingBlock) void {
-		// Collect all unique child blocks used in blueprints of this SBB.
+
 		var childBlocksInBlueprints: List(LocalBlockIndex) = .empty;
 		defer childBlocksInBlueprints.deinit(main.stackAllocator);
 
@@ -318,12 +318,12 @@ pub const StructureBuildingBlock = struct {
 			for (blueprints.items.?[0].childBlocks) |child| {
 				if (std.mem.containsAtLeastScalar(LocalBlockIndex, childBlocksInBlueprints.items, 1, child.index)) continue;
 				childBlocksInBlueprints.append(main.stackAllocator, child.index);
-				// Check that all child blocks present in any of the blueprints have corresponding configurations.
+
 				if (self.children[@intFromEnum(child.index)] != null) continue;
 				std.log.err("['{s}'] Blueprint ({}) requires child block {s} but no configuration was specified for it.", .{self.id, blueprintIndex, child.id()});
 			}
 		}
-		// Check that all configured child blocks are used somewhere in one of the blueprints.
+
 		for (self.children, 0..) |child, childBlockIndex| {
 			if (child == null) continue;
 			if (std.mem.containsAtLeastScalar(LocalBlockIndex, childBlocksInBlueprints.items, 1, @enumFromInt(childBlockIndex))) continue;
@@ -380,7 +380,7 @@ pub fn registerChildBlock(numericId: u16, stringId: []const u8) void {
 
 	const index: u16 = @intCast(childBlockNumericIdMap.count());
 	childBlockNumericIdMap.put(main.worldArena.allocator, numericId, @enumFromInt(index)) catch unreachable;
-	// Take only color name from the ID.
+
 	var iterator = std.mem.splitBackwardsScalar(u8, stringId, '/');
 	const colorName = iterator.first();
 	const colorNameDupe = main.worldArena.dupe(u8, colorName);
@@ -406,7 +406,6 @@ pub fn registerBlueprints(blueprints: *Assets.BytesHashMap) !void {
 
 		const stringId = entry.key_ptr.*;
 
-		// Rotated copies need to be made before initializing BlueprintEntry as to removes origin and child blocks.
 		const blueprint0 = Blueprint.load(main.worldArena, entry.value_ptr.*) catch |err| {
 			std.log.err("Could not load blueprint '{s}' ({s})", .{stringId, @errorName(err)});
 			continue;

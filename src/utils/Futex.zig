@@ -1,16 +1,3 @@
-// TODO: Remove after https://codeberg.org/ziglang/zig/issues/31912 was merged
-
-// zig fmt: off
-
-//! A mechanism used to block (`wait`) and unblock (`wake`) threads using a
-//! 32bit memory address as hints.
-//!
-//! Blocking a thread is acknowledged only if the 32bit memory address is equal
-//! to a given value. This check helps avoid block/unblock deadlocks which
-//! occur if a `wake()` happens before a `wait()`.
-//!
-//! Using Futex, other Thread synchronization primitives can be built which
-//! efficiently wait for cross-thread events or signals.
 
 const std = @import("std");
 const main = @import("main");
@@ -25,33 +12,17 @@ const atomic = std.atomic;
 
 const Futex = @This();
 
-/// Checks if `ptr` still contains the value `expect` and, if so, blocks the caller until either:
-/// - The value at `ptr` is no longer equal to `expect`.
-/// - The caller is unblocked by a matching `wake()`.
-/// - The caller is unblocked spuriously ("at random").
-///
-/// The checking of `ptr` and `expect`, along with blocking the caller, is done atomically
-/// and totally ordered (sequentially consistent) with respect to other wait()/wake() calls on the same `ptr`.
 pub fn wait(ptr: *const atomic.Value(u32), expect: u32) void {
 	@branchHint(.cold);
 
 	Impl.wait(ptr, expect, null) catch |err| switch (err) {
-		error.Timeout => unreachable, // null timeout meant to wait forever
+		error.Timeout => unreachable,
 	};
 }
 
-/// Checks if `ptr` still contains the value `expect` and, if so, blocks the caller until either:
-/// - The value at `ptr` is no longer equal to `expect`.
-/// - The caller is unblocked by a matching `wake()`.
-/// - The caller is unblocked spuriously ("at random").
-/// - The caller blocks for longer than the given timeout. In which case, `error.Timeout` is returned.
-///
-/// The checking of `ptr` and `expect`, along with blocking the caller, is done atomically
-/// and totally ordered (sequentially consistent) with respect to other wait()/wake() calls on the same `ptr`.
 pub fn timedWait(ptr: *const atomic.Value(u32), expect: u32, timeout_ns: u64) error{Timeout}!void {
 	@branchHint(.cold);
 
-	// Avoid calling into the OS for no-op timeouts.
 	if (timeout_ns == 0) {
 		if (ptr.load(.seq_cst) != expect) return;
 		return error.Timeout;
@@ -60,11 +31,9 @@ pub fn timedWait(ptr: *const atomic.Value(u32), expect: u32, timeout_ns: u64) er
 	return Impl.wait(ptr, expect, timeout_ns);
 }
 
-/// Unblocks at most `max_waiters` callers blocked in a `wait()` call on `ptr`.
 pub fn wake(ptr: *const atomic.Value(u32), max_waiters: u32) void {
 	@branchHint(.cold);
 
-	// Avoid calling into the OS if there's nothing to wake up.
 	if (max_waiters == 0) {
 		return;
 	}
@@ -74,8 +43,6 @@ pub fn wake(ptr: *const atomic.Value(u32), max_waiters: u32) void {
 
 const Impl = if (builtin.single_threaded) SingleThreadedImpl else if (builtin.os.tag == .windows) WindowsImpl else if (builtin.os.tag.isDarwin()) DarwinImpl else if (builtin.os.tag == .linux) LinuxImpl else if (builtin.os.tag == .freebsd) FreebsdImpl else if (builtin.os.tag == .openbsd) OpenbsdImpl else if (builtin.target.cpu.arch.isWasm()) WasmImpl else if (std.Thread.use_pthreads) PosixImpl else UnsupportedImpl;
 
-/// We can't do @compileError() in the `Impl` switch statement above as its eagerly evaluated.
-/// So instead, we @compileError() on the methods themselves for platforms which don't support futex.
 const UnsupportedImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
 		return unsupported(.{ptr, expect, timeout});
@@ -97,10 +64,8 @@ const SingleThreadedImpl = struct {
 			return;
 		}
 
-		// There are no threads to wake us up.
-		// So if we wait without a timeout we would never wake up.
 		const delay = timeout orelse {
-			unreachable; // deadlock detected
+			unreachable;
 		};
 
 		_ = delay;
@@ -108,21 +73,17 @@ const SingleThreadedImpl = struct {
 	}
 
 	fn wake(ptr: *const atomic.Value(u32), max_waiters: u32) void {
-		// There are no other threads to possibly wake up
+
 		_ = ptr;
 		_ = max_waiters;
 	}
 };
 
-// We use WaitOnAddress through NtDll instead of API-MS-Win-Core-Synch-l1-2-0.dll
-// as it's generally already a linked target and is autoloaded into all processes anyway.
 const WindowsImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
 		var timeout_value: windows.LARGE_INTEGER = undefined;
 		var timeout_ptr: ?*const windows.LARGE_INTEGER = null;
 
-		// NTDLL functions work with time in units of 100 nanoseconds.
-		// Positive values are absolute deadlines while negative values are relative durations.
 		if (timeout) |delay| {
 			timeout_value = @as(windows.LARGE_INTEGER, @intCast(delay/100));
 			timeout_value = -timeout_value;
@@ -159,27 +120,15 @@ const WindowsImpl = struct {
 
 const DarwinImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
-		// Darwin XNU 7195.50.7.100.1 introduced __ulock_wait2 and migrated code paths (notably pthread_cond_t) towards it:
-		// https://github.com/apple/darwin-xnu/commit/d4061fb0260b3ed486147341b72468f836ed6c8f#diff-08f993cc40af475663274687b7c326cc6c3031e0db3ac8de7b24624610616be6
-		//
-		// This XNU version appears to correspond to 11.0.1:
-		// https://kernelshaman.blogspot.com/2021/01/building-xnu-for-macos-big-sur-1101.html
-		//
-		// ulock_wait() uses 32-bit micro-second timeouts where 0 = INFINITE or no-timeout
-		// ulock_wait2() uses 64-bit nano-second timeouts (with the same convention)
+
 		const supports_ulock_wait2 = builtin.target.os.version_range.semver.min.major >= 11;
 
 		var timeout_ns: u64 = 0;
 		if (timeout) |delay| {
-			assert(delay != 0); // handled by timedWait()
+			assert(delay != 0);
 			timeout_ns = delay;
 		}
 
-		// If we're using `__ulock_wait` and `timeout` is too big to fit inside a `u32` count of
-		// micro-seconds (around 70min), we'll request a shorter timeout. This is fine (users
-		// should handle spurious wakeups), but we need to remember that we did so, so that
-		// we don't return `Timeout` incorrectly. If that happens, we set this variable to
-		// true so that we we know to ignore the ETIMEDOUT result.
 		var timeout_overflowed = false;
 
 		const addr: *const anyopaque = ptr;
@@ -202,13 +151,11 @@ const DarwinImpl = struct {
 
 		if (status >= 0) return;
 		switch (@as(c.E, @enumFromInt(-status))) {
-			// Wait was interrupted by the OS or other spurious signalling.
+
 			.INTR => {},
-			// Address of the futex was paged out. This is unlikely, but possible in theory, and
-			// pthread/libdispatch on darwin bother to handle it. In this case we'll return
-			// without waiting, but the caller should retry anyway.
+
 			.FAULT => {},
-			// Only report Timeout if we didn't have to cap the timeout
+
 			.TIMEDOUT => {
 				assert(timeout != null);
 				if (!timeout_overflowed) return error.Timeout;
@@ -230,17 +177,16 @@ const DarwinImpl = struct {
 
 			if (status >= 0) return;
 			switch (@as(c.E, @enumFromInt(-status))) {
-				.INTR => continue, // spurious wake()
-				.FAULT => unreachable, // __ulock_wake doesn't generate EFAULT according to darwin pthread_cond_t
-				.NOENT => return, // nothing was woken up
-				.ALREADY => unreachable, // only for UL.Op.WAKE_THREAD
+				.INTR => continue,
+				.FAULT => unreachable,
+				.NOENT => return,
+				.ALREADY => unreachable,
 				else => unreachable,
 			}
 		}
 	}
 };
 
-// https://man7.org/linux/man-pages/man2/futex.2.html
 const LinuxImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
 		var ts: linux.timespec = undefined;
@@ -257,15 +203,15 @@ const LinuxImpl = struct {
 		);
 
 		switch (linux.errno(rc)) {
-			.SUCCESS => {}, // notified by `wake()`
-			.INTR => {}, // spurious wakeup
-			.AGAIN => {}, // ptr.* != expect
+			.SUCCESS => {},
+			.INTR => {},
+			.AGAIN => {},
 			.TIMEDOUT => {
 				assert(timeout != null);
 				return error.Timeout;
 			},
-			.INVAL => {}, // possibly timeout overflow
-			.FAULT => unreachable, // ptr was invalid
+			.INVAL => {},
+			.FAULT => unreachable,
 			else => unreachable,
 		}
 	}
@@ -278,15 +224,14 @@ const LinuxImpl = struct {
 		);
 
 		switch (linux.errno(rc)) {
-			.SUCCESS => {}, // successful wake up
-			.INVAL => {}, // invalid futex_wait() on ptr done elsewhere
-			.FAULT => {}, // pointer became invalid while doing the wake
+			.SUCCESS => {},
+			.INVAL => {},
+			.FAULT => {},
 			else => unreachable,
 		}
 	}
 };
 
-// https://www.freebsd.org/cgi/man.cgi?query=_umtx_op&sektion=2&n=1
 const FreebsdImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
 		var tm_size: usize = 0;
@@ -297,7 +242,7 @@ const FreebsdImpl = struct {
 			tm_ptr = &tm;
 			tm_size = @sizeOf(@TypeOf(tm));
 
-			tm.flags = 0; // use relative time not UMTX_ABSTIME
+			tm.flags = 0;
 			tm.clockid = .MONOTONIC;
 			tm.timeout.sec = @as(@TypeOf(tm.timeout.sec), @intCast(timeout_ns/std.time.ns_per_s));
 			tm.timeout.nsec = @as(@TypeOf(tm.timeout.nsec), @intCast(timeout_ns%std.time.ns_per_s));
@@ -313,13 +258,13 @@ const FreebsdImpl = struct {
 
 		switch (std.posix.errno(rc)) {
 			.SUCCESS => {},
-			.FAULT => unreachable, // one of the args points to invalid memory
-			.INVAL => unreachable, // arguments should be correct
+			.FAULT => unreachable,
+			.INVAL => unreachable,
 			.TIMEDOUT => {
 				assert(timeout != null);
 				return error.Timeout;
 			},
-			.INTR => {}, // spurious wake
+			.INTR => {},
 			else => unreachable,
 		}
 	}
@@ -329,20 +274,19 @@ const FreebsdImpl = struct {
 			@intFromPtr(&ptr.raw),
 			@intFromEnum(c.UMTX_OP.WAKE_PRIVATE),
 			@as(c_ulong, max_waiters),
-			0, // there is no timeout struct
-			0, // there is no timeout struct pointer
+			0,
+			0,
 		);
 
 		switch (std.posix.errno(rc)) {
 			.SUCCESS => {},
-			.FAULT => {}, // it's ok if the ptr doesn't point to valid memory
-			.INVAL => unreachable, // arguments should be correct
+			.FAULT => {},
+			.INVAL => unreachable,
 			else => unreachable,
 		}
 	}
 };
 
-// https://man.openbsd.org/futex.2
 const OpenbsdImpl = struct {
 	fn wait(ptr: *const atomic.Value(u32), expect: u32, timeout: ?u64) error{Timeout}!void {
 		var ts: c.timespec = undefined;
@@ -356,21 +300,21 @@ const OpenbsdImpl = struct {
 			c.FUTEX.WAIT | c.FUTEX.PRIVATE_FLAG,
 			@as(c_int, @bitCast(expect)),
 			if (timeout != null) &ts else null,
-			null, // FUTEX.WAIT takes no requeue address
+			null,
 		);
 
 		switch (std.posix.errno(rc)) {
-			.SUCCESS => {}, // woken up by wake
-			.NOSYS => unreachable, // the futex operation shouldn't be invalid
-			.FAULT => unreachable, // ptr was invalid
-			.AGAIN => {}, // ptr != expect
-			.INVAL => unreachable, // invalid timeout
+			.SUCCESS => {},
+			.NOSYS => unreachable,
+			.FAULT => unreachable,
+			.AGAIN => {},
+			.INVAL => unreachable,
 			.TIMEDOUT => {
 				assert(timeout != null);
 				return error.Timeout;
 			},
-			.INTR => {}, // spurious wake from signal
-			.CANCELED => {}, // spurious wake from signal with SA_RESTART
+			.INTR => {},
+			.CANCELED => {},
 			else => unreachable,
 		}
 	}
@@ -380,11 +324,10 @@ const OpenbsdImpl = struct {
 			@as(*const volatile u32, @ptrCast(&ptr.raw)),
 			c.FUTEX.WAKE | c.FUTEX.PRIVATE_FLAG,
 			std.math.cast(c_int, max_waiters) orelse std.math.maxInt(c_int),
-			null, // FUTEX.WAKE takes no timeout ptr
-			null, // FUTEX.WAKE takes no requeue address
+			null,
+			null,
 		);
 
-		// returns number of threads woken up.
 		assert(rc >= 0);
 	}
 };
@@ -406,8 +349,8 @@ const WasmImpl = struct {
 				[timeout] "r" (to),
 		);
 		switch (result) {
-			0 => {}, // ok
-			1 => {}, // expected =! loaded
+			0 => {},
+			1 => {},
 			2 => return error.Timeout,
 			else => unreachable,
 		}
@@ -426,13 +369,10 @@ const WasmImpl = struct {
 			: [ptr] "r" (&ptr.raw),
 				[waiters] "r" (max_waiters),
 		);
-		_ = woken_count; // can be 0 when linker flag 'shared-memory' is not enabled
+		_ = woken_count;
 	}
 };
 
-/// Modified version of linux's futex and Go's sema to implement userspace wait queues with pthread:
-/// https://code.woboq.org/linux/linux/kernel/futex.c.html
-/// https://go.dev/src/runtime/sema.go
 const PosixImpl = struct {
 	const Event = struct {
 		cond: c.pthread_cond_t,
@@ -440,14 +380,14 @@ const PosixImpl = struct {
 		state: enum { empty, waiting, notified },
 
 		fn init(self: *Event) void {
-			// Use static init instead of pthread_cond/mutex_init() since this is generally faster.
+
 			self.cond = .{};
 			self.mutex = .{};
 			self.state = .empty;
 		}
 
 		fn deinit(self: *Event) void {
-			// Some platforms reportedly give EINVAL for statically initialized pthread types.
+
 			const rc = c.pthread_cond_destroy(&self.cond);
 			assert(rc == .SUCCESS or rc == .INVAL);
 
@@ -461,14 +401,10 @@ const PosixImpl = struct {
 			assert(c.pthread_mutex_lock(&self.mutex) == .SUCCESS);
 			defer assert(c.pthread_mutex_unlock(&self.mutex) == .SUCCESS);
 
-			// Early return if the event was already set.
 			if (self.state == .notified) {
 				return;
 			}
 
-			// Compute the absolute timeout if one was specified.
-			// POSIX requires that REALTIME is used by default for the pthread timedwait functions.
-			// This can be changed with pthread_condattr_setclock, but it's an extension and may not be available everywhere.
 			var ts: c.timespec = undefined;
 			if (timeout) |timeout_ns| {
 				ts = std.posix.clock_gettime(c.CLOCK.REALTIME) catch unreachable;
@@ -481,18 +417,16 @@ const PosixImpl = struct {
 				}
 			}
 
-			// Start waiting on the event - there can be only one thread waiting.
 			assert(self.state == .empty);
 			self.state = .waiting;
 
 			while (true) {
-				// Block using either pthread_cond_wait or pthread_cond_timewait if there's an absolute timeout.
+
 				const rc = blk: {
 					if (timeout == null) break :blk c.pthread_cond_wait(&self.cond, &self.mutex);
 					break :blk c.pthread_cond_timedwait(&self.cond, &self.mutex, &ts);
 				};
 
-				// After waking up, check if the event was set.
 				if (self.state == .notified) {
 					return;
 				}
@@ -501,12 +435,12 @@ const PosixImpl = struct {
 				switch (rc) {
 					.SUCCESS => {},
 					.TIMEDOUT => {
-						// If timed out, reset the event to avoid the set() thread doing an unnecessary signal().
+
 						self.state = .empty;
 						return error.Timeout;
 					},
-					.INVAL => unreachable, // cond, mutex, and potentially ts should all be valid
-					.PERM => unreachable, // mutex is locked when cond_*wait() functions are called
+					.INVAL => unreachable,
+					.PERM => unreachable,
 					else => unreachable,
 				}
 			}
@@ -516,13 +450,9 @@ const PosixImpl = struct {
 			assert(c.pthread_mutex_lock(&self.mutex) == .SUCCESS);
 			defer assert(c.pthread_mutex_unlock(&self.mutex) == .SUCCESS);
 
-			// Make sure that multiple calls to set() were not done on the same Event.
 			const old_state = self.state;
 			assert(old_state != .notified);
 
-			// Mark the event as set and wake up the waiting thread if there was one.
-			// This must be done while the mutex as the wait() thread could deallocate
-			// the condition variable once it observes the new state, potentially causing a UAF if done unlocked.
 			self.state = .notified;
 			if (old_state == .waiting) {
 				assert(c.pthread_cond_signal(&self.cond) == .SUCCESS);
@@ -540,7 +470,6 @@ const PosixImpl = struct {
 		event: Event,
 	};
 
-	// An unordered set of Waiters
 	const WaitList = struct {
 		top: ?*Waiter = null,
 		len: usize = 0,
@@ -561,12 +490,10 @@ const PosixImpl = struct {
 
 	const WaitQueue = struct {
 		fn insert(treap: *Treap, address: usize, waiter: *Waiter) void {
-			// prepare the waiter to be inserted.
+
 			waiter.next = null;
 			waiter.is_queued = true;
 
-			// Find the wait queue entry associated with the address.
-			// If there isn't a wait queue on the address, this waiter creates the queue.
 			var entry = treap.getEntryFor(address);
 			const entry_node = entry.node orelse {
 				waiter.prev = null;
@@ -575,23 +502,20 @@ const PosixImpl = struct {
 				return;
 			};
 
-			// There's a wait queue on the address; get the queue head and tail.
 			const head: *Waiter = @fieldParentPtr("node", entry_node);
 			const tail = head.tail.?;
 
-			// Push the waiter to the tail by replacing it and linking to the previous tail.
 			head.tail = waiter;
 			tail.next = waiter;
 			waiter.prev = tail;
 		}
 
 		fn remove(treap: *Treap, address: usize, max_waiters: usize) WaitList {
-			// Find the wait queue associated with this address and get the head/tail if any.
+
 			var entry = treap.getEntryFor(address);
 			var queue_head: ?*Waiter = if (entry.node) |node| @fieldParentPtr("node", node) else null;
 			const queue_tail = if (queue_head) |head| head.tail else null;
 
-			// Once we're done updating the head, fix it's tail pointer and update the treap's queue head as well.
 			defer entry.set(blk: {
 				const new_head = queue_head orelse break :blk null;
 				new_head.tail = queue_tail;
@@ -600,13 +524,11 @@ const PosixImpl = struct {
 
 			var removed = WaitList{};
 			while (removed.len < max_waiters) {
-				// dequeue and collect waiters from their wait queue.
+
 				const waiter = queue_head orelse break;
 				queue_head = waiter.next;
 				removed.push(waiter);
 
-				// When dequeueing, we must mark is_queued as false.
-				// This ensures that a waiter which calls tryRemove() returns false.
 				assert(waiter.is_queued);
 				waiter.is_queued = false;
 			}
@@ -620,9 +542,9 @@ const PosixImpl = struct {
 			}
 
 			queue_remove: {
-				// Find the wait queue associated with the address.
+
 				var entry = blk: {
-					// A waiter without a previous link means it's the queue head that's in the treap so we can avoid lookup.
+
 					if (waiter.prev == null) {
 						assert(waiter.node.key == address);
 						break :blk treap.getEntryForExisting(&waiter.node);
@@ -630,32 +552,24 @@ const PosixImpl = struct {
 					break :blk treap.getEntryFor(address);
 				};
 
-				// The queue head and tail must exist if we're removing a queued waiter.
 				const head: *Waiter = @fieldParentPtr("node", entry.node.?);
 				const tail = head.tail.?;
 
-				// A waiter with a previous link is never the head of the queue.
 				if (waiter.prev) |prev| {
 					assert(waiter != head);
 					prev.next = waiter.next;
 
-					// A waiter with both a previous and next link is in the middle.
-					// We only need to update the surrounding waiter's links to remove it.
 					if (waiter.next) |next| {
 						assert(waiter != tail);
 						next.prev = waiter.prev;
 						break :queue_remove;
 					}
 
-					// A waiter with a previous but no next link means it's the tail of the queue.
-					// In that case, we need to update the head's tail reference.
 					assert(waiter == tail);
 					head.tail = waiter.prev;
 					break :queue_remove;
 				}
 
-				// A waiter with no previous link means it's the queue head of queue.
-				// We must replace (or remove) the head waiter reference in the treap.
 				assert(waiter == head);
 				entry.set(blk: {
 					const new_head = waiter.next orelse break :blk null;
@@ -664,7 +578,6 @@ const PosixImpl = struct {
 				});
 			}
 
-			// Mark the waiter as successfully removed.
 			waiter.is_queued = false;
 			return true;
 		}
@@ -675,15 +588,10 @@ const PosixImpl = struct {
 		pending: atomic.Value(usize) = atomic.Value(usize).init(0),
 		treap: Treap = .{},
 
-		// Global array of buckets that addresses map to.
-		// Bucket array size is pretty much arbitrary here, but it must be a power of two for fibonacci hashing.
 		var buckets = [_]Bucket{.{}} ** @bitSizeOf(usize);
 
-		// https://github.com/Amanieu/parking_lot/blob/1cf12744d097233316afa6c8b7d37389e4211756/core/src/parking_lot.rs#L343-L353
 		fn from(address: usize) *Bucket {
-			// The upper `@bitSizeOf(usize)` bits of the fibonacci golden ratio.
-			// Hashing this via (h * k) >> (64 - b) where k=golden-ration and b=bitsize-of-array
-			// evenly lays out h=hash values over the bit range even when the hash has poor entropy (identity-hash for pointers).
+
 			const max_multiplier_bits = @bitSizeOf(usize);
 			const fibonacci_multiplier = 0x9E3779B97F4A7C15 >> (64 - max_multiplier_bits);
 
@@ -697,12 +605,10 @@ const PosixImpl = struct {
 
 	const Address = struct {
 		fn from(ptr: *const atomic.Value(u32)) usize {
-			// Get the alignment of the pointer.
+
 			const alignment = @alignOf(atomic.Value(u32));
 			comptime assert(std.math.isPowerOfTwo(alignment));
 
-			// Make sure the pointer is aligned,
-			// then cut off the zero bits from the alignment to get the unique address.
 			const addr = @intFromPtr(ptr);
 			assert(addr & (alignment - 1) == 0);
 			return addr >> @ctz(@as(usize, alignment));
@@ -713,21 +619,9 @@ const PosixImpl = struct {
 		const address = Address.from(ptr);
 		const bucket = Bucket.from(address);
 
-		// Announce that there's a waiter in the bucket before checking the ptr/expect condition.
-		// If the announcement is reordered after the ptr check, the waiter could deadlock:
-		//
-		// - T1: checks ptr == expect which is true
-		// - T2: updates ptr to != expect
-		// - T2: does Futex.wake(), sees no pending waiters, exits
-		// - T1: bumps pending waiters (was reordered after the ptr == expect check)
-		// - T1: goes to sleep and misses both the ptr change and T2's wake up
-		//
-		// acquire barrier to ensure the announcement happens before the ptr check below.
 		var pending = bucket.pending.fetchAdd(1, .acquire);
 		assert(pending < std.math.maxInt(usize));
 
-		// If the wait gets canceled, remove the pending count we previously added.
-		// This is done outside the mutex lock to keep the critical section short in case of contention.
 		var canceled = false;
 		defer if (canceled) {
 			pending = bucket.pending.fetchSub(1, .monotonic);
@@ -754,9 +648,7 @@ const PosixImpl = struct {
 		}
 
 		waiter.event.wait(timeout) catch {
-			// If we fail to cancel after a timeout, it means a wake() thread dequeued us and will wake us up.
-			// We must wait until the event is set as that's a signal that the wake() thread won't access the waiter memory anymore.
-			// If we return early without waiting, the waiter on the stack would be invalidated and the wake() thread risks a UAF.
+
 			defer if (!canceled) waiter.event.wait(null) catch unreachable;
 
 			assert(c.pthread_mutex_lock(&bucket.mutex) == .SUCCESS);
@@ -773,24 +665,10 @@ const PosixImpl = struct {
 		const address = Address.from(ptr);
 		const bucket = Bucket.from(address);
 
-		// Quick check if there's even anything to wake up.
-		// The change to the ptr's value must happen before we check for pending waiters.
-		// If not, the wake() thread could miss a sleeping waiter and have it deadlock:
-		//
-		// - T2: p = has pending waiters (reordered before the ptr update)
-		// - T1: bump pending waiters
-		// - T1: if ptr == expected: sleep()
-		// - T2: update ptr != expected
-		// - T2: p is false from earlier so doesn't wake (T1 missed ptr update and T2 missed T1 sleeping)
-		//
-		// What we really want here is a Release load, but that doesn't exist under the C11 memory model.
-		// We could instead do `bucket.pending.fetchAdd(0, Release) == 0` which achieves effectively the same thing,
-		// LLVM lowers the fetchAdd(0, .release) into an mfence+load which avoids gaining ownership of the cache-line.
 		if (bucket.pending.fetchAdd(0, .release) == 0) {
 			return;
 		}
 
-		// Keep a list of all the waiters notified and wake then up outside the mutex critical section.
 		var notified = WaitList{};
 		defer if (notified.len > 0) {
 			const pending = bucket.pending.fetchSub(notified.len, .monotonic);
@@ -805,31 +683,20 @@ const PosixImpl = struct {
 		assert(c.pthread_mutex_lock(&bucket.mutex) == .SUCCESS);
 		defer assert(c.pthread_mutex_unlock(&bucket.mutex) == .SUCCESS);
 
-		// Another pending check again to avoid the WaitQueue lookup if not necessary.
 		if (bucket.pending.load(.monotonic) > 0) {
 			notified = WaitQueue.remove(&bucket.treap, address, max_waiters);
 		}
 	}
 };
 
-/// Deadline is used to wait efficiently for a pointer's value to change using Futex and a fixed timeout.
-///
-/// Futex's timedWait() api uses a relative duration which suffers from over-waiting
-/// when used in a loop which is often required due to the possibility of spurious wakeups.
-///
-/// Deadline instead converts the relative timeout to an absolute one so that multiple calls
-/// to Futex timedWait() can block for and report more accurate error.Timeouts.
 pub const Deadline = struct {
 	timeout: ?u64,
 	started: std.Io.Timestamp,
 
-	/// Create the deadline to expire after the given amount of time in nanoseconds passes.
-	/// Pass in `null` to have the deadline call `Futex.wait()` and never expire.
 	pub fn init(expires_in_ns: ?u64) Deadline {
 		var deadline: Deadline = undefined;
 		deadline.timeout = expires_in_ns;
 
-		// std.time.Timer is required to be supported for somewhat accurate reportings of error.Timeout.
 		if (deadline.timeout != null) {
 			deadline.started = main.timestamp();
 		}
@@ -837,23 +704,13 @@ pub const Deadline = struct {
 		return deadline;
 	}
 
-	/// Wait until either:
-	/// - the `ptr`'s value changes from `expect`.
-	/// - `Futex.wake()` is called on the `ptr`.
-	/// - A spurious wake occurs.
-	/// - The deadline expires; In which case `error.Timeout` is returned.
 	pub fn wait(self: *Deadline, ptr: *const atomic.Value(u32), expect: u32) error{Timeout}!void {
 		@branchHint(.cold);
 
-		// Check if we actually have a timeout to wait until.
-		// If not just wait "forever".
 		const timeout_ns = self.timeout orelse {
 			return Futex.wait(ptr, expect);
 		};
 
-		// Get how much time has passed since we started waiting
-		// then subtract that from the init() timeout to get how much longer to wait.
-		// Use overflow to detect when we've been waiting longer than the init() timeout.
 		const elapsed_ns: u64 = @intCast(self.started.durationTo(main.timestamp()).nanoseconds);
 		const until_timeout_ns = std.math.sub(u64, timeout_ns, elapsed_ns) catch 0;
 		return Futex.timedWait(ptr, expect, until_timeout_ns);

@@ -31,7 +31,7 @@ const Assets = main.assets.Assets;
 
 const c = @import("c");
 
-pub const maxBlockCount: usize = 65536; // 16 bit limit
+pub const maxBlockCount: usize = 65536;
 
 pub const BlockDrop = struct {
 	items: []const items.ItemStack,
@@ -53,16 +53,14 @@ pub const BlockDrop = struct {
 	}
 };
 
-/// Ores can be found underground in veins.
-/// TODO: Add support for non-stone ores.
 pub const Ore = struct {
-	/// average size of a vein in blocks
+
 	size: f32,
-	/// average density of a vein
+
 	density: f32,
-	/// average veins per chunk
+
 	veins: f32,
-	/// maximum height this ore can be generated
+
 	maxHeight: i32,
 	minHeight: i32,
 
@@ -124,18 +122,17 @@ var _id: [maxBlockCount][]u8 = undefined;
 var _blockHealth: [maxBlockCount]f32 = undefined;
 var _blockResistance: [maxBlockCount]f32 = undefined;
 
-/// Whether you can replace it with another block, mainly used for fluids/gases
 var _replaceable: [maxBlockCount]bool = undefined;
 var _selectionCapabilities: [maxBlockCount]SelectionCapabilities = undefined;
 var _blockDrops: [maxBlockCount][]const BlockDrop = undefined;
-/// Meaning undegradable parts of trees or other structures can grow through this block.
+
 var _degradable: [maxBlockCount]bool = undefined;
 var _viewThrough: [maxBlockCount]bool = undefined;
 var _alwaysViewThrough: [maxBlockCount]bool = undefined;
 var _hasBackFace: [maxBlockCount]bool = undefined;
 var _tags: [maxBlockCount][]Tag = undefined;
 var _light: [maxBlockCount]u32 = undefined;
-/// How much light this block absorbs if it is transparent
+
 var _absorption: [maxBlockCount]u32 = undefined;
 
 var _onInteract: [maxBlockCount]ClientBlockCallback = undefined;
@@ -245,7 +242,7 @@ pub fn loadBlockDrop(blockId: []const u8, zon: ZonElement) []const BlockDrop {
 			var name = iterator.first();
 			var amount: u16 = 1;
 			while (iterator.next()) |next| {
-				if (next.len == 0) continue; // skip multiple spaces.
+				if (next.len == 0) continue;
 				amount = std.fmt.parseInt(u16, name, 0) catch 1;
 				name = next;
 				break;
@@ -420,7 +417,7 @@ pub fn hasRegistered(id: []const u8) bool {
 	return reverseIndices.contains(id);
 }
 
-pub const Block = packed struct(u32) { // MARK: Block
+pub const Block = packed struct(u32) {
 	typ: u16,
 	data: u16,
 
@@ -460,7 +457,6 @@ pub const Block = packed struct(u32) { // MARK: Block
 		return _blockResistance[self.typ];
 	}
 
-	/// Whether you can replace it with another block, mainly used for fluids/gases
 	pub inline fn replaceable(self: Block) bool {
 		return _replaceable[self.typ];
 	}
@@ -473,7 +469,6 @@ pub const Block = packed struct(u32) { // MARK: Block
 		return _blockDrops[self.typ];
 	}
 
-	/// Meaning undegradable parts of trees or other structures can grow through this block.
 	pub inline fn degradable(self: Block) bool {
 		return _degradable[self.typ];
 	}
@@ -482,7 +477,6 @@ pub const Block = packed struct(u32) { // MARK: Block
 		return _viewThrough[self.typ];
 	}
 
-	/// shows backfaces even when next to the same block type
 	pub inline fn alwaysViewThrough(self: Block) bool {
 		return _alwaysViewThrough[self.typ];
 	}
@@ -503,7 +497,6 @@ pub const Block = packed struct(u32) { // MARK: Block
 		return _light[self.typ];
 	}
 
-	/// How much light this block absorbs if it is transparent.
 	pub inline fn absorption(self: Block) u32 {
 		return _absorption[self.typ];
 	}
@@ -582,7 +575,7 @@ pub const Block = packed struct(u32) { // MARK: Block
 	}
 };
 
-pub const meshes = struct { // MARK: meshes
+pub const meshes = struct {
 	const AnimationData = extern struct {
 		startFrame: u32,
 		frames: u32,
@@ -596,9 +589,9 @@ pub const meshes = struct { // MARK: meshes
 	var size: u32 = 0;
 	var _modelIndex: [maxBlockCount]ModelIndex = undefined;
 	var textureIndices: [maxBlockCount][16]u16 = undefined;
-	/// Stores the number of textures after each block was added. Used to clean additional textures when the world is switched.
+
 	var maxTextureCount: [maxBlockCount]u32 = undefined;
-	/// Number of loaded meshes. Used to determine if an update is needed.
+
 	var loadedMeshes: u32 = 0;
 
 	var textureIds: main.List([]const u8) = .empty;
@@ -767,7 +760,7 @@ pub const meshes = struct { // MARK: meshes
 		const id = splitter.rest();
 		var path = main.stackAllocator.print("{s}/{s}/blocks/textures/{s}.png", .{assetFolder, mod, id});
 		defer main.stackAllocator.free(path);
-		// Test if it's already in the list:
+
 		for (textureIds.items, 0..) |other, j| {
 			if (std.mem.eql(u8, other, textureId)) {
 				result = @intCast(j);
@@ -779,7 +772,7 @@ pub const meshes = struct { // MARK: meshes
 				std.log.err("Could not open file {s}: {s}", .{path, @errorName(err)});
 			}
 			main.stackAllocator.free(path);
-			path = main.stackAllocator.print("assets/{s}/blocks/textures/{s}.png", .{mod, id}); // Default to global assets.
+			path = main.stackAllocator.print("assets/{s}/blocks/textures/{s}.png", .{mod, id});
 			break :blk main.files.cwd().openFile(path) catch |err2| {
 				if (err2 != error.FileNotFound) {
 					std.log.err("Could not open file {s}: {s}", .{path, @errorName(err2)});
@@ -788,8 +781,8 @@ pub const meshes = struct { // MARK: meshes
 				return err2;
 			};
 		};
-		file.close(main.io); // It was only openend to check if it exists.
-		// Otherwise read it into the list:
+		file.close(main.io);
+
 		result = @intCast(textureIds.items.len);
 
 		textureIds.append(main.worldArena, main.worldArena.dupe(u8, textureId));
@@ -810,9 +803,6 @@ pub const meshes = struct { // MARK: meshes
 
 	pub fn register(assetFolder: []const u8, _: []const u8, zon: ZonElement) void {
 		_modelIndex[meshes.size] = _mode[meshes.size].createBlockModel(.{.typ = @intCast(meshes.size), .data = 0}, &_modeData[meshes.size], zon.getChild("model"));
-
-		// The actual model is loaded later, in the rendering thread.
-		// But textures can be loaded here:
 
 		getTextureIndices(zon, assetFolder, &textureIndices[meshes.size]);
 
@@ -840,7 +830,7 @@ pub const meshes = struct { // MARK: meshes
 		animationComputePipeline.bind();
 		c.glUniform1ui(animationUniforms.time, time);
 		c.glUniform1ui(animationUniforms.size, @intCast(animationData.len));
-		c.glDispatchCompute(@intCast(@divFloor(animationData.len + 63, 64)), 1, 1); // TODO: Replace with @divCeil once available
+		c.glDispatchCompute(@intCast(@divFloor(animationData.len + 63, 64)), 1, 1);
 		c.glMemoryBarrier(c.GL_SHADER_STORAGE_BARRIER_BIT);
 	}
 
@@ -889,7 +879,6 @@ pub const meshes = struct { // MARK: meshes
 		reflectivityAndAbsorptionTextureArray.generate(reflectivityAndAbsorptionTextures, true, false);
 		c.glTexParameterf(c.GL_TEXTURE_2D_ARRAY, c.GL_TEXTURE_MAX_ANISOTROPY, @floatFromInt(main.settings.anisotropicFiltering));
 
-		// Also generate additional buffers:
 		if (animationSSBO) |ssbo| {
 			ssbo.deinit();
 		}

@@ -25,10 +25,10 @@ const ChunkMeshNode = struct {
 	mesh: Atomic(?*chunk_meshing.ChunkMesh) = .init(null),
 	active: bool = false,
 	rendered: bool = false,
-	finishedMeshing: bool = false, // Must be synced with mesh.finishedMeshing
-	finishedMeshingHigherResolution: u8 = 0, // Must be synced with finishedMeshing of the 8 higher resolution chunks.
+	finishedMeshing: bool = false,
+	finishedMeshingHigherResolution: u8 = 0,
 	pos: chunk.ChunkPosition = undefined,
-	isNeighborLod: [6]bool = @splat(false), // Must be synced with mesh.isNeighborLod
+	isNeighborLod: [6]bool = @splat(false),
 };
 const storageSize = 64;
 const storageMask = storageSize - 1;
@@ -43,8 +43,6 @@ var lastPy: i32 = 0;
 var lastPz: i32 = 0;
 var lastRD: u16 = 0;
 
-/// Ground chunks are no longer useful once the player is in the sky-island layer. renderer.zig fades low
-/// ground during the 2k-to-6k ascent, so this later 8k cull remains visually hidden instead of popping.
 const skyIslandGroundCullHeight: f64 = 8000.0;
 const skyIslandGroundMaxHeight: i32 = 2000;
 var mutex: main.utils.Mutex = .{};
@@ -73,7 +71,7 @@ pub const BlockUpdate = struct {
 
 pub var meshMemoryPool: main.heap.MemoryPool(chunk_meshing.ChunkMesh) = .init(main.globalArena);
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	lastRD = 0;
 	for (&storageLists) |*storageList| {
 		storageList.* = main.globalAllocator.create([storageSize*storageSize*storageSize]ChunkMeshNode);
@@ -116,8 +114,6 @@ pub fn deinit() void {
 	shadowMeshList.clearAndFree(main.globalAllocator);
 	main.heap.GarbageCollection.waitForFreeCompletion();
 }
-
-// MARK: getters
 
 fn getNodePointer(pos: chunk.ChunkPosition) *ChunkMeshNode {
 	const lod = std.math.log2_int(u31, pos.voxelSize);
@@ -226,7 +222,7 @@ fn reduceRenderDistance(fullRenderDistance: i64, reduction: i64) i32 {
 	return reducedRenderDistance;
 }
 
-fn isInRenderDistance(pos: chunk.ChunkPosition) bool { // MARK: isInRenderDistance()
+fn isInRenderDistance(pos: chunk.ChunkPosition) bool {
 	const maxRenderDistance = lastRD*chunk.chunkSize*pos.voxelSize;
 	const size: u31 = chunk.chunkSize*pos.voxelSize;
 	const mask: i32 = size - 1;
@@ -278,7 +274,7 @@ fn isMapInRenderDistance(pos: LightMap.MapFragmentPosition) bool {
 	return true;
 }
 
-fn freeOldMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16) void { // MARK: freeOldMeshes()
+fn freeOldMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16) void {
 	for (0..settings.highestLod + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const maxRenderDistanceNew = lastRD*chunk.chunkSize << lod;
@@ -413,7 +409,7 @@ fn freeOldMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16) void { 
 	}
 }
 
-fn createNewMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16, meshRequests: *main.ListManaged(chunk.ChunkPosition), mapRequests: *main.ListManaged(LightMap.MapFragmentPosition)) void { // MARK: createNewMeshes()
+fn createNewMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16, meshRequests: *main.ListManaged(chunk.ChunkPosition), mapRequests: *main.ListManaged(LightMap.MapFragmentPosition)) void {
 	for (0..settings.highestLod + 1) |_lod| {
 		const lod: u5 = @intCast(_lod);
 		const maxRenderDistanceNew = lastRD*chunk.chunkSize << lod;
@@ -550,7 +546,7 @@ fn createNewMeshes(olderPx: i32, olderPy: i32, olderPz: i32, olderRD: u16, meshR
 	}
 }
 
-pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *const main.renderer.Frustum, playerPos: Vec3d, renderDistance: u16) []*chunk_meshing.ChunkMesh { // MARK: updateAndGetRenderChunks()
+pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *const main.renderer.Frustum, playerPos: Vec3d, renderDistance: u16) []*chunk_meshing.ChunkMesh {
 	meshList.clearRetainingCapacity();
 
 	const playerPosInt: Vec3i = @floor(playerPos);
@@ -574,11 +570,8 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 
 	createNewMeshes(olderPx, olderPy, olderPz, olderRD, &meshRequests, &mapRequests);
 
-	// Make requests as soon as possible to reduce latency:
 	network.protocols.lightMapRequest.sendRequest(conn, mapRequests.items);
 	network.protocols.chunkRequest.sendRequest(conn, meshRequests.items, .{lastPx, lastPy, lastPz}, lastRD);
-
-	// Finds all visible chunks and lod chunks using a breadth-first hierarchical search.
 
 	var searchList = main.utils.CircularBufferQueue(*ChunkMeshNode).init(main.stackAllocator, 1024);
 	defer searchList.deinit();
@@ -688,7 +681,7 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 			}
 		}
 		if (!std.meta.eql(node.isNeighborLod, isNeighborLod)) {
-			const mesh = node.mesh.load(.acquire).?; // no other thread is allowed to overwrite the mesh (unless it's null).
+			const mesh = node.mesh.load(.acquire).?;
 			mesh.isNeighborLod = isNeighborLod;
 			node.isNeighborLod = isNeighborLod;
 			mesh.uploadData();
@@ -698,19 +691,18 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 		node.rendered = false;
 		if (!node.finishedMeshing) continue;
 
-		const mesh = node.mesh.load(.acquire).?; // no other thread is allowed to overwrite the mesh (unless it's null).
+		const mesh = node.mesh.load(.acquire).?;
 
 		if (mesh.needsMeshUpdate) {
 			mesh.needsMeshUpdate = false;
 			mesh.uploadData();
 		}
-		// Remove empty meshes.
+
 		if (!mesh.isEmpty()) {
 			const relPosFloat: Vec3f = @floatCast(@as(Vec3d, @floatFromInt(Vec3i{node.pos.wx, node.pos.wy, node.pos.wz})) - playerPos);
 			const chunkSizeVector: Vec3f = @splat(@floatFromInt(chunk.chunkSize * node.pos.voxelSize));
 			if (frustum.testAAB(relPosFloat, chunkSizeVector)) {
-				// Low ground has already faded through the 2k-to-6k ascent transition. Only now remove it;
-				// sky-island chunks above the ground band remain renderable.
+
 				if (playerPos[2] >= skyIslandGroundCullHeight and node.pos.wz < skyIslandGroundMaxHeight) continue;
 
 				meshList.append(main.globalAllocator, mesh);
@@ -721,17 +713,12 @@ pub noinline fn updateAndGetRenderChunks(conn: *network.Connection, frustum: *co
 	return meshList.items;
 }
 
-/// Returns the visible-chunk list from the most recent updateAndGetRenderChunks() call.
-/// Used by CascadedShadowMap so it can iterate the same set of chunks for the shadow pass
-/// without repeating the frustum cull.
 pub fn getLastRenderChunks() []*chunk_meshing.ChunkMesh {
 	return meshList.items;
 }
 
 var shadowMeshList: main.List(*chunk_meshing.ChunkMesh) = .empty;
 
-/// Returns all loaded chunk meshes (including LODs and mountain peaks along the sun vector)
-/// that can cast shadows onto the receiver cascade.
 pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32, sunDir: Vec3f, occluderSunDist: f32) []*chunk_meshing.ChunkMesh {
 	shadowMeshList.clearRetainingCapacity();
 	const playerPosInt: Vec3i = @floor(playerPos);
@@ -754,7 +741,6 @@ pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32, sunDir: Vec3f, o
 			const chunkCenter = Vec3i{ node.pos.wx + @divTrunc(chunkSize, 2), node.pos.wy + @divTrunc(chunkSize, 2), node.pos.wz + @divTrunc(chunkSize, 2) };
 			const diff = chunkCenter - playerPosInt;
 
-			// 1. Within spherical shadow radius of cascade receiver:
 			const distSq: i64 = @as(i64, diff[0])*diff[0] + @as(i64, diff[1])*diff[1] + @as(i64, diff[2])*diff[2];
 			const shadowRadius: i64 = @intFromFloat(@ceil(shadowDist + @as(f32, @floatFromInt(chunkSize))));
 			if (distSq <= shadowRadius * shadowRadius) {
@@ -762,7 +748,6 @@ pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32, sunDir: Vec3f, o
 				continue;
 			}
 
-			// 2. Or sits along the sun vector towards the sun (casting a shadow onto the cascade):
 			const diffFloat = Vec3f{ @floatCast(@as(f64, @floatFromInt(diff[0]))), @floatCast(@as(f64, @floatFromInt(diff[1]))), @floatCast(@as(f64, @floatFromInt(diff[2]))) };
 			const projSun = main.vec.dot(diffFloat, sunDir);
 			if (projSun > -shadowDist and projSun < occluderSunDist) {
@@ -779,7 +764,7 @@ pub fn getShadowRenderChunks(playerPos: Vec3d, shadowDist: f32, sunDir: Vec3f, o
 	return shadowMeshList.items;
 }
 
-pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
+pub fn updateMeshes(targetTime: std.Io.Timestamp) void {
 	mutex.lock();
 	defer mutex.unlock();
 	while (priorityMeshUpdateList.popFront()) |pos| {
@@ -791,7 +776,7 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		mutex.unlock();
 		defer mutex.lock();
 		mesh.uploadData();
-		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
+		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break;
 	}
 	while (mapUpdatableList.popFront()) |map| {
 		if (!isMapInRenderDistance(map.pos)) {
@@ -804,7 +789,7 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 		}
 	}
 	while (updatableList.items.len != 0) {
-		// TODO: Find a faster solution than going through the entire list every frame.
+
 		var closestPriority: f32 = -std.math.floatMax(f32);
 		var closestIndex: usize = 0;
 		const playerPos = game.Player.getEyePosBlocking();
@@ -839,11 +824,9 @@ pub fn updateMeshes(targetTime: std.Io.Timestamp) void { // MARK: updateMeshes()
 			updateHigherLodNodeFinishedMeshing(pos, true);
 			mesh.uploadData();
 		}
-		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break; // Update at least one mesh.
+		if (targetTime.durationTo(main.timestamp()).nanoseconds >= 0) break;
 	}
 }
-
-// MARK: adders
 
 pub fn addToUpdateList(mesh: *chunk_meshing.ChunkMesh) void {
 	mutex.lock();
@@ -874,20 +857,16 @@ pub fn finishMesh(pos: chunk.ChunkPosition) void {
 	updatableList.append(main.globalAllocator, pos);
 }
 
-// MARK: updaters
-
 pub fn updateBlock(blockUpdate: BlockUpdate) void {
 	const pos = chunk.ChunkPosition{.wx = blockUpdate.pos[0], .wy = blockUpdate.pos[1], .wz = blockUpdate.pos[2], .voxelSize = 1};
 	if (getMesh(pos)) |mesh| {
 		mesh.updateBlock(blockUpdate);
-	} // TODO: It seems like we simply ignore the block update if we don't have the mesh yet.
+	}
 }
 
 pub fn updateLightMap(map: *LightMap.LightMapFragment) void {
 	mapUpdatableList.pushBack(map);
 }
-
-// MARK: Block breaking animation
 
 pub fn addBreakingAnimation(pos: Vec3i, breakingProgress: f32) void {
 	const animationFrame: usize = @trunc(breakingProgress*@as(f32, @floatFromInt(main.blocks.meshes.blockBreakingTextures.items.len)));
@@ -921,7 +900,7 @@ fn addBreakingAnimationFace(pos: Vec3i, quadIndex: main.models.QuadIndex, textur
 				break :blk face.position.lightIndex;
 			}
 		}
-		// The face doesn't exist.
+
 		return;
 	};
 	mesh.blockBreakingFacesChanged = true;

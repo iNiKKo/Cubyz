@@ -5,7 +5,6 @@ layout(location = 0) in vec2 face_pos;
 layout(location = 0) out vec2 frag_face_pos;
 layout(location = 1) flat out vec4 color;
 
-// in pixels
 layout(location = 0) uniform vec4 textureRect;
 layout(location = 1) uniform vec2 scene;
 layout(location = 2) uniform vec2 offset;
@@ -21,11 +20,10 @@ void main() {
 	vec2 vertex_pos = face_pos*vec2(1, -1);
 	vec2 position_percentage 	= convert2Proportional(floor(offset), scene);
 	vec2 size_percentage		= convert2Proportional(floor(vec2(textureRect.z, textureRect.w)*ratio), scene);
-	if ((fontEffects & 0x02000000) != 0) { // italic
+	if ((fontEffects & 0x02000000) != 0) {
 		vertex_pos.x += vertex_pos.y/textureRect.z;
 	}
 
-	// convert glyph coords to opengl coords
 	vec4 rect = vec4(position_percentage, size_percentage);
 
 	vec2 position = vec2(rect.x+vertex_pos.x*rect.z, -rect.y+vertex_pos.y*rect.w)*2+vec2(-1, 1);

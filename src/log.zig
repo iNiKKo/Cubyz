@@ -8,19 +8,17 @@ const List = main.List;
 const settings = main.settings;
 
 pub const Level = enum {
-	/// Error: something has gone wrong. This might be recoverable or might
-	/// be followed by the program exiting.
+
 	err,
-	/// Warning: it is uncertain if something has gone wrong or not, but the
-	/// circumstances would be worth investigating.
+
 	warn,
-	/// Info: general messages about the state of the program.
+
 	info,
-	/// Debug: messages only useful for debugging.
+
 	debug,
-	/// server messages
+
 	server,
-	/// chat messages
+
 	chat,
 
 	fn isColorCoded(self: Level) bool {
@@ -174,7 +172,7 @@ fn convertColorToANSI(allocator: main.heap.NeverFailingAllocator, text: []const 
 
 	var currentFontEffect: graphics.TextBuffer.FontEffect = .{};
 	for (parser.parsedText.items, parser.fontEffects.items) |unicodeChar, fontEffect| {
-		// add actual text at the end
+
 		defer {
 			var testBuff: [4]u8 = undefined;
 			const len = std.unicode.utf8Encode(@intCast(unicodeChar), &testBuff) catch unreachable;

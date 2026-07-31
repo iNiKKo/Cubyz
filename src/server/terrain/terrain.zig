@@ -31,13 +31,12 @@ pub const chunk_generators = @import("chunkgen/_list.zig");
 
 pub const GeneratorState = enum { enabled, disabled };
 
-/// A generator for setting the actual Blocks in each Chunk.
 pub const BlockGenerator = struct {
 	init: *const fn (parameters: ZonElement) void,
 	generate: *const fn (seed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap.CaveMapView, biomeMap: CaveBiomeMap.CaveBiomeMapView) void,
-	/// Used to prioritize certain generators over others.
+
 	priority: i32,
-	/// To avoid duplicate seeds in similar generation algorithms, the SurfaceGenerator xors the world-seed with the generator specific seed.
+
 	generatorSeed: u64,
 	defaultState: GeneratorState,
 
@@ -75,9 +74,6 @@ pub const BlockGenerator = struct {
 	}
 };
 
-/// Lists all the Generators and Biomes that should be used for a given world.
-/// TODO: Generator/Biome blackslisting (from the world creation menu).
-/// TODO: Generator settings (from the world creation menu).
 pub const TerrainGenerationProfile = struct {
 	mapFragmentGenerator: SurfaceMap.MapGenerator = undefined,
 	climateGenerator: ClimateMap.ClimateMapGenerator = undefined,

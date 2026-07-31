@@ -9,9 +9,6 @@ layout(location = 1) out float cameraDistance;
 
 uniform float planeHeightRelative;
 
-// The quad's local XY *is* already player-relative world XY (see thin_clouds.zig's planeHalfSize doc
-// comment) — no playerPositionInteger/Fraction math needed here at all, only the height (uploaded
-// already player-relative) and the camera's own view/projection from frame_uniforms.
 void main() {
 	vec3 position = vec3(inPos, planeHeightRelative);
 	cameraDistance = length(position);

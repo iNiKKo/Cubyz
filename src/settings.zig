@@ -43,12 +43,7 @@ pub var upscalerMode: UpscalerMode = .fsr1;
 
 pub const AntiAliasingMode = enum(u8) { off, fxaa, msaa, taa };
 pub var antiAliasingMode: AntiAliasingMode = .fxaa;
-/// MSAA sample count — a flat, whole-screen setting (OpenGL fixes sample count per-framebuffer, not
-/// per-pixel/per-distance, so this can't vary with distance from the player within one render pass).
-/// Higher costs roughly proportionally more color/depth bandwidth for every opaque fragment.
-/// Default 2 (not 4): a real, meaningful FPS difference for most players (player-reported ~780->650fps
-/// at 4x on their hardware) for a smaller quality delta than the jump from off->2x already provides —
-/// better default trade-off, still adjustable up to 8x in Graphics+ settings for anyone who wants it.
+
 pub var msaaSamples: u8 = 2;
 
 pub var bloom: bool = true;
@@ -57,35 +52,18 @@ pub var reflections: bool = true;
 
 pub var foliageSway: bool = true;
 
-/// Controls max ray search distance for water/transparent screen-space reflections (32m to 512m).
 pub var waterReflectionDistance: f32 = 128.0;
 
 pub var shadows: bool = true;
 
-/// Whether this client contributes its own (normally first-person-invisible) avatar to the shadow map.
-/// Other players' shadows remain visible whenever dynamic shadows are enabled.
 pub var ownPlayerShadow: bool = true;
 
-/// Controls how dark terrain shadows are (0.0 = no shadows/fully lit, 0.50 = normal default shadows, 1.0 = extra dark shadows).
 pub var shadowDarkness: f32 = 0.50;
 
-/// Max sun/moon shadow ray length, in blocks (see shadow.glsl's sampleSunShadow) — a raymarch distance
-/// cap, not a shadow-map coverage radius.
 pub var shadowDistance: f32 = 128.0;
 
-/// DDA step cap for the sun/moon shadow raymarch (see shadow.glsl) — counts both coarse (4x4x4-block)
-/// and fine (per-voxel) steps combined, bounding worst-case per-pixel cost. The coarse skip only lowers
-/// the *typical* cost (most of a ray is empty air); the worst case (dense occupancy the whole way) still
-/// needs close to shadowDistance*1.75 steps, so this shouldn't be set much below that or rays will give
-/// up before reaching real occluders — see shadow.glsl's sampleSunShadow for why that reads as patchy,
-/// missing-in-random-places shadows rather than a clean quality falloff.
 pub var shadowRaySteps: i32 = 256;
 
-/// Whether grass/flowers/mushrooms/etc. (`viewThrough` blocks that aren't leaves — leaves always cast a
-/// full solid shadow regardless of this setting, see chunk_meshing.zig's uploadOccupancy) cast a shadow
-/// at all. When on, the shadow raymarch gives them a soft, compounding partial shadow (see shadow.glsl's
-/// foliageAttenuationPerVoxel) rather than a hard hit — off by default since even that reads as somewhat
-/// busy/noisy for dense grass; on gives it a shadow instead of none at all.
 pub var foliageShadows: bool = false;
 
 pub var clouds: bool = true;
@@ -96,9 +74,6 @@ pub var godRays: bool = true;
 
 pub var godRayIntensity: f32 = 1.0;
 
-/// Instant on/off toggle for a first, deliberately simple rain effect: real falling raindrop quads (see
-/// renderer/rain.zig) spawned only in an AOE grid around the player — not a full weather system (no
-/// gradual transitions, no per-biome/climate logic, no puddles/wetness, no sound yet).
 pub var rain: bool = false;
 
 pub var vsync: bool = true;
@@ -145,7 +120,7 @@ pub fn init() void {
 	defer zon.deinit(main.stackAllocator);
 
 	inline for (@typeInfo(@This()).@"struct".decls) |decl| runtimeContinueInsideOfComptimeBlock: {
-		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const; // Sadly there is no direct way to check if a declaration is const.
+		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const;
 		if (!is_const) {
 			comptime var DeclType = @TypeOf(@field(@This(), decl.name));
 			if (@typeInfo(DeclType) == .optional) {
@@ -177,7 +152,6 @@ pub fn init() void {
 	if (resolutionScale < 0.25 or resolutionScale > 1.0) resolutionScale = 1.0;
 	if (fsrSharpness < 0.0 or fsrSharpness > 1.0) fsrSharpness = 0.2;
 
-	// keyboard settings:
 	const keyboard = zon.getChild("keyboard");
 	for (&main.KeyBoard.keys) |*key| {
 		const keyZon = keyboard.getChild(key.name);
@@ -193,7 +167,7 @@ pub fn init() void {
 pub fn deinit() void {
 	save();
 	inline for (@typeInfo(@This()).@"struct".decls) |decl| {
-		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const; // Sadly there is no direct way to check if a declaration is const.
+		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const;
 		if (!is_const) {
 			const DeclType = @TypeOf(@field(@This(), decl.name));
 			if (@typeInfo(DeclType) == .@"struct") {
@@ -221,7 +195,7 @@ pub fn save() void {
 			zonObject.put(decl.name, version.version);
 			continue;
 		}
-		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const; // Sadly there is no direct way to check if a declaration is const.
+		const is_const = @typeInfo(@TypeOf(&@field(@This(), decl.name))).pointer.is_const;
 		if (!is_const) {
 			const DeclType = @TypeOf(@field(@This(), decl.name));
 			if (@typeInfo(DeclType) == .@"struct") {
@@ -240,7 +214,6 @@ pub fn save() void {
 		}
 	}
 
-	// keyboard settings:
 	const keyboard = ZonElement.initObject(main.stackAllocator);
 	for (&main.KeyBoard.keys) |key| {
 		const keyZon = ZonElement.initObject(main.stackAllocator);
@@ -254,7 +227,6 @@ pub fn save() void {
 	}
 	zonObject.put("keyboard", keyboard);
 
-	// Merge with the old settings file to preserve unknown settings.
 	var oldZonObject: ZonElement = main.files.cubyzDir().readToZon(main.stackAllocator, settingsFile) catch |err| blk: {
 		if (err != error.FileNotFound) {
 			std.log.err("Could not read settings file: {s}", .{@errorName(err)});

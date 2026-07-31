@@ -11,7 +11,7 @@ const ZonElement = main.ZonElement;
 
 const sdf_models = @import("sdf_models/_list.zig");
 
-pub const SdfModel = struct { // MARK: SdfModel
+pub const SdfModel = struct {
 	data: *anyopaque,
 	instantiateFn: *const fn (self: *anyopaque, arena: NeverFailingAllocator, seed: *u64) SdfInstance,
 	maxBiomeCenterDistance: f32,
@@ -85,7 +85,7 @@ pub const SdfModel = struct { // MARK: SdfModel
 	});
 };
 
-pub const SdfInstance = struct { // MARK: SdfInstance
+pub const SdfInstance = struct {
 	data: *anyopaque,
 	generateFn: *const fn (self: *anyopaque, samplePos: Vec3f) f32,
 	minBounds: Vec3i,
@@ -117,7 +117,7 @@ pub const SdfInstance = struct { // MARK: SdfInstance
 	}
 };
 
-pub fn smoothUnion(a: f32, b: f32, smoothness: f32) f32 { // https://iquilezles.org/articles/smin/ quadratic polynomial
+pub fn smoothUnion(a: f32, b: f32, smoothness: f32) f32 {
 	const k = 4*smoothness;
 	const h = @max(k - @abs(a - b), 0.0)/k;
 	return @min(a, b) - h*h*smoothness;

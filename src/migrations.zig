@@ -33,7 +33,6 @@ pub fn registerAll(comptime typ: MigrationType, migrations: *Assets.AddonNameToZ
 		register(typ, collection, migration.key_ptr.*, migration.value_ptr.*);
 	}
 
-	// apply transitive migrations
 	var iterator = collection.iterator();
 	var entries: main.List([]const u8) = .empty;
 	defer entries.deinit(main.stackAllocator);

@@ -15,11 +15,10 @@ const TerrainGenerationProfile = terrain.TerrainGenerationProfile;
 
 pub const cave_generators = @import("cavegen/_list.zig");
 
-/// Cave data represented in a 1-Bit per block format, where 0 means empty and 1 means not empty.
-pub const CaveMapFragment = struct { // MARK: CaveMapFragment
+pub const CaveMapFragment = struct {
 	pub const width = 1 << 6;
 	pub const widthMask = width - 1;
-	pub const height = 64; // Size of u64
+	pub const height = 64;
 	pub const heightMask = height - 1;
 
 	data: [width*width]u64 = undefined,
@@ -48,13 +47,10 @@ pub const CaveMapFragment = struct { // MARK: CaveMapFragment
 	}
 
 	fn getIndex(x: i32, y: i32) usize {
-		std.debug.assert(x >= 0 and x < width and y >= 0 and y < width); // Coordinates out of range.
+		std.debug.assert(x >= 0 and x < width and y >= 0 and y < width);
 		return @intCast(x*width + y);
 	}
 
-	/// for example 3,11 would create the mask ...111_11111100_00000011
-	/// start inclusive
-	/// end exclusive
 	fn getMask(start: i32, end: i32) u64 {
 		const maskLower = if (start <= 0) (0) else if (start >= 64) (std.math.maxInt(u64)) else (@as(u64, std.math.maxInt(u64)) >> @intCast(64 - start));
 		const maskUpper = if (end <= 0) (std.math.maxInt(u64)) else if (end >= 64) (0) else (@as(u64, std.math.maxInt(u64)) << @intCast(end));
@@ -84,13 +80,12 @@ pub const CaveMapFragment = struct { // MARK: CaveMapFragment
 	}
 };
 
-/// A generator for the cave map.
-pub const CaveGenerator = struct { // MARK: CaveGenerator
+pub const CaveGenerator = struct {
 	init: *const fn (parameters: ZonElement) void,
 	generate: *const fn (map: *CaveMapFragment, seed: u64) void,
-	/// Used to prioritize certain generators over others.
+
 	priority: i32,
-	/// To avoid duplicate seeds in similar generation algorithms, the SurfaceGenerator xors the world-seed with the generator specific seed.
+
 	generatorSeed: u64,
 	defaultState: GeneratorState,
 
@@ -128,7 +123,7 @@ pub const CaveGenerator = struct { // MARK: CaveGenerator
 	}
 };
 
-pub const CaveMapView = struct { // MARK: CaveMapView
+pub const CaveMapView = struct {
 	pos: ChunkPosition,
 	lowerCorner: Vec3i,
 	widthShift: u5,
@@ -269,9 +264,8 @@ pub const CaveMapView = struct { // MARK: CaveMapView
 	}
 };
 
-// MARK: cache
-const cacheSize = 1 << 12; // Must be a power of 2!
-const associativity = 8; // 1024 MiB Cache size
+const cacheSize = 1 << 12;
+const associativity = 8;
 var cache: Cache(CaveMapFragment, cacheSize, associativity, CaveMapFragment.deferredDeinit) = .{};
 var profile: TerrainGenerationProfile = undefined;
 

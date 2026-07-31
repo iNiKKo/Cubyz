@@ -55,7 +55,7 @@ pub fn onOpen() void {
 }
 
 pub fn onClose() void {
-	// Make sure there remains no trace of the account code or password in memory
+
 	accountCode.deinit();
 
 	if (window.rootComponent) |*comp| {

@@ -51,7 +51,7 @@ pub fn run(_: *@This(), params: main.callbacks.ServerBlockCallback.Params) main.
 				if (drop.chance == 1 or main.random.nextFloat(&main.seed) < drop.chance) {
 					for (drop.items) |stack| {
 						var dir = main.vec.normalize(main.random.nextFloatVectorSigned(3, &main.seed));
-						// Bias upwards
+
 						dir[2] += main.random.nextFloat(&main.seed)*4.0;
 						const model = params.block.mode().model(params.block).model();
 						const pos = Vec3f{

@@ -144,12 +144,12 @@ pub fn generate(self: *SimpleTreeModel, _: GenerationMode, x: i32, y: i32, z: i3
 	const leafRadius = self.leafRadius + factor*self.deltaLeafRadius;
 	const leafElongation: f32 = self.leafElongation + random.nextFloatSigned(seed)*self.deltaLeafElongation;
 
-	if (z + height >= caveMap.findTerrainChangeAbove(x, y, z)) return; // Space is too small.Allocator
+	if (z + height >= caveMap.findTerrainChangeAbove(x, y, z)) return;
 
 	if (z > chunk.super.width) return;
 
 	if (chunk.super.pos.voxelSize >= 16) {
-		// Ensures that even at lowest resolution some leaves are rendered for smaller trees.
+
 		if (chunk.liesInChunk(x, y, z)) {
 			chunk.updateBlockIfDegradable(x, y, z, self.leavesBlock);
 		}
@@ -161,7 +161,7 @@ pub fn generate(self: *SimpleTreeModel, _: GenerationMode, x: i32, y: i32, z: i3
 	switch (self.typ) {
 		.pyramid => {
 			self.generateStem(x, y, z, height, chunk, seed);
-			// Position of the first block of leaves
+
 			height = 3*height >> 1;
 			var pz = chunk.startIndex(z + @divTrunc(height, 3));
 			while (pz < z + height) : (pz += chunk.super.pos.voxelSize) {
@@ -193,7 +193,7 @@ pub fn generate(self: *SimpleTreeModel, _: GenerationMode, x: i32, y: i32, z: i3
 					var py = chunk.startIndex(y - ceilRadius);
 					while (py < y + ceilRadius) : (py += chunk.super.pos.voxelSize) {
 						const distSqr = @as(f32, @floatFromInt((pz - center)*(pz - center)))*invLeafElongationSqr + @as(f32, @floatFromInt((px - x)*(px - x) + (py - y)*(py - y)));
-						if (chunk.liesInChunk(px, py, pz) and distSqr < radiusSqr and (distSqr < randomRadiusSqr or random.nextInt(u1, seed) != 0)) { // TODO: Use another seed to make this more reliable!
+						if (chunk.liesInChunk(px, py, pz) and distSqr < radiusSqr and (distSqr < randomRadiusSqr or random.nextInt(u1, seed) != 0)) {
 							chunk.updateBlockIfDegradable(px, py, pz, self.leavesBlock);
 						}
 					}

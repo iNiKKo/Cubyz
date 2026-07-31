@@ -28,7 +28,7 @@ const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
 const c = @import("c");
 
-const ItemDrop = struct { // MARK: ItemDrop
+const ItemDrop = struct {
 	pos: Vec3d,
 	vel: Vec3d,
 	rot: Vec3f,
@@ -46,10 +46,10 @@ pub const ItemDropNetworkData = struct {
 	vel: Vec3d,
 };
 
-pub const ItemDropManager = struct { // MARK: ItemDropManager
-	/// Half the side length of all item entities hitboxes as a cube.
+pub const ItemDropManager = struct {
+
 	pub const radius: f64 = 0.1;
-	/// Side length of all item entities hitboxes as a cube.
+
 	pub const diameter: f64 = 2*radius;
 
 	pub const pickupRange: f64 = 1.0;
@@ -168,7 +168,7 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 	}
 
 	pub fn getInitialList(self: *ItemDropManager, allocator: NeverFailingAllocator) ZonElement {
-		self.processChanges(); // Make sure all the items from the queue are included.
+		self.processChanges();
 		var list = ZonElement.initArray(allocator);
 		var ii: u32 = 0;
 		while (ii < self.size) : (ii += 1) {
@@ -217,7 +217,7 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 			if (self.world.?.getSimulationChunkAndIncreaseRefCount(@trunc(pos[i][0]), @trunc(pos[i][1]), @trunc(pos[i][2]))) |simChunk| {
 				defer simChunk.decreaseRefCount();
 				if (simChunk.getChunk() != null) {
-					// Check collision with blocks:
+
 					updateEnt(&pos[i], &vel[i], &onGround[i], deltaTime);
 				}
 			}
@@ -396,7 +396,7 @@ pub const ItemDropManager = struct { // MARK: ItemDropManager
 	}
 };
 
-pub const ClientItemDropManager = struct { // MARK: ClientItemDropManager
+pub const ClientItemDropManager = struct {
 	const maxf64Capacity = ItemDropManager.maxCapacity*@sizeOf(Vec3d)/@sizeOf(f64);
 
 	super: ItemDropManager,
@@ -412,7 +412,7 @@ pub const ClientItemDropManager = struct { // MARK: ClientItemDropManager
 	var mutex: main.utils.Mutex = .{};
 
 	pub fn init(self: *ClientItemDropManager, allocator: NeverFailingAllocator) void {
-		std.debug.assert(instance == null); // Only one instance allowed.
+		std.debug.assert(instance == null);
 		instance = self;
 		self.* = .{
 			.super = undefined,
@@ -426,7 +426,7 @@ pub const ClientItemDropManager = struct { // MARK: ClientItemDropManager
 	}
 
 	pub fn deinit(self: *ClientItemDropManager) void {
-		std.debug.assert(instance != null); // Double deinit.
+		std.debug.assert(instance != null);
 		self.super.deinit();
 		instance = null;
 	}
@@ -441,7 +441,7 @@ pub const ClientItemDropManager = struct { // MARK: ClientItemDropManager
 		}
 		mutex.lock();
 		defer mutex.unlock();
-		self.interpolation.updatePosition(@ptrCast(&pos), @ptrCast(&vel), time); // TODO: Only update the ones we actually changed.
+		self.interpolation.updatePosition(@ptrCast(&pos), @ptrCast(&vel), time);
 	}
 
 	pub fn updateInterpolationData(self: *ClientItemDropManager) void {
@@ -499,8 +499,7 @@ pub fn getItemEmittedLight(item: main.items.Item) Vec3f {
 	return @splat(0);
 }
 
-// Going to handle item animations and other things like - bobbing, interpolation, movement reactions
-pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
+pub const ItemDisplayManager = struct {
 	pub var showItem: bool = true;
 	var cameraFollow: Vec3f = @splat(0);
 	var cameraFollowVel: Vec3f = @splat(0);
@@ -508,16 +507,13 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 
 	pub var handLightPositionRelative: Vec3f = @splat(0);
 	pub var handLightColor: Vec3f = @splat(0);
-	/// A dropped torch must not replace another dropped torch just because the player walks closer
-	/// to it. Keep a small, sorted set of the most relevant lights for the GPU instead. Four covers
-	/// ordinary torch use while keeping the per-fragment work bounded. Beyond this limit the weakest
-	/// lights are intentionally omitted rather than causing a sudden nearest-light swap.
+
 	pub const maxDropLights = 8;
 	const maxDropLightClusters = 32;
 	const dropLightClusterRadius: f32 = 4.0;
 	pub var dropLightPositionsRelative: [maxDropLights]Vec3f = @splat(@splat(0));
 	pub var dropLightColors: [maxDropLights]Vec3f = @splat(@splat(0));
-	/// F5 exposes these so dynamic-light pressure is visible while testing worlds with many torches.
+
 	pub var droppedLightSourceCount: u32 = 0;
 	pub var droppedLightClusterCount: u32 = 0;
 	pub var activeDropLightCount: u32 = 0;
@@ -528,8 +524,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		sources: u16,
 	};
 	pub var handLightRadius: f32 = 12.0;
-	/// Live developer controls for procedural-tool attachment. Kept out of persistent graphics
-	/// settings because they are temporary model-tuning values, but replicated through heldLight.
+
 	pub var heldToolOffset: Vec3f = .{0.0, 0.25, 0.10};
 	pub var heldToolRotation: Vec3f = .{-110.0, 0.0, 90.0};
 	pub var heldToolScale: f32 = 1.60;
@@ -538,14 +533,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
 	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0, miningSwing: f32 = -1.0 };
 	var remoteHeldItems: [maxReplicatedPlayers]RemoteHeldItem = @splat(.{});
-	/// Guards all of `remoteHeldItems`. `setRemoteHeldItem` runs on the network thread and can replace
-	/// (deinit the old, store a new) any slot at any time; every render-thread read - even just reading
-	/// out `.item` to `.clone()` it - raced with that write without this lock, since reading the field
-	/// and calling `.clone()` on it are two separate steps: the network thread could deinit/overwrite the
-	/// slot in between, so the "clone" would already be cloning freed memory. This crashed in
-	/// `ProceduralItem.clone()` itself (reading `self.image.width` on freed memory) even after the
-	/// earlier clone-instead-of-share fix, because that fix addressed WHAT gets handed out, not that the
-	/// read of the live value was still unsynchronized with the writer.
+
 	var remoteHeldItemsMutex: main.utils.Mutex = .{};
 	const HeldItemIdentity = union(enum) { none: void, base: items.BaseItemIndex, procedural: *items.ProceduralItem };
 	var lastSentHeldItem: HeldItemIdentity = .{ .none = {} };
@@ -566,15 +554,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		remoteHeldItems[id].item.deinit();
 		remoteHeldItems[id] = .{ .item = item, .transform = transform, .toolRotationYZ = toolRotationYZ, .toolScale = toolScale, .miningSwing = miningSwing };
 	}
-	/// Returns an independent clone of the currently-held remote item, if any - never the live, still-owned
-	/// value. `setRemoteHeldItem` can run on the network thread at any time and immediately `deinit()`s
-	/// whatever was previously stored; handing out that value directly (as this used to do) let a caller
-	/// on the render thread end up holding a dangling pointer if a new held-item packet arrived while the
-	/// old one was still being used (e.g. mid-hashCode() on a `.proceduralItem`'s crafting grid), crashing
-	/// with a segfault deep inside whatever code happened to touch it next. Callers must `.deinit()` the
-	/// returned clone when done with it, per this codebase's normal `Item` ownership convention. If you
-	/// only need to know WHETHER something is held (not its contents), use `hasRemoteHeldItem` instead -
-	/// it doesn't allocate.
+
 	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return null;
@@ -583,9 +563,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		const item = remoteHeldItems[id].item;
 		return if (item == .null) null else item.clone();
 	}
-	/// Non-allocating presence check - use this instead of `remoteHeldItem(...) != null` when the actual
-	/// item contents aren't needed, so callers that only care about "is something held" don't need to
-	/// clone-then-immediately-deinit (or, as happened before this function existed, clone and leak).
+
 	pub fn hasRemoteHeldItem(entityId: main.entity.Entity) bool {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return false;
@@ -629,9 +607,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		if (remoteHeldItems[id].miningSwing < 0) return null;
 		return remoteHeldItems[id].miningSwing;
 	}
-	/// Remote held procedural items are deserialized per client and owned by this cache. Release them
-	/// when leaving a world and at renderer shutdown so a remote player holding a tool cannot leak its
-	/// ProceduralItem allocation.
+
 	pub fn clearRemoteHeldItems() void {
 		remoteHeldItemsMutex.lock();
 		defer remoteHeldItemsMutex.unlock();
@@ -647,8 +623,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		sentInitialHeldLight = false;
 	}
 	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
-	/// Keep the dynamic-light budget bounded. The closest remote lantern is the one that can visibly
-	/// affect this client, while every avatar still renders its own held light model.
+
 	pub fn closestRemoteLight(playerPos: Vec3d) RemoteLight {
 		var result: RemoteLight = .{};
 		var bestDistance = std.math.inf(f32);
@@ -693,8 +668,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 		activeDropLightCount = 0;
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
-		// The held state is replicated for every block item; only its emitted-light colour remains
-		// conditional below. This lets other players see ordinary building blocks in a hand too.
+
 		var heldItemIdentity: HeldItemIdentity = .{ .none = {} };
 		if (item == .baseItem) {
 			const baseItem = item.baseItem;
@@ -763,9 +737,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 									@floatFromInt(light & 255),
 								} / @as(Vec3f, @splat(255.0));
 								const str = @max(@max(col[0], col[1]), col[2]) / (1.0 + distToPlayer * 0.05);
-								// Nearby torches form one soft cluster. Its position is weighted by the
-								// visible contribution, so a pair within four blocks behaves like one
-								// stronger light rather than consuming two GPU slots.
+
 								var match: ?usize = null;
 								var bestClusterDistance = dropLightClusterRadius * dropLightClusterRadius;
 								for (clusters[0..clusterCount], 0..) |cluster, clusterIndex| {
@@ -793,8 +765,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 			}
 		}
 		droppedLightClusterCount = @intCast(clusterCount);
-		// Select the most visible clusters for the fixed GPU budget. This preserves a bounded
-		// fragment cost even when a player drops hundreds of torches in one place.
+
 		for (clusters[0..clusterCount]) |cluster| {
 			for (0..maxDropLights) |slot| {
 				if (cluster.weight <= dropStrengths[slot]) continue;
@@ -816,7 +787,7 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	}
 };
 
-pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
+pub const ItemDropRenderer = struct {
 	var itemPipeline: graphics.Pipeline = undefined;
 	var itemUniforms: struct {
 		modelMatrix: c_int,
@@ -836,7 +807,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		index: u31 = undefined,
 		len: u31 = undefined,
 		item: items.Item,
-		/// Inventory icons are normally flat; a held block must instead use its placed-block mesh.
+
 		forceBlockModel: bool = false,
 
 		fn getSlot(len: u31) u31 {
@@ -856,15 +827,12 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		fn init(template: ItemVoxelModel) *ItemVoxelModel {
 			const self = main.globalAllocator.create(ItemVoxelModel);
 			self.* = ItemVoxelModel{
-				// Clone rather than share the template's item: this cache entry can outlive whatever
-				// caller/borrowed value the template came from (e.g. a remote player's held item, which
-				// the network thread can replace/free independently at any time - see remoteHeldItem's
-				// own doc comment for the crash this was part of), so it needs to own an independent copy.
+
 				.item = template.item.clone(),
 				.forceBlockModel = template.forceBlockModel,
 			};
 			if (self.item == .baseItem and self.item.baseItem.block() != null and (self.forceBlockModel or self.item.baseItem.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr)) {
-				// Find sizes and free index:
+
 				var block = blocks.Block{.typ = self.item.baseItem.block().?, .data = 0};
 				block.data = block.mode().naturalStandard;
 				const model = blocks.meshes.model(block).model();
@@ -872,21 +840,21 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				defer data.deinit();
 				for (model.internalQuads) |quad| {
 					const textureIndex = blocks.meshes.textureIndex(block, quad.quadInfo().textureSlot);
-					data.append(@as(u32, @intFromEnum(quad)) << 16 | textureIndex); // modelAndTexture
-					data.append(0); // offsetByNormal
+					data.append(@as(u32, @intFromEnum(quad)) << 16 | textureIndex);
+					data.append(0);
 				}
 				for (model.neighborFacingQuads) |list| {
 					for (list) |quad| {
 						const textureIndex = blocks.meshes.textureIndex(block, quad.quadInfo().textureSlot);
-						data.append(@as(u32, @intFromEnum(quad)) << 16 | textureIndex); // modelAndTexture
-						data.append(1); // offsetByNormal
+						data.append(@as(u32, @intFromEnum(quad)) << 16 | textureIndex);
+						data.append(1);
 					}
 				}
 				self.len = @intCast(data.items.len);
 				self.index = getSlot(self.len);
 				@memcpy(modelData.items[self.index..][0..self.len], data.items);
 			} else {
-				// Find sizes and free index:
+
 				const img = self.item.getImage();
 				const size = Vec3i{img.width, 1, img.height};
 				self.len = @intCast(3 + @reduce(.Mul, size));
@@ -1039,9 +1007,6 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 		}
 	}
 
-	/// Render the selected item a remote player is carrying. This uses the same voxel-item mesh path
-	/// as dropped/first-person items, so procedural tools retain their generated artwork while
-	/// torches and lanterns keep their authored placed-block geometry.
 	pub fn renderRemoteHeldLights(ambientLight: Vec3f, playerPos: Vec3d) void {
 		main.client.entity_manager.mutex.lock();
 		defer main.client.entity_manager.mutex.unlock();
@@ -1053,10 +1018,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			const baseItem = if (item == .baseItem) item.baseItem else null;
 			const blockType = if (baseItem) |candidate| candidate.block() else null;
 			const emittedLight = getItemEmittedLight(item);
-			// Crafted/terrain blocks whose item falls back to the block texture read best as a small
-			// 3D held block. Ores/gems supply a dedicated inventory icon, so preserve that flat item
-			// silhouette instead of turning the ore's host-stone block into a cube in the hand. Lights
-			// are an explicit exception: torch/lantern geometry must stay 3D even with custom icons.
+
 			const useBlockModel = if (baseItem) |candidate| blockType != null and (emittedLight[0] != 0 or emittedLight[1] != 0 or emittedLight[2] != 0 or candidate.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr) else false;
 			const model = if (useBlockModel) getBlockModel(item) else getModel(item);
 			const vertices: u31 = if (useBlockModel) model.len/2*6 else 36;
@@ -1067,15 +1029,9 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			const position: Vec3f = @floatCast(ent.getRenderPosition() - playerPos);
 			const modelComponent = main.entity.components.@"cubyz:model".client.get(ent.id);
 			const entityModel = if (modelComponent) |component| component.entityModel.get() else null;
-			// Entity-model origins are half a model-height above the player position. Use the same
-			// origin transform as modelRenderer, then append the authored RightItem node. Every bundled
-			// player model supplies this attachment; the fallback remains useful for custom models.
+
 			var modelMatrix = Mat4f.translation(position + Vec3f{ 0, 0, if (entityModel) |avatarModel| -avatarModel.height/2 else 0 });
-			// Use the same eased body yaw the avatar mesh itself is drawn with (modelRenderer.zig's
-			// component.rootYaw), not the raw replicated ent.rot[2] - the layered look-turn system makes
-			// the visible body yaw lag behind the raw network yaw while the head absorbs a look-direction
-			// change, so using ent.rot[2] here made the held item visibly rotate independently of (and
-			// out of sync with) the body/arm it's supposed to be attached to.
+
 			const itemBodyYaw = if (modelComponent) |component| component.rootYaw else ent.rot[2];
 			modelMatrix = modelMatrix.mul(Mat4f.rotationZ(-itemBodyYaw));
 			if (modelComponent) |component| {
@@ -1089,12 +1045,11 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			}
 			const isLantern = blockType == blocks.getTypeById("cubyz:lantern/coal") or blockType == blocks.getTypeById("cubyz:lantern/sulfur");
 			if (isLantern) {
-				// Lantern models are upright with the handle on top. Leave them upright and lower the
-				// body from RightItem so the handle appears gripped and the lantern dangles below.
+
 				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ 0.0, 0.04, -0.12 }));
 				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(@as(f32, std.math.pi / 2.0)));
 			} else {
-				// Torch/ordinary block items use the tuned forward-hand transform.
+
 			const transform = ItemDisplayManager.remoteHeldLightTransform(ent.id);
 			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
 			modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
@@ -1105,9 +1060,7 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 				modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(ItemDisplayManager.remoteHeldToolScale(ent.id))));
 			}
 			}
-			// Full blocks are deliberately half the light/item scale; otherwise a held stone/dirt
-			// cube obscures too much of the avatar. Flat ore/gem icons and custom light models retain
-			// their readable item scale.
+
 			const heldScale: f32 = if (useBlockModel and emittedLight[0] == 0 and emittedLight[1] == 0 and emittedLight[2] == 0) 0.154 else 0.308;
 			modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(heldScale)));
 			modelMatrix = modelMatrix.mul(Mat4f.translation(@splat(-0.5)));

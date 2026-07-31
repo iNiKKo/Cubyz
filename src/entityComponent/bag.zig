@@ -33,7 +33,6 @@ pub const entityComponentVersion = 0;
 
 const playerBagSizeLimit = 120;
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	const Component = struct {
 		bag: items.Inventory.BagInventory,
@@ -64,7 +63,6 @@ pub const client = struct {
 	}
 };
 
-// ############################# Server only stuff ################################
 pub const server = struct {
 	pub const Component = struct {
 		bag: items.Inventory.BagInventory,

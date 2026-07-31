@@ -80,13 +80,11 @@ pub fn timestamp() std.Io.Timestamp {
 	return std.Io.Clock.Timestamp.now(io, .awake).raw;
 }
 
-// overwrite the log function:
-pub const std_options: std.Options = .{ // MARK: std_options
+pub const std_options: std.Options = .{
 	.log_level = .debug,
 	.logFn = log.logFn,
 };
 
-// MARK: Callbacks
 fn escape(mods: Window.Key.Modifiers) void {
 	if (gui.selectedTextInput != null) gui.setSelectedTextInput(null);
 	inventory(mods);
@@ -172,9 +170,9 @@ fn setHotbarSlot(i: comptime_int) *const fn (Window.Key.Modifiers) void {
 	}.set;
 }
 
-pub const KeyBoard = struct { // MARK: KeyBoard
+pub const KeyBoard = struct {
 	pub var keys = [_]Window.Key{
-		// Gameplay:
+
 		.{.name = "forward", .key = c.GLFW_KEY_W, .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_Y, .positive = false}},
 		.{.name = "left", .key = c.GLFW_KEY_A, .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_X, .positive = false}},
 		.{.name = "backward", .key = c.GLFW_KEY_S, .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_Y, .positive = true}},
@@ -194,7 +192,6 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "takeBackgroundImage", .key = c.GLFW_KEY_PRINT_SCREEN, .pressAction = &takeBackgroundImageFn},
 		.{.name = "fullscreen", .key = c.GLFW_KEY_F11, .pressAction = &Window.toggleFullscreen},
 
-		// Gui:
 		.{.name = "escape", .key = c.GLFW_KEY_ESCAPE, .pressAction = &escape, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_B},
 		.{.name = "openInventory", .key = c.GLFW_KEY_E, .pressAction = &escape, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_X},
 		.{.name = "openCreativeInventory(aka cheat inventory)", .key = c.GLFW_KEY_C, .pressAction = &openCreativeInventory, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_Y},
@@ -202,14 +199,14 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "openCommand", .key = c.GLFW_KEY_SLASH, .releaseAction = &openCommand},
 		.{.name = "mainGuiButton", .mouseButton = c.GLFW_MOUSE_BUTTON_LEFT, .pressAction = &gui.mainButtonPressed, .releaseAction = &gui.mainButtonReleased, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_A, .notifyRequirement = .inMenu},
 		.{.name = "secondaryGuiButton", .mouseButton = c.GLFW_MOUSE_BUTTON_RIGHT, .pressAction = &gui.secondaryButtonPressed, .releaseAction = &gui.secondaryButtonReleased, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_Y, .notifyRequirement = .inMenu},
-		// gamepad gui.
+
 		.{.name = "scrollUp", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_Y, .positive = false}},
 		.{.name = "scrollDown", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_Y, .positive = true}},
 		.{.name = "uiUp", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_Y, .positive = false}},
 		.{.name = "uiLeft", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_X, .positive = false}},
 		.{.name = "uiDown", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_Y, .positive = true}},
 		.{.name = "uiRight", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_X, .positive = true}},
-		// text:
+
 		.{.name = "textCursorLeft", .key = c.GLFW_KEY_LEFT, .repeatAction = &gui.textCallbacks.left},
 		.{.name = "textCursorRight", .key = c.GLFW_KEY_RIGHT, .repeatAction = &gui.textCallbacks.right},
 		.{.name = "textCursorDown", .key = c.GLFW_KEY_DOWN, .repeatAction = &gui.textCallbacks.down},
@@ -224,7 +221,6 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "textCut", .key = c.GLFW_KEY_X, .repeatAction = &gui.textCallbacks.cut, .requiredModifiers = .{.control = true}},
 		.{.name = "textNewline", .key = c.GLFW_KEY_ENTER, .repeatAction = &gui.textCallbacks.newline},
 
-		// Hotbar shortcuts:
 		.{.name = "Hotbar 1", .key = c.GLFW_KEY_1, .pressAction = setHotbarSlot(1)},
 		.{.name = "Hotbar 2", .key = c.GLFW_KEY_2, .pressAction = setHotbarSlot(2)},
 		.{.name = "Hotbar 3", .key = c.GLFW_KEY_3, .pressAction = setHotbarSlot(3)},
@@ -243,7 +239,7 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "cameraRight", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_X, .positive = true}},
 		.{.name = "cameraUp", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_Y, .positive = false}},
 		.{.name = "cameraDown", .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_Y, .positive = true}},
-		// debug:
+
 		.{.name = "hideMenu", .key = c.GLFW_KEY_F1, .pressAction = &toggleHideGui},
 		.{.name = "hideDisplayItem", .key = c.GLFW_KEY_F2, .pressAction = &toggleHideDisplayItem},
 		.{.name = "debugOverlay", .key = c.GLFW_KEY_F3, .pressAction = &toggleDebugOverlay},
@@ -254,7 +250,7 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 		.{.name = "vulkanDebugOverlay", .key = c.GLFW_KEY_F8, .pressAction = &toggleVulkanDebugOverlay},
 	};
 
-	fn findKey(name: []const u8) ?*Window.Key { // TODO: Maybe I should use a hashmap here?
+	fn findKey(name: []const u8) ?*Window.Key {
 		for (&keys) |*_key| {
 			if (std.mem.eql(u8, name, _key.name)) {
 				return _key;
@@ -284,9 +280,8 @@ pub const KeyBoard = struct { // MARK: KeyBoard
 	}
 };
 
-/// Records gpu time per frame.
 pub var lastFrameTime = std.atomic.Value(f64).init(0);
-/// Measures time between different frames' beginnings.
+
 pub var lastDeltaTime = std.atomic.Value(f64).init(0);
 
 var shouldExitToMenu = std.atomic.Value(bool).init(false);
@@ -295,7 +290,7 @@ pub fn exitToMenu() void {
 	shouldExitToMenu.store(true, .monotonic);
 }
 
-pub fn main(args: std.process.Init.Minimal) void { // MARK: main()
+pub fn main(args: std.process.Init.Minimal) void {
 	defer heap.allocators.deinit();
 	defer heap.GarbageCollection.assertAllThreadsStopped();
 	initThreadLocals();
@@ -417,13 +412,13 @@ pub fn main(args: std.process.Init.Minimal) void { // MARK: main()
 	}
 }
 
-pub fn clientMain() void { // MARK: clientMain()
+pub fn clientMain() void {
 	if (settings.playerName.len == 0) {
 		gui.openWindow("change_name");
 	} else if (settings.launchConfig.autoEnterWorld.len == 0) {
 		gui.openWindow("main");
 	} else {
-		// Speed up the dev process by entering the world directly.
+
 		gui.windowlist.save_selection.openWorld(settings.launchConfig.autoEnterWorld);
 	}
 
@@ -437,7 +432,7 @@ pub fn clientMain() void { // MARK: clientMain()
 		const isHidden = c.glfwGetWindowAttrib(Window.window, c.GLFW_ICONIFIED) == c.GLFW_TRUE;
 		if (!isHidden) {
 			c.glfwSwapBuffers(Window.window);
-			// Clear may also wait on vsync, so it's done before handling events:
+
 			gui.windowlist.gpu_performance_measuring.startQuery(.screenbuffer_clear);
 			c.glDepthFunc(c.GL_LESS);
 			c.glDepthMask(c.GL_TRUE);
@@ -456,7 +451,7 @@ pub fn clientMain() void { // MARK: clientMain()
 		if (settings.fpsCap) |fpsCap| {
 			const minFrameTime = @divFloor(1000*1000*1000, fpsCap);
 			const sleep = @min(minFrameTime, @max(0, minFrameTime - (endRendering.nanoseconds -% lastBeginRendering.nanoseconds)));
-			if (builtin.os.tag == .windows and minFrameTime < 20_000_000) { // Windows can oversleep a lot, so we waste power instead
+			if (builtin.os.tag == .windows and minFrameTime < 20_000_000) {
 				const targetTime = timestamp().addDuration(.fromNanoseconds(sleep));
 				while (timestamp().durationTo(targetTime).nanoseconds > 0) {}
 			} else {
@@ -472,7 +467,7 @@ pub fn clientMain() void { // MARK: clientMain()
 
 		file_monitor.handleEvents();
 
-		if (game.world != null) { // Update the game
+		if (game.world != null) {
 			game.update(deltaTime);
 		}
 
@@ -484,7 +479,7 @@ pub fn clientMain() void { // MARK: clientMain()
 				renderer.updateFov(70.0);
 				renderer.MenuBackGround.render(deltaTime);
 			}
-			// Render the GUI
+
 			gui.windowlist.gpu_performance_measuring.startQuery(.gui);
 			gui.updateAndRenderGui();
 			gui.windowlist.gpu_performance_measuring.stopQuery();
@@ -508,14 +503,13 @@ pub fn clientMain() void { // MARK: clientMain()
 	}
 }
 
-/// std.testing.refAllDeclsRecursive, but ignores C imports (by name)
 pub fn refAllDeclsRecursiveExceptCImports(comptime T: type) void {
 	if (!@import("builtin").is_test) return;
 	inline for (comptime std.meta.declarations(T)) |decl| blk: {
 		if (comptime std.mem.eql(u8, decl.name, "c")) continue;
 		if (comptime std.mem.eql(u8, decl.name, "hbft")) break :blk;
 		if (comptime std.mem.eql(u8, decl.name, "stb_image")) break :blk;
-		// TODO: Remove this after Zig removes Managed hashmap PixelGuys/Cubyz#308
+
 		if (comptime std.mem.eql(u8, decl.name, "Managed")) continue;
 		if (@TypeOf(@field(T, decl.name)) == type) {
 			switch (@typeInfo(@field(T, decl.name))) {

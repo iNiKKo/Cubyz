@@ -100,7 +100,7 @@ pub const WorldEditData = struct {
 
 pub const PlayerIndex = usize;
 
-pub const User = struct { // MARK: User
+pub const User = struct {
 	const maxSimulationDistance = 8;
 	const simulationSize = 2*maxSimulationDistance;
 	const simulationMask = simulationSize - 1;
@@ -116,13 +116,13 @@ pub const User = struct { // MARK: User
 	receivedFirstEntityData: bool = false,
 	isLocal: bool = false,
 	id: main.entity.Entity = .noValue,
-	/// Cosmetic selected item, replicated to clients through protocols.heldLight.
+
 	heldItem: main.items.Item = .null,
 	heldLightTransform: main.vec.Vec4f = .{ 0.0, 0.12, 0.0, -90.0 },
 	heldToolRotationYZ: main.vec.Vec2f = .{ 0.0, 0.0 },
 	heldToolScale: f32 = 1.0,
 	heldMiningSwing: f32 = -1.0,
-	// TODO: ipPort: []const u8,
+
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
 	lastPos: Vec3i = @splat(0),
@@ -171,7 +171,7 @@ pub const User = struct { // MARK: User
 		return self;
 	}
 	pub fn @"continue"(self: *User) void {
-		// reset
+
 		self.* = .{
 			.conn = self.conn,
 			.name = self.name,
@@ -212,7 +212,7 @@ pub const User = struct { // MARK: User
 		self.clearJobQueue();
 
 		main.items.Inventory.server.disconnectUser(self);
-		std.debug.assert(self.inventoryClientToServerIdMap.count() == 0); // leak
+		std.debug.assert(self.inventoryClientToServerIdMap.count() == 0);
 		self.inventoryClientToServerIdMap.deinit();
 
 		if (self.inventory != null) {
@@ -262,7 +262,7 @@ pub const User = struct { // MARK: User
 			break;
 		}
 		if (!foundKey) {
-			if (world.?.playerDatabase.size == 0) { // Claim the local player
+			if (world.?.playerDatabase.size == 0) {
 				std.log.info("Here", .{});
 				self.playerIndex = world.?.localPlayerIndex;
 			} else {
@@ -276,11 +276,7 @@ pub const User = struct { // MARK: User
 	pub fn identifyAsLocal(self: *User, name: []const u8) !void {
 		std.debug.assert(self.name.len == 0);
 		self.name = main.globalAllocator.dupe(u8, name);
-		// Upstream's job scheduler uses playerIndex as its live routing key. A testing-mode
-		// singleplayer host may accept a second local connection with the same account, so give
-		// that external test client a fresh temporary identity while preserving the host's saved
-		// local-player identity. This is deliberately scoped to developer testing; normal joins
-		// retain their existing authentication/save behaviour.
+
 		if (world.?.settings.testingMode and !self.isLocal) {
 			self.playerIndex = world.?.nextPlayerIndex.fetchAdd(1, .monotonic);
 			std.log.info("Assigned temporary testing player index {d} to {s}", .{self.playerIndex, name});
@@ -296,7 +292,7 @@ pub const User = struct { // MARK: User
 		}
 	}
 
-	var freeId: u32 = 0; // TODO: Use id provided by the ECS.
+	var freeId: u32 = 0;
 	pub fn initPlayer(self: *User) void {
 		self.id = @enumFromInt(freeId);
 		freeId += 1;
@@ -337,7 +333,7 @@ pub const User = struct { // MARK: User
 		const lastBoxEnd = (self.lastPos +% @as(Vec3i, @splat(self.lastRenderDistance*chunk.chunkSize))) +% @as(Vec3i, @splat(chunk.chunkSize - 1)) & ~@as(Vec3i, @splat(chunk.chunkMask));
 		const newBoxStart = (newPos -% @as(Vec3i, @splat(newRenderDistance*chunk.chunkSize))) & ~@as(Vec3i, @splat(chunk.chunkMask));
 		const newBoxEnd = (newPos +% @as(Vec3i, @splat(newRenderDistance*chunk.chunkSize))) +% @as(Vec3i, @splat(chunk.chunkSize - 1)) & ~@as(Vec3i, @splat(chunk.chunkMask));
-		// Clear all chunks not inside the new box:
+
 		var x: i32 = lastBoxStart[0];
 		while (x != lastBoxEnd[0]) : (x +%= chunk.chunkSize) {
 			const inXDistance = x -% newBoxStart[0] >= 0 and x -% newBoxEnd[0] < 0;
@@ -361,7 +357,7 @@ pub const User = struct { // MARK: User
 		const lastBoxEnd = (self.lastPos +% @as(Vec3i, @splat(self.lastRenderDistance*chunk.chunkSize))) +% @as(Vec3i, @splat(chunk.chunkSize - 1)) & ~@as(Vec3i, @splat(chunk.chunkMask));
 		const newBoxStart = (newPos -% @as(Vec3i, @splat(newRenderDistance*chunk.chunkSize))) & ~@as(Vec3i, @splat(chunk.chunkMask));
 		const newBoxEnd = (newPos +% @as(Vec3i, @splat(newRenderDistance*chunk.chunkSize))) +% @as(Vec3i, @splat(chunk.chunkSize - 1)) & ~@as(Vec3i, @splat(chunk.chunkMask));
-		// Clear all chunks not inside the new box:
+
 		var x: i32 = newBoxStart[0];
 		while (x != newBoxEnd[0]) : (x +%= chunk.chunkSize) {
 			const inXDistance = x -% lastBoxStart[0] >= 0 and x -% lastBoxEnd[0] < 0;
@@ -396,7 +392,7 @@ pub const User = struct { // MARK: User
 		if (vec.lengthSquare(@as(@Vector(3, i64), self.jobQueueLastUpdate.position -% self.lastPos)) > 32*32) {
 			const startTime = main.timestamp();
 			if (self.jobQueueLastUpdate.time.durationTo(startTime).toMilliseconds() > 100 and !self.jobQueueLastUpdate.alreadyInUpdate) {
-				const ResortTaskTask = struct { // MARK: ResortTaskTask
+				const ResortTaskTask = struct {
 					const vtable = utils.ThreadPool.VTable{
 						.getPriority = &getPriority,
 						.isStillNeeded = &isStillNeeded,
@@ -438,7 +434,7 @@ pub const User = struct { // MARK: User
 						unreachable;
 					}
 				};
-				// Create a task to resort tasks:
+
 				self.jobQueueLastUpdate.alreadyInUpdate = true;
 				return .{
 					.{
@@ -589,9 +585,9 @@ var lastTime: std.Io.Timestamp = undefined;
 
 pub var thread: ?std.Thread = null;
 
-fn init(name: []const u8, singlePlayerPort: ?u16, mode: ServerWorld.Mode) void { // MARK: init()
+fn init(name: []const u8, singlePlayerPort: ?u16, mode: ServerWorld.Mode) void {
 	main.heap.allocators.createWorldArena();
-	std.debug.assert(world == null); // There can only be one world.
+	std.debug.assert(world == null);
 	command.init();
 	users = .init(main.globalAllocator);
 	lastTime = main.timestamp();
@@ -661,7 +657,7 @@ pub fn getUserList(allocator: main.heap.NeverFailingAllocator) []*User {
 }
 
 fn getInitialEntityList(allocator: main.heap.NeverFailingAllocator) []const u8 {
-	// Send the entity updates:
+
 	var initialList: []const u8 = undefined;
 	const list = main.ZonElement.initArray(main.stackAllocator);
 	defer list.deinit(main.stackAllocator);
@@ -674,7 +670,7 @@ fn getInitialEntityList(allocator: main.heap.NeverFailingAllocator) []const u8 {
 	return initialList;
 }
 
-fn update() void { // MARK: update()
+fn update() void {
 	world.?.update();
 	main.entity.server.update();
 
@@ -688,7 +684,6 @@ fn update() void { // MARK: update()
 		user.update();
 	}
 
-	// Send the entity data:
 	const itemData = world.?.itemDropManager.getPositionAndVelocityData(main.stackAllocator);
 	defer main.stackAllocator.free(itemData);
 
@@ -696,7 +691,7 @@ fn update() void { // MARK: update()
 	defer entityData.deinit();
 
 	for (userList) |user| {
-		const id = user.id; // TODO
+		const id = user.id;
 		entityData.append(.{
 			.id = id,
 			.pos = user.player().pos,
@@ -719,17 +714,13 @@ fn update() void { // MARK: update()
 		const biome = world.?.getBiome(pos[0], pos[1], pos[2]);
 		const nowMillis = main.timestamp().toMilliseconds();
 		const weather = WeatherMap.sample(world.?.settings.seed, biome, pos[0], pos[1], nowMillis);
-		// Transitional bridge until the weather-field snapshot protocol is introduced. Snow and dust are
-		// deliberately not sent through the legacy rain-only channel, so a cold/desert biome cannot render
-		// an incorrect rain effect while their dedicated client renderers are still pending.
+
 		const rainIntensity = if (weather.kind == .rain) weather.precipitation else 0.0;
 		if (@abs(rainIntensity - user.lastSentRainIntensity) >= 0.02) {
 			user.lastSentRainIntensity = rainIntensity;
 			main.network.protocols.genericUpdate.sendRainIntensity(user.conn, rainIntensity);
 		}
 
-		// 5 Hz is smooth enough for moving cloud geometry while retaining a bounded server-side
-		// climate-sampling cost (25 cells per snapshot).
 		if (nowMillis - user.lastSentWeatherGridMillis >= 200) {
 			user.lastSentWeatherGridMillis = nowMillis;
 			const centerCell = Vec2i{
@@ -772,7 +763,7 @@ pub fn startFromNewThread(name: []const u8, port: ?u16, mode: ServerWorld.Mode) 
 }
 
 pub fn startFromExistingThread(name: []const u8, port: ?u16, mode: ServerWorld.Mode) void {
-	std.debug.assert(!running.load(.monotonic)); // There can only be one server.
+	std.debug.assert(!running.load(.monotonic));
 
 	const worldName: []const u8 = main.globalAllocator.dupe(u8, name);
 	defer main.globalAllocator.free(worldName);
@@ -780,7 +771,7 @@ pub fn startFromExistingThread(name: []const u8, port: ?u16, mode: ServerWorld.M
 	connectionManager = ConnectionManager.init(main.settings.defaultPort, .{.allowNewConnections = mode == .multiplayer}) catch |err| {
 		std.log.err("Couldn't create socket: {s}", .{@errorName(err)});
 		@panic("Could not open Server.");
-	}; // TODO Configure the second argument in the server settings.
+	};
 	userDeinitList = .init(main.globalAllocator, 16);
 	userConnectList = .init(main.globalAllocator, 16);
 
@@ -827,14 +818,14 @@ pub fn stop(_restart: StopType) void {
 	running.store(false, .release);
 }
 
-pub fn disconnect(user: *User) void { // MARK: disconnect()
+pub fn disconnect(user: *User) void {
 	if (!user.connected.load(.monotonic)) return;
 	removePlayer(user);
 	userDeinitList.pushBack(user);
 	user.connected.store(false, .monotonic);
 }
 
-pub fn removePlayer(user: *User) void { // MARK: removePlayer()
+pub fn removePlayer(user: *User) void {
 	if (!user.connected.load(.monotonic)) return;
 
 	const foundUser = blk: {
@@ -851,7 +842,7 @@ pub fn removePlayer(user: *User) void { // MARK: removePlayer()
 	if (!foundUser) return;
 
 	sendMessage("{s}§#ffff00 left", .{user.name});
-	// Let the other clients know about that this new one left.
+
 	const zonArray = main.ZonElement.initArray(main.stackAllocator);
 	defer zonArray.deinit(main.stackAllocator);
 	zonArray.array.append(.{.int = @intFromEnum(user.id)});
@@ -872,18 +863,16 @@ pub fn connectInternal(user: *User) void {
 	user.initPlayer();
 	main.network.protocols.handShake.sendServerPlayerData(user.conn);
 	user.conn.handShakeState.store(.complete, .monotonic);
-	// Send this only after the handshake payload: protocol dispatch deliberately rejects non-handshake
-	// packets until the client has completed loading its assets.
+
 	const heldLightUsers = getUserList(main.stackAllocator);
 	defer main.stackAllocator.free(heldLightUsers);
 	for (heldLightUsers) |other| {
 		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldItem, other.heldLightTransform, other.heldToolRotationYZ, other.heldToolScale, other.heldMiningSwing);
 	}
 
-	// TODO: addEntity(player);
 	const userList = getUserList(main.stackAllocator);
 	defer main.stackAllocator.free(userList);
-	// Check if a user with that account is already present
+
 	if (!world.?.settings.testingMode) {
 		for (userList) |other| {
 			if (other.playerIndex == user.playerIndex) {
@@ -892,7 +881,7 @@ pub fn connectInternal(user: *User) void {
 			}
 		}
 	}
-	// Let the other clients know about this new one.
+
 	{
 		const zonArray = main.ZonElement.initArray(main.stackAllocator);
 		defer zonArray.deinit(main.stackAllocator);
@@ -905,7 +894,7 @@ pub fn connectInternal(user: *User) void {
 			main.network.protocols.entity.send(other.conn, data);
 		}
 	}
-	{ // Let this client know about the others:
+	{
 		const zonArray = main.ZonElement.initArray(main.stackAllocator);
 		defer zonArray.deinit(main.stackAllocator);
 		for (userList) |other| {
@@ -926,7 +915,7 @@ pub fn connectInternal(user: *User) void {
 	userMutex.unlock();
 }
 
-pub fn messageFrom(msg: []const u8, source: *User) void { // MARK: message
+pub fn messageFrom(msg: []const u8, source: *User) void {
 	sendMessage("[{s}§#ffffff] {s}", .{source.name, msg});
 }
 

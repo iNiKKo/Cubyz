@@ -28,7 +28,6 @@ const entity = main.entity;
 
 const c = @import("c");
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	var pipeline: graphics.Pipeline = undefined;
 	var shadowPipeline: graphics.Pipeline = undefined;
@@ -113,8 +112,6 @@ pub const client = struct {
 	}
 	pub fn clear() void {}
 
-	/// Phase 1 animation: a deliberately subtle procedural idle pose. Resetting from the model's rest
-	/// nodes every update keeps this independent from later imported keyframe clips.
 	fn nodeHasAncestor(entModel: *const main.entityModel.EntityModel, nodeId: u16, ancestorId: u16) bool {
 		var current = entModel.nodeParents[nodeId];
 		while (current) |parent| {
@@ -124,8 +121,6 @@ pub const client = struct {
 		return false;
 	}
 
-	/// Wraps an angle difference into (-pi, pi], so turning e.g. from 179deg to -179deg reads as a small
-	/// step in one direction instead of a near-full-circle jump the wrong way.
 	fn wrapAngle(angle: f32) f32 {
 		const twoPi = 2.0*std.math.pi;
 		var a = @mod(angle + std.math.pi, twoPi);
@@ -133,25 +128,12 @@ pub const client = struct {
 		return a - std.math.pi;
 	}
 
-	/// Layered look-turn: head absorbs the first `headBudget` of a look-direction change, then beyond
-	/// that the root itself starts rotating to catch up and the head offset eases back toward 0 (since
-	/// the root is now carrying that rotation instead). This is purely a visual pose for how OTHER
-	/// players see this avatar turn/look; it never affects the local camera, aim, or actual movement
-	/// direction. Torso rotation was tried and removed - head-only reads more clearly.
 	fn updateLayeredLookYaw(component: *main.entity.components.@"cubyz:model".client.Component, targetYaw: f32, dt: f32, horizontalSpeed: f32) void {
-		const headBudget = std.math.degreesToRadians(30.0); // Raised from 10 - player found 10 too restricted.
-		const turnSpeed = std.math.degreesToRadians(360.0); // How fast the head/root ease toward their target.
-		// How long the look direction has to stay actually still (not just within the head's budget - the
-		// previous version accidentally treated any slow, ongoing look movement as "held" too, since it
-		// only checked whether totalDelta stayed under headBudget rather than whether the player was
-		// actually still moving their view. That meant slow deliberate looking always ran out this timer
-		// and forced a recenter within ~1.2s, so the head pose was only ever visible while moving the
-		// mouse fast enough to keep re-triggering totalDelta past headBudget every frame - exactly the
-		// "only works by spamming left/right fast" symptom.) before the body re-centers to face it anyway.
+		const headBudget = std.math.degreesToRadians(30.0);
+		const turnSpeed = std.math.degreesToRadians(360.0);
+
 		const holdBeforeResetTime = 1.2;
-		// Degrees/second below which the look direction counts as "not actively moving." Measured from an
-		// actual angular rate (change in targetYaw over dt), not a fixed per-frame degree threshold, so it
-		// isn't sensitive to frame rate.
+
 		const stillnessRate = std.math.degreesToRadians(4.0);
 
 		if (!component.hasRootYaw) {
@@ -171,22 +153,15 @@ pub const client = struct {
 		component.lastTargetYaw = targetYaw;
 
 		const totalDelta = wrapAngle(targetYaw - component.rootYaw);
-		// Starting to walk also forces the body to re-center and face the look direction, on top of the
-		// hold-then-recenter timer above - an angled-off body while actively moving reads as wrong/broken
-		// far faster than while standing still, so movement should snap the recenter decision immediately
-		// rather than waiting out the same 1.2s idle-hold delay.
+
 		const movingThreshold = 0.3;
 		const forceRootCatchUp = component.lookHoldTime >= holdBeforeResetTime or horizontalSpeed > movingThreshold;
 
 		if (@abs(totalDelta) <= headBudget and !forceRootCatchUp) {
-			// Within the head's budget and still actively moving (or too recently stopped): head alone
-			// tracks the look direction.
+
 			component.headYawOffset = moveToward(component.headYawOffset, totalDelta, turnSpeed*dt);
 		} else {
-			// Look direction has either turned further than the head can absorb, or been held still long
-			// enough that the body re-centers to face it anyway: the root itself now turns to catch up
-			// toward the actual target, while the head offset eases back toward 0 since the root is
-			// carrying the rotation instead.
+
 			component.rootYaw = component.rootYaw + moveToward(0, totalDelta, turnSpeed*dt);
 			component.headYawOffset = moveToward(component.headYawOffset, 0, turnSpeed*dt);
 		}
@@ -205,10 +180,7 @@ pub const client = struct {
 		const phase = @as(f32, @floatFromInt(component.entityModel.index % 17)) * 0.73;
 		const breathe = @sin(time * 1.35 + phase);
 		const sway = @sin(time * 0.72 + phase);
-		// Shared per-component frame delta, used both for the walk cycle below and for the layered
-		// look-turn easing. Tracked from real elapsed time (not derived from elapsedTime*frequency) so
-		// neither system jumps discontinuously if the frame rate or update cadence varies; see the walk
-		// cycle comment further down for the bug this specifically avoided.
+
 		if (!component.hasWalkUpdateTime) {
 			component.lastWalkUpdateTime = time;
 			component.hasWalkUpdateTime = true;
@@ -216,24 +188,19 @@ pub const client = struct {
 		const dt = std.math.clamp(time - component.lastWalkUpdateTime, 0.0, 0.1);
 		component.lastWalkUpdateTime = time;
 		const torsoId = entModel.nodeIndexMap.get("Torso");
-		// Layered look-turn: figure out how much of the current look yaw the head is absorbing versus the
-		// root, before applying any node rotations below (root yaw is read back out by the modelMatrix
-		// builders at each of this function's call sites). Head-only - torso rotation was tried and
-		// removed for reading more clearly as just a head turn.
+
 		updateLayeredLookYaw(component, rotation[2], dt, horizontalSpeed);
 		if (torsoId) |id| {
 			component.nodes[id].pos[2] += breathe * 0.012;
 			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, sway * 0.018);
 		}
-		// Snale/Snela export Head and arms as separate roots; Cubert parents them under Torso.
-		// Make both layouts breathe as one upper body, without applying the offset twice to children.
+
 		inline for ([_][]const u8{"Head", "Eyestalks", "LeftArm", "RightArm"}) |name| {
 			if (entModel.nodeIndexMap.get(name)) |id| {
 				if (torsoId == null or !nodeHasAncestor(entModel, id, torsoId.?)) component.nodes[id].pos[2] += breathe * 0.012;
 			}
 		}
-		// Legs are planted rather than drifting with the breathing torso. This is a lightweight
-		// root-lock for the existing hierarchy; proper IK can replace it when locomotion arrives.
+
 		if (torsoId) |torso| {
 			inline for ([_][]const u8{"LeftLeg", "RightLeg"}) |name| {
 				if (entModel.nodeIndexMap.get(name)) |id| {
@@ -241,29 +208,20 @@ pub const client = struct {
 				}
 			}
 		}
-		// Airborne pose: a simple velocity-driven jump takes over from the walk cycle while off the
-		// ground (no real jump/land events are wired into animation yet, so this is derived the same way
-		// as the walk gait - from replicated vertical velocity - rather than a triggered one-shot clip).
-		// Right leg steps slightly forward, left leg slightly back (opposite signs on the same axis the
-		// walk cycle already uses for "forward"/"back"), held for the duration of the jump rather than
-		// both legs rotating the same way. A threshold well above normal ground jitter keeps this from
-		// flickering on/off from small vertical noise while walking on uneven terrain.
+
 		const airborneThreshold = 0.5;
 		const isAirborne = @abs(verticalVelocity) > airborneThreshold;
 		if (isAirborne) {
-			// +1 while rising fast, -1 while falling fast, smoothly through 0 near the top of the arc.
+
 			const jumpBlend = std.math.clamp(verticalVelocity/3.0, -1.0, 1.0);
-			const legSplit = 0.35*std.math.clamp(jumpBlend, 0.0, 1.0); // eases in on the way up, relaxes on the way down
+			const legSplit = 0.35*std.math.clamp(jumpBlend, 0.0, 1.0);
 			if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
 				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -legSplit);
 			}
 			if (entModel.nodeIndexMap.get("RightLeg")) |id| {
 				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, legSplit);
 			}
-			// RightArm is reserved for the held-item pose (applied later below) whenever something is
-			// actually held, so it never fights over that node; with empty hands there's no held-item
-			// pose to protect, so both arms swing in the jump - RightArm forward, LeftArm back, mirroring
-			// the leg split above.
+
 			const armSwing = 0.6*std.math.clamp(jumpBlend, 0.0, 1.0);
 			if (entModel.nodeIndexMap.get("LeftArm")) |id| {
 				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, armSwing);
@@ -274,19 +232,12 @@ pub const client = struct {
 				}
 			}
 		} else {
-			// Basic locomotion deliberately affects legs only. Horizontal entity velocity is already part
-			// of ordinary position replication, so every client derives the same gait without a new
-			// animation packet. Faster movement both increases the swing amplitude and advances the cycle
-			// faster. (dt was already computed above, shared with the layered look-turn update.)
+
 			const walkBlend = std.math.clamp(horizontalSpeed/4.5, 0.0, 1.0);
 			if (walkBlend > 0.02) {
-				// Normal walking is ~4.5 blocks/s. Base cadence raised 50% then a further 25% (0.90/0.90)
-				// after still being reported too slow; very fast movement still scales up naturally from
-				// this base.
+
 				component.walkPhase += (0.90 + horizontalSpeed*0.90)*dt;
-				// Continuous opposite-phase swing: both legs are always moving, one forward while the
-				// other is back, crossing through the rest pose together - the usual walk-cycle shape,
-				// replacing the earlier "lift one leg, pause, then lift the other" sequential pattern.
+
 				const step = @sin(component.walkPhase + phase);
 				const legSwing: f32 = 0.58*walkBlend;
 				if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
@@ -297,9 +248,7 @@ pub const client = struct {
 				}
 			}
 		}
-		// Every current player model places RightArm's node origin at the shoulder, so rotating this
-		// single existing arm node gives a clean shoulder-pivoted "present item" pose. A future
-		// UpperArm/Forearm rig can replace this with a real elbow bend without changing held-item logic.
+
 		if (isHoldingItem) {
 			if (entModel.nodeIndexMap.get("RightArm")) |id| {
 				const swing = if (miningSwing) |progress| @sin(progress * std.math.pi) * 0.80 else 0.0;
@@ -312,16 +261,7 @@ pub const client = struct {
 			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{0, 0, 1}, component.headYawOffset)
 				.mul(vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, headRot));
 		}
-		// Eyestalks (Snale/Snela's snail eyes) get no rotation/animation of their own at all - they're
-		// welded rigidly to Head below by borrowing Head's fully computed world matrix as their parent
-		// matrix, exactly as if they were an actual child of Head in the model (which they aren't -
-		// they're exported as a separate root). Previously they got a scaled-down copy of the head's own
-		// rotation applied around their OWN pivot, which swings/arcs them independently since their pivot
-		// isn't at the head's pivot - not the same as being rigidly attached.
-		// Head's world matrix is computed explicitly up front (not just read out of component.matrices
-		// during the loop below) so this doesn't depend on Head happening to have a lower node index than
-		// Eyestalks - node export order isn't guaranteed, and reading a stale/not-yet-updated matrix would
-		// leave Eyestalks a frame behind.
+
 		var headWorldMat: Mat4f = Mat4f.identity();
 		if (headId) |id| {
 			const headParentMat = if (entModel.nodeParents[id]) |p| component.matrices[p].transpose() else Mat4f.identity();
@@ -340,8 +280,6 @@ pub const client = struct {
 		nodeBuffer.uploadData(component.matrices, &component.bufferAllocation);
 	}
 
-	/// Used by CSM update. Entity positions/rotations are already replicated normally, so rendering their
-	/// depth locally is deterministic from the receiving client's perspective and needs no shadow packets.
 	pub fn renderShadows(lightSpaceMatrix: *const Mat4f, playerPos: Vec3d) void {
 		main.client.entity_manager.mutex.lock();
 		defer main.client.entity_manager.mutex.unlock();
@@ -349,9 +287,7 @@ pub const client = struct {
 		defer nodeBuffer.endRender();
 		shadowPipeline.bind(null);
 		c.glUniformMatrix4fv(shadowUniforms.lightSpaceMatrix, 1, c.GL_FALSE, @ptrCast(&lightSpaceMatrix.toGl()));
-		// The local avatar is deliberately absent from entity_manager so it is not drawn in first
-		// person. Its model component is still loaded from the handshake, so feed it directly to the
-		// depth-only pass when the client enables its own shadow.
+
 		if (settings.ownPlayerShadow) {
 			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
 				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
@@ -374,8 +310,7 @@ pub const client = struct {
 			}
 		}
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |*component, id| {
-			// This pass is deliberately for player avatars only; generic entities keep their current rendering
-			// behaviour until they have their own shadow-quality policy.
+
 			if (entity.components.@"cubyz:player".client.get(id) == null) continue;
 			if (id == game.Player.id) continue;
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
@@ -422,7 +357,7 @@ pub const client = struct {
 		const fontScreenSize = fontBaseSize*screenUnits;
 
 		for (main.client.entity_manager.entities.items()) |ent| {
-			if (ent.id == game.Player.id) continue; // don't render local player
+			if (ent.id == game.Player.id) continue;
 			if (ent.name.len == 0 and !settings.showPlayerIndexWithName) continue;
 
 			var offsetText: f32 = 0;
@@ -465,9 +400,8 @@ pub const client = struct {
 		main.client.entity_manager.mutex.lock();
 		defer main.client.entity_manager.mutex.unlock();
 
-		// TODO: #3342
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |*component, id| {
-			if (id == game.Player.id) continue; // don't process local player
+			if (id == game.Player.id) continue;
 
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
@@ -513,8 +447,7 @@ pub const client = struct {
 		c.glUniform3fv(uniforms.dropLightPosition7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightPositionsRelative[7]));
 		c.glUniform3fv(uniforms.dropLightColor7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[7]));
 		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
-		// entity_manager is already locked by this render pass, so compute the closest remote light
-		// directly here instead of calling ItemDisplayManager.closestRemoteLight (which locks it).
+
 		var nearestRemoteLightPos: Vec3f = @splat(0);
 		var nearestRemoteLightColor: Vec3f = @splat(0);
 		var nearestRemoteLightDistance: f32 = std.math.inf(f32);
@@ -536,7 +469,7 @@ pub const client = struct {
 		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();
 
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |component, id| {
-			if (id == game.Player.id) continue; // don't render local player
+			if (id == game.Player.id) continue;
 
 			const entModel = component.entityModel.get();
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
@@ -573,7 +506,7 @@ pub const client = struct {
 		main.entity.systems.modelRenderer.client.nodeBuffer.endRender();
 	}
 };
-// ############################# Server only stuff ################################
+
 pub const server = struct {
 	pub fn init() void {}
 	pub fn deinit() void {}

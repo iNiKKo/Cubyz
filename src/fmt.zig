@@ -48,7 +48,6 @@ pub const FormatArg = union(enum) {
 			else => {},
 		}
 
-		// Not sure what to do with the rest, so I'll just assume 'any'.
 		const genericFormat = struct {
 			fn genericFormat(ptr: *const anyopaque, writer: *std.Io.Writer) std.Io.Writer.Error!void {
 				try writer.print("{any}", .{@as(*const T, @ptrCast(@alignCast(ptr))).*});
@@ -58,7 +57,7 @@ pub const FormatArg = union(enum) {
 	}
 };
 
-pub const Placeholder = struct { // Copied from std.fmt.Placeholder and adjusted for runtime parsing
+pub const Placeholder = struct {
 	specifierArg: []const u8,
 	fill: u8,
 	alignment: std.fmt.Alignment,
@@ -77,11 +76,6 @@ pub const Placeholder = struct { // Copied from std.fmt.Placeholder and adjusted
 			}
 		}
 
-		// Parse the fill byte, if present.
-		//
-		// When the width field is also specified, the fill byte must
-		// be followed by an alignment specifier, unless it's '0' (zero)
-		// (in which case it's handled as part of the width specifier).
 		var fill: ?u8 = if (parser.peek(1)) |b|
 			switch (b) {
 				'<', '^', '>' => parser.char(),
@@ -90,11 +84,10 @@ pub const Placeholder = struct { // Copied from std.fmt.Placeholder and adjusted
 		else
 			null;
 
-		// Parse the alignment parameter
 		const alignment: ?std.fmt.Alignment = if (parser.peek(0)) |b| init: {
 			switch (b) {
 				'<', '^', '>' => {
-					// consume the character
+
 					break :init switch (parser.char().?) {
 						'<' => .left,
 						'^' => .center,
@@ -105,16 +98,12 @@ pub const Placeholder = struct { // Copied from std.fmt.Placeholder and adjusted
 			}
 		} else null;
 
-		// When none of the fill character and the alignment specifier have
-		// been provided, check whether the width starts with a zero.
 		if (fill == null and alignment == null) {
 			fill = if (parser.peek(0) == '0') '0' else null;
 		}
 
-		// Parse the width parameter
 		const width = parser.number();
 
-		// Skip the dot, if present
 		if (parser.char()) |b| {
 			if (b != '.') {
 				std.log.err("expected . or }}, found '{c}'", .{b});
@@ -122,7 +111,6 @@ pub const Placeholder = struct { // Copied from std.fmt.Placeholder and adjusted
 			}
 		}
 
-		// Parse the precision parameter
 		const precision = parser.number();
 
 		if (parser.char()) |b| {

@@ -13,7 +13,7 @@ pub fn generateFractalTerrain(wx: i32, x0: u31, width: u32, scale: u31, worldSee
 	defer main.stackAllocator.free(bigMap);
 	const offset = wx & ~mask;
 	var seed: u64 = undefined;
-	// Generate the 4 corner points of this map using a coordinate-depending seed:
+
 	setSeed(0, offset, &seed, worldSeed, scale);
 	bigMap[0] = main.random.nextFloat(&seed);
 	setSeed(scale, offset, &seed, worldSeed, scale);
@@ -28,7 +28,7 @@ pub fn generateInitializedFractalTerrain(offset: i32, scale: u31, startingScale:
 	var res: u31 = startingScale/2;
 	while (res != 0) : (res /= 2) {
 		const randomnessScale = @as(f32, @floatFromInt(res))/@as(f32, @floatFromInt(scale))/2;
-		// No coordinate on the grid:
+
 		var x = res;
 		while (x + res < max) : (x += 2*res) {
 			setSeed(x, offset, &seed, worldSeed, res);

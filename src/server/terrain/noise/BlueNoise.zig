@@ -5,27 +5,22 @@ const random = main.random;
 const Array2D = main.utils.Array2D;
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
-const sizeShift = 7; // TODO: Increase back to 10 once this is no longer impacting loading time.
+const sizeShift = 7;
 const size = 1 << sizeShift;
 const sizeMask = size - 1;
 const featureShift = 2;
 const featureSize = 1 << featureShift;
 const featureMask = featureSize - 1;
 
-/// Uses a simple square grid as a base.
 var pattern: [size*size]u8 = undefined;
 
-/// Loads a pre-seeded noise map that is used for world generation.
-pub fn load() void { // TODO: Do this at compile time once the caching is good enough.
-	@setRuntimeSafety(false); // TODO: Replace with optimizations.
+pub fn load() void {
+	@setRuntimeSafety(false);
 	var seed: u64 = 54095248685739;
 	const distSquareLimit = 8;
 	const repetitions = 4;
 	const iterations = 16;
-	// Go through all points and try to move them randomly.
-	// Ensures that the grid is valid in each step.
-	// This is repeated multiple times for optimal results.
-	// In the last repetition is enforced, to remove grid artifacts.
+
 	for (0..repetitions) |_| {
 		for (0..pattern.len) |i| {
 			const x: i32 = @intCast(i >> sizeShift);
@@ -34,12 +29,12 @@ pub fn load() void { // TODO: Do this at compile time once the caching is good e
 				const point = random.nextInt(u6, &seed);
 				const xOffset = point >> 3 & 7;
 				const yOffset = point & 7;
-				// Go through all neighbors and check validity:
+
 				var dx: i32 = -2;
 				while (dx <= 2) : (dx += 1) {
 					var dy: i32 = -2;
 					while (dy <= 2) : (dy += 1) {
-						if (dx == 0 and dy == 0) continue; // Don't compare with itself!
+						if (dx == 0 and dy == 0) continue;
 						const neighbor = (x + dx & sizeMask) << sizeShift | (y + dy & sizeMask);
 						const neighborPos = pattern[@intCast(neighbor)];
 						const nx = (neighborPos >> 3) + (dx << featureShift);
@@ -60,7 +55,6 @@ fn sample(x: i32, y: i32) u8 {
 	return pattern[@intCast(x << sizeShift | y)];
 }
 
-/// Takes a subregion of the grid. Corrdinates are returned relative to x and y compressed into 16 bits each.
 pub fn getRegionData(allocator: NeverFailingAllocator, x: i32, y: i32, width: u31, height: u31) []u32 {
 	const xMin = ((x & ~@as(i32, featureMask)) -% featureSize);
 	const yMin = ((y & ~@as(i32, featureMask)) -% featureSize);

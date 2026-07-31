@@ -7,18 +7,6 @@ const Neighbor = main.chunk.Neighbor;
 const ZonElement = main.ZonElement;
 const server = main.server;
 
-/// Water level is stored directly in the block's raw `data` field (no custom RotationMode needed,
-/// since the default mode already treats `data` as opaque per-block storage):
-/// `sourceLevel` = a PERMANENT source (player-placed or world-gen ocean/lake) - never decays, keeps
-/// spreading/falling forever. `maxFlowLevel`..1 = flowing water - decays if it loses its supply, even if
-/// a waterfall has topped it up all the way to `maxFlowLevel` (full visual strength). These must be two
-/// distinct values: a flowing block topped up to full strength by a falling column is NOT the same thing
-/// as an actual permanent source, and needs to be tellable apart so it can still decay once whatever fed
-/// it is gone - see the dated fix note in this file's history for the exact bug this distinction fixes
-/// (destroying the source block on a pillar/waterfall left everything below the very top segment
-/// permanently alive, since a fed block sitting at the old single "full strength" value was
-/// indistinguishable from a real source and therefore skipped the decay check entirely).
-/// 0 is unused (a flowing block that would drop to 0 reverts to air instead of persisting at level 0).
 pub const maxFlowLevel: u16 = 4;
 pub const sourceLevel: u16 = maxFlowLevel + 1;
 
@@ -38,11 +26,6 @@ fn isFluid(self: *@This(), block: Block) bool {
 	return block.typ == self.sourceBlock.typ;
 }
 
-/// Highest level among horizontal neighbors that could feed this position (falling supply from directly
-/// above is handled separately in `run`, since a falling column always supplies at full flowing strength
-/// regardless of the source's own level - see the comment on `fedByFallingAbove`). Returns 0 if no
-/// horizontal fluid neighbor can supply it. A permanent source neighbor supplies at `maxFlowLevel` (not
-/// `sourceLevel`) - the flowing water spreading away from it is never itself a source.
 fn bestHorizontalSupplyLevel(self: *@This(), world: *main.server.ServerWorld, wx: i32, wy: i32, wz: i32) u16 {
 	var best: u16 = 0;
 	for ([_]Neighbor{.dirPosX, .dirNegX, .dirPosY, .dirNegY}) |neighbor| {
@@ -63,9 +46,6 @@ pub fn run(self: *@This(), params: main.callbacks.ServerBlockCallback.Params) ma
 	var thisBlock = world.getBlock(wx, wy, wz) orelse return .ignored;
 	if (!self.isFluid(thisBlock)) return .ignored;
 
-	// A fluid block with data==0 is never a meaningful steady state (see the type doc comment above) -
-	// encountering one here means it was just placed (e.g. via the creative menu) and hasn't been
-	// normalized yet. Treat it as a freshly placed permanent source.
 	if (thisBlock.data == 0) {
 		const normalized = Block{.typ = thisBlock.typ, .data = sourceLevel};
 		if (world.cmpxchgBlock(wx, wy, wz, thisBlock, normalized) != null) return .ignored;
@@ -75,14 +55,6 @@ pub fn run(self: *@This(), params: main.callbacks.ServerBlockCallback.Params) ma
 	var handled = false;
 	const isSource = thisBlock.data == sourceLevel;
 
-	// Falling: water above open space always falls at FULL flowing strength all the way down, matching
-	// vanilla Minecraft - a waterfall never weakens as it falls, no matter how far, but the falling water
-	// itself is flowing water (maxFlowLevel), not a new permanent source, even when it fell from one.
-	// This also means a block that is currently falling (has open air below it) must NOT spread sideways
-	// itself; only once it actually lands (below is solid ground or an existing water surface) does it
-	// start spreading outward, decaying by 1 per horizontal step from THAT point - exactly the "keep
-	// going down for free, then start counting the spread allowance from the first block it touches"
-	// behavior requested.
 	const belowBlock = world.getBlock(wx, wy, wz -% 1) orelse Block.air;
 	const isFalling = belowBlock.replaceable() and !self.isFluid(belowBlock);
 	if (isFalling) {
@@ -93,11 +65,6 @@ pub fn run(self: *@This(), params: main.callbacks.ServerBlockCallback.Params) ma
 		}
 	}
 
-	// Non-source blocks decay if they've lost their supply. A block being actively fed by a falling
-	// column directly above it counts as fully supplied at maxFlowLevel (falling water always tops up
-	// what it lands in), independent of the horizontal-neighbor-based supply check below. Permanent
-	// sources skip this decay check entirely - they never lose their own strength, only what flows away
-	// from them can run dry.
 	if (!isSource) {
 		const above = world.getBlock(wx, wy, wz +% 1) orelse Block.air;
 		const fedByFallingAbove = self.isFluid(above);
@@ -119,13 +86,6 @@ pub fn run(self: *@This(), params: main.callbacks.ServerBlockCallback.Params) ma
 		}
 	}
 
-	// Spread horizontally only once this block is resting on solid, non-fluid ground - NOT merely "has
-	// something non-open below it," since water is itself replaceable/fluid and a tall vertical column
-	// (e.g. a pillar of source blocks stacked in open air, or a still-falling waterfall) would otherwise
-	// have every block in the column see fluid directly beneath it and think it had "landed." That bug
-	// produced a pyramid many times wider than intended - every level of a falling column was spreading
-	// a full 3 tiles outward, not just the block actually touching the ground. Re-read belowBlock fresh
-	// in case the fall above just changed it (e.g. this exact block just finished falling onto ground).
 	const restingBelow = world.getBlock(wx, wy, wz -% 1) orelse Block.air;
 	const canSpreadHere = !restingBelow.replaceable() and !self.isFluid(restingBelow);
 	const spreadFrom = if (isSource) maxFlowLevel else thisBlock.data;

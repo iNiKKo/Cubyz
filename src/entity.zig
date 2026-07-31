@@ -229,7 +229,6 @@ pub fn loadComponentsFromBase64(base64Data: []const u8, entity: Entity, comptime
 	return lastError;
 }
 
-// Depending on who the audience is, we want to serialize different informations.
 pub const AudienceInfo = enum {
 	disk,
 	playerHimself,

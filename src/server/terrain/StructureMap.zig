@@ -95,7 +95,7 @@ pub const StructureMapFragment = struct {
 	}
 
 	fn getIndex(self: *const StructureMapFragment, x: i32, y: i32, z: i32) usize {
-		std.debug.assert(x >= 0 and x < size*self.pos.voxelSize and y >= 0 and y < size*self.pos.voxelSize and z >= 0 and z < size*self.pos.voxelSize); // Coordinates out of range.
+		std.debug.assert(x >= 0 and x < size*self.pos.voxelSize and y >= 0 and y < size*self.pos.voxelSize and z >= 0 and z < size*self.pos.voxelSize);
 		return @intCast(((x >> main.chunk.chunkShift + self.voxelShift)*chunkedSize + (y >> main.chunk.chunkShift + self.voxelShift))*chunkedSize + (z >> main.chunk.chunkShift + self.voxelShift));
 	}
 
@@ -123,13 +123,12 @@ pub const StructureMapFragment = struct {
 	}
 };
 
-/// A generator for the cave map.
 pub const StructureMapGenerator = struct {
 	init: *const fn (parameters: ZonElement) void,
 	generate: *const fn (map: *StructureMapFragment, seed: u64) void,
-	/// Used to prioritize certain generators over others.
+
 	priority: i32,
-	/// To avoid duplicate seeds in similar generation algorithms, the SurfaceGenerator xors the world-seed with the generator specific seed.
+
 	generatorSeed: u64,
 	defaultState: GeneratorState,
 
@@ -167,7 +166,7 @@ pub const StructureMapGenerator = struct {
 	}
 };
 
-const cacheSize = 1 << 10; // Must be a power of 2!
+const cacheSize = 1 << 10;
 const associativity = 8;
 var cache: Cache(StructureMapFragment, cacheSize, associativity, StructureMapFragment.deferredDeinit) = .{};
 var profile: TerrainGenerationProfile = undefined;

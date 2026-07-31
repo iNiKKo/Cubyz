@@ -52,7 +52,7 @@ id: []const u8 = undefined,
 rootComponent: ?GuiComponent = null,
 showTitleBar: bool = true,
 hasBackground: bool = true,
-hideIfMouseIsGrabbed: bool = true, // TODO: Allow the user to change this with a button, to for example leave the inventory open while playing.
+hideIfMouseIsGrabbed: bool = true,
 closeIfMouseIsGrabbed: bool = false,
 closeable: bool = true,
 isHud: bool = false,
@@ -60,13 +60,12 @@ titleBar: ?*GuiComponent.HorizontalList = null,
 
 shiftClickableInventory: ?main.items.Inventory.ClientInventory = null,
 
-/// Called every frame.
 renderFn: *const fn () void = &defaultFunction,
-/// Called every frame before rendering.
+
 updateFn: *const fn () void = &defaultFunction,
-/// Called every frame for the currently selected window.
+
 updateSelectedFn: *const fn () void = &defaultFunction,
-/// Called every frame for the currently hovered window.
+
 updateHoveredFn: *const fn () main.callbacks.Result = &defaultFunctionWithResult,
 
 onOpenFn: *const fn () void = &defaultFunction,
@@ -185,7 +184,7 @@ pub fn mainButtonReleased(self: *GuiWindow, mousePosition: Vec2f) void {
 
 		if (mousePositionRelative[1] >= 0 and mousePositionRelative[1] <= titleBarHeight*self.scale) {
 			if (mousePositionRelative[0] > zoomInPos and mousePositionRelative[0] <= zoomOutPos and grabPositionRelative[0] > zoomInPos and grabPositionRelative[0] <= zoomOutPos) {
-				// Zoom in
+
 				if (self.scale >= 1) {
 					self.scale += 0.5;
 				} else {
@@ -195,7 +194,7 @@ pub fn mainButtonReleased(self: *GuiWindow, mousePosition: Vec2f) void {
 				gui.save();
 			}
 			if (mousePositionRelative[0] > zoomOutPos and mousePositionRelative[0] <= closePos and grabPositionRelative[0] > zoomOutPos and grabPositionRelative[0] <= closePos) {
-				// Zoom out
+
 				if (self.scale > 1) {
 					self.scale -= 0.5;
 				} else {
@@ -206,7 +205,7 @@ pub fn mainButtonReleased(self: *GuiWindow, mousePosition: Vec2f) void {
 				gui.save();
 			}
 			if (mousePositionRelative[0] > closePos and grabPositionRelative[0] > closePos) {
-				// Close
+
 				if (self.closeable) gui.closeWindowFromRef(self);
 			}
 		}
@@ -252,7 +251,7 @@ fn snapToOtherWindow(self: *GuiWindow) void {
 		var selfAttachment: AttachmentPoint = undefined;
 		var otherAttachment: AttachmentPoint = undefined;
 		for (gui.openWindows.items) |other| {
-			// Check if they touch:
+
 			const start = @max(self.pos[i ^ 1], other.pos[i ^ 1]);
 			const end = @min(self.pos[i ^ 1] + self.size[i ^ 1], other.pos[i ^ 1] + other.size[i ^ 1]);
 			if (start >= end) continue;
@@ -282,7 +281,7 @@ fn snapToOtherWindow(self: *GuiWindow) void {
 fn positionRelativeToFrame(self: *GuiWindow) void {
 	const windowSize = main.Window.getWindowSize()/@as(Vec2f, @splat(gui.scale));
 	inline for (&self.relativePosition, 0..) |*relPos, i| {
-		// Snap to the center:
+
 		if (@abs(self.pos[i] + self.size[i] - windowSize[i]/2) <= snapDistance) {
 			relPos.* = .{.attachedToFrame = .{
 				.selfAttachmentPoint = .upper,
@@ -313,7 +312,7 @@ fn positionRelativeToFrame(self: *GuiWindow) void {
 fn positionRelativeToConnectedWindow(self: *GuiWindow, other: *GuiWindow, comptime i: usize) void {
 	const otherSize = other.size;
 	const relPos = &self.relativePosition[i];
-	// Snap to the center:
+
 	if (@abs(self.pos[i] + self.size[i] - (other.pos[i] + otherSize[i]/2)) <= snapDistance) {
 		relPos.* = .{.attachedToWindow = .{
 			.reference = other,
@@ -332,7 +331,7 @@ fn positionRelativeToConnectedWindow(self: *GuiWindow, other: *GuiWindow, compti
 			.selfAttachmentPoint = .lower,
 			.otherAttachmentPoint = .middle,
 		}};
-		// Snap to the edges:
+
 	} else if (@abs(self.pos[i] - other.pos[i]) <= snapDistance) {
 		relPos.* = .{.attachedToWindow = .{
 			.reference = other,
@@ -448,7 +447,7 @@ pub fn updateWindowPosition(self: *GuiWindow) void {
 			},
 		}
 	}
-	self.pos = @floor(self.pos); // Prevent floating point inaccuracies (these can happen when resizing the window) from causing weird window positioning issues.
+	self.pos = @floor(self.pos);
 	self.pos[0] = @max(self.pos[0], 0);
 	self.pos[1] = @min(self.pos[1], windowSize[1] - self.size[1]);
 	self.pos[0] = @min(self.pos[0], windowSize[0] - self.size[0]);

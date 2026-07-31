@@ -14,7 +14,7 @@ const Tag = main.Tag;
 const StructureTable = terrain.structures.StructureTable;
 pub const SimpleStructureModel = terrain.structures.SimpleStructureModel;
 
-const Stripe = struct { // MARK: Stripe
+const Stripe = struct {
 	direction: ?Vec3d,
 	block: main.blocks.Block,
 	minDistance: f64,
@@ -138,12 +138,10 @@ pub fn hashGeneric(input: anytype) u64 {
 	};
 }
 
-// https://stackoverflow.com/questions/5889238/why-is-xor-the-default-way-to-combine-hashes
 fn hashCombine(left: u64, right: u64) u64 {
 	return left ^ (right +% 0x517cc1b727220a95 +% (left << 6) +% (left >> 2));
 }
 
-// https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key
 fn hashInt(input: u64) u64 {
 	var x = input;
 	x = (x ^ (x >> 30))*%0xbf58476d1ce4e5b9;
@@ -166,11 +164,8 @@ fn u32ToVec3(color: u32) Vec3f {
 	return .{r, g, b};
 }
 
-/// A climate region with special ground, plants and structures.
-pub const Biome = struct { // MARK: Biome
-	/// Weather behaviour is intentionally separate from terrain-generation properties. In particular,
-	/// hot+dry describes both a sandy desert and a dry savannah, but only the former should generate
-	/// sandstorms or reject all precipitation.
+pub const Biome = struct {
+
 	pub const WeatherProfile = enum {
 		automatic,
 		humid,
@@ -182,7 +177,7 @@ pub const Biome = struct { // MARK: Biome
 	};
 
 	pub const GenerationProperties = packed struct(u15) {
-		// pairs of opposite properties. In-between values are allowed.
+
 		hot: bool = false,
 		temperate: bool = false,
 		cold: bool = false,
@@ -216,7 +211,7 @@ pub const Biome = struct { // MARK: Biome
 				}
 			}
 			if (initMidValues) {
-				// Fill all mid values if no value was specified in a group:
+
 				const val: u15 = @bitCast(result);
 				const empty = ~val & ~val >> 1 & ~val >> 2 & mask;
 				result = @bitCast(val | empty << 1);
@@ -245,7 +240,7 @@ pub const Biome = struct { // MARK: Biome
 	caveNoiseStrength: f32,
 	caveRadiusFactor: f32,
 	crystals: u32,
-	/// How much of the surface structure should be eroded depending on the slope.
+
 	soilCreep: f32,
 	stoneBlock: main.blocks.Block,
 	fogLower: f32,
@@ -256,9 +251,9 @@ pub const Biome = struct { // MARK: Biome
 	id: []const u8,
 	paletteId: u32,
 	structure: BlockStructure = undefined,
-	/// Whether the starting point of a river can be in this biome. If false rivers will be able to flow through this biome anyways.
-	supportsRivers: bool, // TODO: Reimplement rivers.
-	/// The first members in this array will get prioritized.
+
+	supportsRivers: bool,
+
 	vegetationModels: []SimpleStructureModel = &.{},
 	maxSdfExtend: vec.Boxi = .{.min = @splat(0), .max = @splat(0)},
 	caveSdfModels: []terrain.sdf.SdfModel = &.{},
@@ -267,7 +262,7 @@ pub const Biome = struct { // MARK: Biome
 	transitionBiomes: []TransitionBiome = &.{},
 	maxSubBiomeCount: f32,
 	subBiomeTotalChance: f32 = 0,
-	preferredMusic: []const u8, // TODO: Support multiple possibilities that are chosen based on time and danger.
+	preferredMusic: []const u8,
 	isValidPlayerSpawn: bool,
 	chance: f32,
 	tags: []const Tag,
@@ -350,7 +345,7 @@ pub const Biome = struct { // MARK: Biome
 					.propertyMask = GenerationProperties.fromZon(src.getChild("properties"), false),
 					.width = src.get(u8, "width") orelse 2,
 				};
-				// Fill all unspecified property groups:
+
 				var properties: u15 = @bitCast(dst.propertyMask);
 				const empty = ~properties & ~properties >> 1 & ~properties >> 2 & GenerationProperties.mask;
 				properties |= empty | empty << 1 | empty << 2;
@@ -365,7 +360,7 @@ pub const Biome = struct { // MARK: Biome
 		var vegetation: main.List(SimpleStructureModel) = .empty;
 		var totalChance: f32 = 0;
 		defer vegetation.deinit(main.stackAllocator);
-		// Add structures from the biome's internal structure table
+
 		for (structures.toSlice()) |elem| {
 			const model = SimpleStructureModel.initModel(elem) orelse continue;
 			vegetation.append(main.stackAllocator, model);
@@ -416,8 +411,7 @@ pub const Biome = struct { // MARK: Biome
 	}
 };
 
-/// Stores the vertical ground structure of a biome from top to bottom.
-pub const BlockStructure = struct { // MARK: BlockStructure
+pub const BlockStructure = struct {
 	pub const BlockStack = struct {
 		block: main.blocks.Block = .{.typ = 0, .data = 0},
 		min: u31 = 0,
@@ -494,7 +488,7 @@ pub const BlockStructure = struct { // MARK: BlockStructure
 	}
 };
 
-pub const TreeNode = union(enum) { // MARK: TreeNode
+pub const TreeNode = union(enum) {
 	leaf: struct {
 		totalChance: f64 = 0,
 		aliasTable: main.utils.AliasTable(Biome) = undefined,
@@ -541,7 +535,6 @@ pub const TreeNode = union(enum) { // MARK: TreeNode
 			.children = undefined,
 		}};
 
-		// Partition the slice:
 		var lowerIndex: usize = undefined;
 		var upperIndex: usize = undefined;
 		{
@@ -597,7 +590,6 @@ pub const TreeNode = union(enum) { // MARK: TreeNode
 	}
 };
 
-// MARK: init/register
 var finishedLoading: bool = false;
 var biomes: main.List(Biome) = .empty;
 var caveBiomes: main.List(Biome) = .empty;
@@ -769,7 +761,6 @@ pub fn getCaveBiomes() []const Biome {
 	return caveBiomes.items;
 }
 
-/// A checksum that can be used to check for changes i nthe biomes being used.
 pub fn getBiomeCheckSum(seed: u64) u64 {
 	var result: u64 = seed;
 	for (biomes.items) |*biome| {

@@ -26,7 +26,7 @@ const UpdateEvent = union(enum) {
 
 pub const ErrorSet = BinaryReader.AllErrors || error{Invalid};
 
-pub const BlockEntityType = struct { // MARK: BlockEntityType
+pub const BlockEntityType = struct {
 	id: []const u8,
 	vtable: VTable,
 
@@ -89,7 +89,7 @@ pub const BlockEntityType = struct { // MARK: BlockEntityType
 	}
 };
 
-pub const BlockEntity = enum(u32) { // MARK: BlockEntity
+pub const BlockEntity = enum(u32) {
 	noValue = std.math.maxInt(u32),
 	_,
 
@@ -124,7 +124,7 @@ pub const BlockEntity = enum(u32) { // MARK: BlockEntity
 	}
 };
 
-fn BlockEntityDataStorage(T: type) type { // MARK: BlockEntityDataStorage
+fn BlockEntityDataStorage(T: type) type {
 	return struct {
 		pub const DataT = T;
 		var storage: main.utils.SparseSet(DataT, BlockEntity) = undefined;
@@ -207,8 +207,8 @@ fn BlockEntityDataStorage(T: type) type { // MARK: BlockEntityDataStorage
 	};
 }
 
-pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
-	pub const @"cubyz:chest" = struct { // MARK: cubyz:chest
+pub const BlockEntityTypes = struct {
+	pub const @"cubyz:chest" = struct {
 		pub const inventorySize = 20;
 		const StorageServer = BlockEntityDataStorage(struct {
 			invId: main.items.Inventory.InventoryId,
@@ -293,7 +293,7 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 		pub fn renderAll(_: Vec3f) void {}
 	};
 
-	pub const @"cubyz:sign" = struct { // MARK: cubyz:sign
+	pub const @"cubyz:sign" = struct {
 		const StorageServer = BlockEntityDataStorage(struct {
 			text: []const u8,
 		});
@@ -323,7 +323,6 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 			blockPos: c_int,
 		} = undefined;
 
-		// TODO: Load these from some per-block settings
 		const textureWidth = 128;
 		const textureHeight = 72;
 		const textureMargin = 4;
@@ -504,7 +503,7 @@ pub const BlockEntityTypes = struct { // MARK: BlockEntityTypes
 				const oldClip = graphics.draw.setClip(.{textureWidth - 2*textureMargin, textureHeight - 2*textureMargin});
 				defer graphics.draw.restoreClip(oldClip);
 
-				var textBuffer = graphics.TextBuffer.init(main.stackAllocator, signData.text, .{.color = 0x000000}, false, .center); // TODO: Make the color configurable in the zon
+				var textBuffer = graphics.TextBuffer.init(main.stackAllocator, signData.text, .{.color = 0x000000}, false, .center);
 				defer textBuffer.deinit();
 				_ = textBuffer.calculateLineBreaks(16, textureWidth - 2*textureMargin);
 				textBuffer.renderTextWithoutShadow(0, 0, 16);

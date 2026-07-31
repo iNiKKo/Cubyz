@@ -5,7 +5,7 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 layout(binding = 0) uniform sampler2D InputTexture;
 layout(binding = 1, rgba16f) uniform writeonly image2D OutputTexture;
 
-layout(location = 0) uniform float sharpness; // 0.0 (off / smooth) to 1.0 (maximum crisp sharpening)
+layout(location = 0) uniform float sharpness;
 
 float FsrRcasLuma(vec3 c) {
 	return dot(c, vec3(0.299, 0.587, 0.114));
@@ -19,12 +19,11 @@ void main() {
 	vec2 texelSize = 1.0 / vec2(outSize);
 	vec2 uv = (vec2(gxy) + vec2(0.5)) * texelSize;
 
-	// 5-tap cross pattern sampling
-	vec3 e = textureLod(InputTexture, uv, 0.0).rgb; // Center
-	vec3 b = textureLod(InputTexture, uv + vec2(0.0, -texelSize.y), 0.0).rgb; // North
-	vec3 d = textureLod(InputTexture, uv + vec2(-texelSize.x, 0.0), 0.0).rgb; // West
-	vec3 f = textureLod(InputTexture, uv + vec2(texelSize.x, 0.0), 0.0).rgb; // East
-	vec3 h = textureLod(InputTexture, uv + vec2(0.0, texelSize.y), 0.0).rgb; // South
+	vec3 e = textureLod(InputTexture, uv, 0.0).rgb;
+	vec3 b = textureLod(InputTexture, uv + vec2(0.0, -texelSize.y), 0.0).rgb;
+	vec3 d = textureLod(InputTexture, uv + vec2(-texelSize.x, 0.0), 0.0).rgb;
+	vec3 f = textureLod(InputTexture, uv + vec2(texelSize.x, 0.0), 0.0).rgb;
+	vec3 h = textureLod(InputTexture, uv + vec2(0.0, texelSize.y), 0.0).rgb;
 
 	if (sharpness <= 0.001) {
 		imageStore(OutputTexture, gxy, vec4(e, 1.0));
@@ -37,17 +36,14 @@ void main() {
 	float fL = FsrRcasLuma(f);
 	float hL = FsrRcasLuma(h);
 
-	// Local contrast bounds
 	float minLuma = min(eL, min(min(bL, dL), min(fL, hL)));
 	float maxLuma = max(eL, max(max(bL, dL), max(fL, hL)));
 
-	// Sharpening weight clamped by contrast to avoid ringing
 	float hitMin = minLuma;
 	float hitMax = 1.0 - maxLuma;
 	float lobe = min(hitMin, hitMax) / max(maxLuma, 0.001);
 	float w = sqrt(max(0.0, lobe)) * (-0.22 * sharpness);
 
-	// Apply contrast-adaptive sharpening
 	vec3 color = (w * (b + d + f + h) + e) / (1.0 + 4.0 * w);
 
 	imageStore(OutputTexture, gxy, vec4(color, 1.0));

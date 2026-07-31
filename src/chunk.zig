@@ -14,8 +14,7 @@ pub const chunkSizeIterator: [chunkSize]u0 = undefined;
 pub const chunkVolume: u31 = 1 << 3*chunkShift;
 pub const chunkMask: i32 = chunkSize - 1;
 
-/// Contains a bunch of constants used to describe neighboring blocks.
-pub const Neighbor = enum(u3) { // MARK: Neighbor
+pub const Neighbor = enum(u3) {
 	dirUp = 0,
 	dirDown = 1,
 	dirPosX = 2,
@@ -27,22 +26,21 @@ pub const Neighbor = enum(u3) { // MARK: Neighbor
 		return @intFromEnum(self);
 	}
 
-	/// Index to relative position
 	pub fn relX(self: Neighbor) i32 {
 		const arr = [_]i32{0, 0, 1, -1, 0, 0};
 		return arr[@intFromEnum(self)];
 	}
-	/// Index to relative position
+
 	pub fn relY(self: Neighbor) i32 {
 		const arr = [_]i32{0, 0, 0, 0, 1, -1};
 		return arr[@intFromEnum(self)];
 	}
-	/// Index to relative position
+
 	pub fn relZ(self: Neighbor) i32 {
 		const arr = [_]i32{1, -1, 0, 0, 0, 0};
 		return arr[@intFromEnum(self)];
 	}
-	/// Index to relative position
+
 	pub fn relPos(self: Neighbor) Vec3i {
 		return .{self.relX(), self.relY(), self.relZ()};
 	}
@@ -66,13 +64,12 @@ pub const Neighbor = enum(u3) { // MARK: Neighbor
 		};
 	}
 
-	/// Index to bitMask for bitmap direction data
 	pub inline fn bitMask(self: Neighbor) u6 {
 		return @as(u6, 1) << @intFromEnum(self);
 	}
-	/// To iterate over all neighbors easily
+
 	pub const iterable = [_]Neighbor{@enumFromInt(0), @enumFromInt(1), @enumFromInt(2), @enumFromInt(3), @enumFromInt(4), @enumFromInt(5)};
-	/// Marks the two dimension that are orthogonal
+
 	pub fn orthogonalComponents(self: Neighbor) Vec3i {
 		const arr = [_]Vec3i{
 			.{1, 1, 0},
@@ -128,7 +125,6 @@ pub const Neighbor = enum(u3) { // MARK: Neighbor
 		}
 	}
 
-	// Returns the neighbor that is rotated by 90 degrees counterclockwise around the z axis.
 	pub inline fn rotateZ(self: Neighbor) Neighbor {
 		const arr = [_]Neighbor{.dirUp, .dirDown, .dirPosY, .dirNegY, .dirNegX, .dirPosX};
 		return arr[@intFromEnum(self)];
@@ -177,12 +173,10 @@ pub const Lod = enum(u5) {
 		return self.toInt();
 	}
 
-	// Mask for converting global coordinates to Lod resolution coordinates.
 	pub inline fn voxelSizeMask(self: Lod) i32 {
 		return ~@as(i32, self.voxelSize() - 1);
 	}
 
-	// Mask for converting global coordinates to chunk local coordinates.
 	pub inline fn localMask(self: Lod) i32 {
 		return ~@as(i32, self.voxelSize()*chunkSize - 1);
 	}
@@ -228,7 +222,7 @@ pub const Lod = enum(u5) {
 	}
 };
 
-pub const ChunkPosition = struct { // MARK: ChunkPosition
+pub const ChunkPosition = struct {
 	wx: i32,
 	wy: i32,
 	wz: i32,
@@ -241,7 +235,7 @@ pub const ChunkPosition = struct { // MARK: ChunkPosition
 
 	pub fn hashCode(self: ChunkPosition) u32 {
 		const shift: u5 = @truncate(@min(@ctz(self.wx), @ctz(self.wy), @ctz(self.wz)));
-		return (((@as(u32, @bitCast(self.wx)) >> shift)*%31 +% (@as(u32, @bitCast(self.wy)) >> shift))*%31 +% (@as(u32, @bitCast(self.wz)) >> shift))*%31 +% self.voxelSize; // TODO: Can I use one of zigs standard hash functions?
+		return (((@as(u32, @bitCast(self.wx)) >> shift)*%31 +% (@as(u32, @bitCast(self.wy)) >> shift))*%31 +% (@as(u32, @bitCast(self.wz)) >> shift))*%31 +% self.voxelSize;
 	}
 
 	pub fn equals(self: ChunkPosition, other: anytype) bool {
@@ -311,8 +305,7 @@ pub const ChunkPosition = struct { // MARK: ChunkPosition
 	}
 };
 
-/// Position of a block in chunk relative coordinates, 1 unit is equivalent to the voxel size of the chunk.
-pub const BlockPos = packed struct(u15) { // MARK: BlockPos
+pub const BlockPos = packed struct(u15) {
 	z: u5,
 	y: u5,
 	x: u5,
@@ -361,7 +354,7 @@ pub const BlockPos = packed struct(u15) { // MARK: BlockPos
 	}
 };
 
-pub const Chunk = struct { // MARK: Chunk
+pub const Chunk = struct {
 	pos: ChunkPosition,
 	data: main.utils.PaletteCompressedRegion(Block, chunkVolume) = undefined,
 
@@ -421,21 +414,16 @@ pub const Chunk = struct { // MARK: Chunk
 		self.blockPosToEntityDataMap.clearRetainingCapacity();
 	}
 
-	/// Updates a block if it is inside this chunk.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn updateBlock(self: *Chunk, x: i32, y: i32, z: i32, newBlock: Block) void {
 		const pos = BlockPos.fromLodCoords(x, y, z, self.voxelSizeShift);
 		self.data.setValue(pos.toIndex(), newBlock);
 	}
 
-	/// Gets a block if it is inside this chunk.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn getBlock(self: *const Chunk, x: i32, y: i32, z: i32) Block {
 		const pos = BlockPos.fromLodCoords(x, y, z, self.voxelSizeShift);
 		return self.data.getValue(pos.toIndex());
 	}
 
-	/// Checks if the given relative coordinates lie within the bounds of this chunk.
 	pub fn liesInChunk(self: *const Chunk, x: i32, y: i32, z: i32) bool {
 		return x >= 0 and x < self.width and y >= 0 and y < self.width and z >= 0 and z < self.width;
 	}
@@ -458,7 +446,7 @@ pub const Chunk = struct { // MARK: Chunk
 	}
 };
 
-pub const ServerChunk = struct { // MARK: ServerChunk
+pub const ServerChunk = struct {
 	super: Chunk,
 
 	wasChanged: bool = false,
@@ -524,30 +512,20 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 		}
 	}
 
-	/// Checks if the given relative coordinates lie within the bounds of this chunk.
 	pub fn liesInChunk(self: *const ServerChunk, x: i32, y: i32, z: i32) bool {
 		return self.super.liesInChunk(x, y, z);
 	}
 
-	/// This is useful to convert for loops to work for reduced resolution:
-	/// Instead of using
-	/// for(int x = start; x < end; x++)
-	/// for(int x = chunk.startIndex(start); x < end; x += chunk.getVoxelSize())
-	/// should be used to only activate those voxels that are used in Cubyz's downscaling technique.
 	pub fn startIndex(self: *const ServerChunk, start: i32) i32 {
-		return start + self.super.voxelSizeMask & ~self.super.voxelSizeMask; // Rounds up to the nearest valid voxel coordinate.
+		return start + self.super.voxelSizeMask & ~self.super.voxelSizeMask;
 	}
 
-	/// Gets a block if it is inside this chunk.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn getBlock(self: *const ServerChunk, x: i32, y: i32, z: i32) Block {
 		self.mutex.assertLocked();
 		const pos = BlockPos.fromLodCoords(x, y, z, self.super.voxelSizeShift);
 		return self.super.data.getValue(pos.toIndex());
 	}
 
-	/// Updates a block if it is inside this chunk.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn updateBlockAndSetChanged(self: *ServerChunk, x: i32, y: i32, z: i32, newBlock: Block) void {
 		self.mutex.assertLocked();
 		const pos = BlockPos.fromLodCoords(x, y, z, self.super.voxelSizeShift);
@@ -556,8 +534,6 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 		self.setChanged();
 	}
 
-	/// Updates a block if current value is air or the current block is degradable.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn updateBlockIfDegradable(self: *ServerChunk, x: i32, y: i32, z: i32, newBlock: Block) void {
 		self.mutex.assertLocked();
 		const pos = BlockPos.fromLodCoords(x, y, z, self.super.voxelSizeShift);
@@ -567,16 +543,12 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 		}
 	}
 
-	/// Updates a block if it is inside this chunk. Should be used in generation to prevent accidently storing these as changes.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn updateBlockInGeneration(self: *ServerChunk, x: i32, y: i32, z: i32, newBlock: Block) void {
 		self.mutex.assertLocked();
 		const pos = BlockPos.fromLodCoords(x, y, z, self.super.voxelSizeShift);
 		self.super.data.setValue(pos.toIndex(), newBlock);
 	}
 
-	/// Updates a block if it is inside this chunk. Should be used in generation to prevent accidently storing these as changes.
-	/// Does not do any bound checks. They are expected to be done with the `liesInChunk` function.
 	pub fn updateBlockColumnInGeneration(self: *ServerChunk, x: i32, y: i32, zStartInclusive: i32, zEndInclusive: i32, newBlock: Block) void {
 		std.debug.assert(zStartInclusive <= zEndInclusive);
 		self.mutex.assertLocked();
@@ -586,15 +558,13 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 	}
 
 	pub fn updateFromLowerResolution(self: *ServerChunk, other: *ServerChunk) void {
-		if (other.super.pos.wz > 9000 and self.super.pos.voxelSize > 4) return; // We don't want to generate LODs for the sky
-		const xOffset = if (other.super.pos.wx != self.super.pos.wx) chunkSize/2 else 0; // Offsets of the lower resolution chunk in this chunk.
+		if (other.super.pos.wz > 9000 and self.super.pos.voxelSize > 4) return;
+		const xOffset = if (other.super.pos.wx != self.super.pos.wx) chunkSize/2 else 0;
 		const yOffset = if (other.super.pos.wy != self.super.pos.wy) chunkSize/2 else 0;
 		const zOffset = if (other.super.pos.wz != self.super.pos.wz) chunkSize/2 else 0;
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		self.mutex.assertLocked();
-
-		// Count the neighbors for each subblock. An transparent block counts 5. A chunk border(unknown block) only counts 1.
 
 		comptime std.debug.assert(chunkSize == 32);
 		var isTransparent: [32][32]u32 = @splat(@splat(0));
@@ -605,7 +575,7 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 					const pos = BlockPos.fromCoords(@intCast(x), @intCast(y), @intCast(z));
 					var block = other.super.data.getValue(pos.toIndex());
 					block.typ = block.lodReplacement();
-					if (block.typ == 0) count[x][y][z] = 0; // Air blocks should be avoided
+					if (block.typ == 0) count[x][y][z] = 0;
 					if (block.transparent()) isTransparent[x][y] |= @as(u32, 1) << @intCast(z);
 				}
 			}
@@ -651,12 +621,12 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 							}
 						}
 					}
-					// Uses a specific permutation here that keeps high resolution patterns in lower resolution.
+
 					const permutationStart = (x & 1)*4 + (y & 1)*2 + (z & 1);
 					var finalPermutation = permutationStart;
 					for (0..8) |i| {
 						const appliedPermutation = permutationStart ^ i;
-						if (neighborCount[appliedPermutation] >= maxCount - 1) { // -1 to avoid pattern breaks at chunk borders.
+						if (neighborCount[appliedPermutation] >= maxCount - 1) {
 							finalPermutation = appliedPermutation;
 						}
 					}
@@ -666,7 +636,7 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 					const pos = BlockPos.fromCoords(@intCast(x*2 + dx), @intCast(y*2 + dy), @intCast(z*2 + dz));
 					var block = other.super.data.getValue(pos.toIndex());
 					block.typ = block.lodReplacement();
-					// Update the block:
+
 					const thisPos = BlockPos.fromCoords(@intCast(x + xOffset), @intCast(y + yOffset), @intCast(z + zOffset));
 					self.super.data.setValue(thisPos.toIndex(), block);
 				}
@@ -680,7 +650,7 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		if (self.shouldStoreNeighbors and self.super.pos.voxelSize == 1) {
-			// Store all the neighbor chunks as well:
+
 			self.mutex.unlock();
 			defer self.mutex.lock();
 			var dx: i32 = -@as(i32, chunkSize);
@@ -707,7 +677,7 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 			}
 		}
 		if (!self.wasStored and self.super.pos.voxelSize == 1) {
-			// Store the surrounding map pieces as well:
+
 			self.mutex.unlock();
 			defer self.mutex.lock();
 			const mapStartX = self.super.pos.wx -% main.server.terrain.SurfaceMap.MapFragment.mapSize/2 & ~@as(i32, main.server.terrain.SurfaceMap.MapFragment.mapMask);
@@ -740,7 +710,7 @@ pub const ServerChunk = struct { // MARK: ServerChunk
 			);
 
 			self.wasChanged = false;
-			// Update the next lod chunk:
+
 			if (pos.voxelSize != 1 << settings.highestSupportedLod) {
 				var nextPos = pos;
 				nextPos.wx &= ~@as(i32, pos.voxelSize*chunkSize);

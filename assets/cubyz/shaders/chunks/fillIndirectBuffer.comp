@@ -33,30 +33,22 @@ layout(location = 3) uniform bool isTransparent;
 layout(location = 4) uniform bool onlyDrawPreviouslyInvisible;
 
 layout(location = 6) uniform float lodDistance;
-// Set for the sun/moon shadow depth pass: that pass needs every opaque face of every chunk
-// getShadowRenderChunks() gathered (occluders 360 degrees around the player, not just what the main
-// camera can currently see), so it must bypass both the per-face-direction "is this face generally
-// facing the player" cull below and the oldVisibilityState gate (which reflects the main camera's
-// occlusion-query visibility, not whether something should cast a shadow). Without this, a chunk the
-// main camera currently considers invisible/occluded — e.g. behind the player after they turn around —
-// contributed zero draw commands here even though shadow_depth.vert/.frag's own cullMode is already set
-// to "render all faces" for exactly this reason: that setting only helps once a face is actually
-// submitted, and this compute pass is what decides which faces get submitted at all.
+
 layout(location = 7) uniform bool forceAllVisible;
 
 bool isVisible(int dir, ivec3 playerDist) {
 	switch(dir) {
-	case 0: // dirUp
+	case 0:
 		return playerDist.z >= 0;
-	case 1: // dirDown
+	case 1:
 		return playerDist.z <= 0;
-	case 2: // dirPosX
+	case 2:
 		return playerDist.x >= 0;
-	case 3: // dirNegX
+	case 3:
 		return playerDist.x <= 0;
-	case 4: // dirPosY
+	case 4:
 		return playerDist.y >= 0;
-	case 5: // dirNegY
+	case 5:
 		return playerDist.y <= 0;
 	}
 	return true;

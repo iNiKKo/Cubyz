@@ -17,8 +17,6 @@ const Vec2f = vec.Vec2f;
 
 const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 
-// Generates the climate map using a fluidynamics simulation, with a circular heat distribution.
-
 pub const id = "cubyz:noise_based_voronoi";
 
 pub fn init(parameters: ZonElement) void {
@@ -33,7 +31,6 @@ pub fn generateMapFragment(map: *ClimateMapFragment, worldSeed: u64) void {
 
 	generator.toMap(map, worldSeed);
 
-	// TODO: Remove debug image:
 	if (!build_options.isTaggedRelease) {
 		const image = main.graphics.Image.init(main.stackAllocator, @intCast(map.map.len), @intCast(map.map[0].len));
 		defer image.deinit(main.stackAllocator);
@@ -78,7 +75,7 @@ const Chunk = struct {
 	maxBiomeRadius: i32,
 
 	fn getStartCoordinate(minX: i32, biomesSortedByX: []BiomePoint) usize {
-		// TODO: Should this be vectorized by storing the x-coordinate in a seperate []u8?
+
 		var start: usize = 0;
 		var end: usize = biomesSortedByX.len;
 		while (end - start > 16) {
@@ -157,13 +154,13 @@ const Chunk = struct {
 };
 
 const GenerationStructure = struct {
-	chunks: Array2D(*Chunk) = undefined, // Implemented as slices into the original array!
+	chunks: Array2D(*Chunk) = undefined,
 
 	pub fn init(allocator: NeverFailingAllocator, wx: i32, wy: i32, width: u31, height: u31, tree: *TreeNode, worldSeed: u64) GenerationStructure {
 		const self: GenerationStructure = .{
 			.chunks = Array2D(*Chunk).init(allocator, 8 + @divExact(width, chunkSize), 8 + @divExact(height, chunkSize)),
 		};
-		// Generate chunks in an interleaved pattern:
+
 		const offset: [4][2]u31 = .{
 			.{0, 0},
 			.{0, 1},
@@ -240,7 +237,7 @@ const GenerationStructure = struct {
 		for (prefilteredCandidates) |candidate| {
 			candidateList.appendAssumeCapacity(.{.point = candidate, .weight = 1});
 		}
-		// Interpolate between all pairs of biomes.
+
 		var i: usize = 0;
 		outer: while (i < candidateList.items.len) {
 			var j = i + 1;
@@ -425,7 +422,7 @@ const GenerationStructure = struct {
 				for (point.biome.transitionBiomes) |transitionBiome| {
 					const biomeMask: u15 = @bitCast(transitionBiome.propertyMask);
 					const neighborMask = neighborData[@min(neighborData.len - 1, transitionBiome.width)][x][y];
-					// Check if all triplets have a matching entry:
+
 					var result = biomeMask & neighborMask;
 					result = (result | result >> 1 | result >> 2);
 					if (result & Biome.GenerationProperties.mask == Biome.GenerationProperties.mask) {
@@ -450,7 +447,6 @@ const GenerationStructure = struct {
 	fn pruneInterpolationCandidates(allocator: NeverFailingAllocator, wx: i32, wy: i32, wxMax: i32, wyMax: i32, candidates: []const *const BiomePoint) []const *const BiomePoint {
 		var result: main.List(*const BiomePoint) = .empty;
 
-		// Check interpolation between all pairs of biomes.
 		outer: for (candidates) |candidate| {
 			if (candidate.pos[0] >= wx and candidate.pos[0] < wxMax and candidate.pos[1] >= wy and candidate.pos[1] < wyMax) {
 				result.append(allocator, candidate);
@@ -495,7 +491,7 @@ const GenerationStructure = struct {
 			}
 			return;
 		}
-		// Subdivide
+
 		const halfWidth = width/2;
 		const halfHeight = height/2;
 		for (0..2) |dx| {
@@ -529,7 +525,6 @@ const GenerationStructure = struct {
 		fillRecursively(map.pos.wx, map.pos.wy, &preMap, allCandidates.items, worldSeed, -margin, -margin, preMapSize, preMapSize);
 		addTransitionBiomes(&preMap);
 
-		// Add some sub-biomes:
 		var extraBiomes: main.ListManaged(BiomePoint) = .init(main.stackAllocator);
 		defer extraBiomes.deinit();
 		for (self.chunks.mem) |chunk| {
@@ -537,7 +532,7 @@ const GenerationStructure = struct {
 				addSubBiomesOf(biome, &preMap, &extraBiomes, map.pos.wx -% margin*terrain.SurfaceMap.MapFragment.biomeSize, map.pos.wy -% margin*terrain.SurfaceMap.MapFragment.biomeSize, preMapSize*terrain.SurfaceMap.MapFragment.biomeSize, preMapSize*terrain.SurfaceMap.MapFragment.biomeSize, worldSeed, .unknown);
 			}
 		}
-		// Add some sub-sub(-sub)*-biomes
+
 		while (extraBiomes.popOrNull()) |biomePoint| {
 			addSubBiomesOf(biomePoint, &preMap, &extraBiomes, map.pos.wx -% margin*terrain.SurfaceMap.MapFragment.biomeSize, map.pos.wy -% margin*terrain.SurfaceMap.MapFragment.biomeSize, preMapSize*terrain.SurfaceMap.MapFragment.biomeSize, preMapSize*terrain.SurfaceMap.MapFragment.biomeSize, worldSeed, .known);
 		}

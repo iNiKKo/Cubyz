@@ -29,7 +29,6 @@ const c = @import("c");
 
 const entityComponent = main.entityComponent;
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	pub fn init() void {}
 	pub fn deinit() void {}
@@ -45,7 +44,7 @@ pub const client = struct {
 		_ = playerPos;
 	}
 };
-// ############################# Server only stuff ################################
+
 pub const server = struct {
 	pub fn init() void {}
 	pub fn deinit() void {}

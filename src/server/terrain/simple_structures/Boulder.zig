@@ -36,7 +36,7 @@ pub fn loadModel(parameters: ZonElement) ?*Boulder {
 pub fn generate(self: *Boulder, _: GenerationMode, x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, caveMap: CaveMapView, _: CaveBiomeMapView, seed: *u64, _: bool) void {
 	_ = caveMap;
 	const radius = self.size + self.sizeVariation*(random.nextFloat(seed)*2 - 1);
-	// My basic idea is to use a point cloud and a potential function to achieve somewhat smooth boulders without being a sphere.
+
 	const numberOfPoints = 4;
 	var pointCloud: [numberOfPoints]Vec3f = undefined;
 	for (&pointCloud) |*point| {
@@ -46,8 +46,7 @@ pub fn generate(self: *Boulder, _: GenerationMode, x: i32, y: i32, z: i32, chunk
 			(random.nextFloat(seed) - 0.5)*radius/2,
 		};
 	}
-	// My potential functions is ¹⁄ₙ Σ (radius/2)²/(x⃗ - x⃗ₚₒᵢₙₜ)²
-	// This ensures that the entire boulder is inside of a square with sidelength 2*radius.
+
 	const maxRadius: i32 = @ceil(radius);
 	var px = chunk.startIndex(x - maxRadius);
 	while (px < x + maxRadius) : (px += chunk.super.pos.voxelSize) {

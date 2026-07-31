@@ -23,7 +23,6 @@ const Self = @This();
 pub var entityComponentID: main.entity.EntityComponentId = undefined;
 pub const entityComponentVersion = 0;
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	pub const Component = struct {
 		entityModel: main.entityModel.EntityModelIndex,
@@ -32,30 +31,15 @@ pub const client = struct {
 		matrices: []Mat4f = undefined,
 		nodes: []EntityModel.Node = undefined,
 
-		/// Walk-cycle phase accumulator, integrated frame-to-frame in modelRenderer.zig rather than
-		/// derived as (elapsedTime * frequency) - that formulation made the cadence jump discontinuously
-		/// every time horizontalSpeed changed, since a changing frequency multiplied by a large absolute
-		/// elapsed time produces a large phase jump instead of a smooth cadence change.
 		walkPhase: f32 = 0,
-		/// Shared per-component frame delta tracking, used both for the walk cycle above and for the
-		/// layered look-turn easing below - both need "seconds since this component was last updated,"
-		/// not a session-wide clock, so one dt computation in modelRenderer.zig serves both.
+
 		lastWalkUpdateTime: f32 = 0,
 		hasWalkUpdateTime: bool = false,
 
-		/// Layered look-turn state (visual only - other players' view of this avatar; see
-		/// modelRenderer.zig's updateLayeredLookYaw). `rootYaw` is the committed body-facing yaw the whole
-		/// model is rendered at; `headYawOffset` is how much of the remaining look difference the head is
-		/// currently absorbing on top of that, clamped to a small budget before the root itself turns to
-		/// catch up.
 		rootYaw: f32 = 0,
 		headYawOffset: f32 = 0,
 		hasRootYaw: bool = false,
-		/// How long the look direction has been actually still (not just within the head's budget - see
-		/// modelRenderer.zig's updateLayeredLookYaw for why that distinction matters) - once held long
-		/// enough (holdBeforeResetTime) the body re-centers to face it even if the head budget alone was
-		/// never exceeded. lastTargetYaw is the previous frame's look yaw, used to measure how fast it's
-		/// currently changing.
+
 		lookHoldTime: f32 = 0,
 		lastTargetYaw: f32 = 0,
 
@@ -103,8 +87,6 @@ pub const client = struct {
 		return components.get(entity);
 	}
 };
-
-// ############################# Server only stuff ################################
 
 pub const server = struct {
 	pub const Component = struct {

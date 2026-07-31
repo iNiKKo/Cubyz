@@ -95,7 +95,7 @@ pub const ChannelChunk = struct {
 	fn calculateOutgoingOcclusion(result: *[3]u8, block: blocks.Block, voxelSize: u31, neighbor: chunk.Neighbor) void {
 		if (block.typ == 0) return;
 		const model = blocks.meshes.model(block).model();
-		if (model.isNeighborOccluded[neighbor.toInt()] and !model.isNeighborOccluded[neighbor.reverse().toInt()]) { // Avoid calculating the absorption twice.
+		if (model.isNeighborOccluded[neighbor.toInt()] and !model.isNeighborOccluded[neighbor.reverse().toInt()]) {
 			var absorption: [3]u8 = extractColor(block.absorption());
 			absorption[0] *|= @intCast(voxelSize);
 			absorption[1] *|= @intCast(voxelSize);
@@ -478,11 +478,11 @@ pub fn getLight(parent: *ChunkMesh, blockPos: Vec3i, textureIndex: u16, quadInde
 	const quadInfo = quadIndex.quadInfo();
 	const extraQuadInfo = quadIndex.extraQuadInfo();
 	const normal = quadInfo.normal;
-	if (!blocks.meshes.textureOcclusionData[textureIndex].load(.monotonic)) { // No ambient occlusion (→ no smooth lighting)
+	if (!blocks.meshes.textureOcclusionData[textureIndex].load(.monotonic)) {
 		const fullValues = getLightAt(parent, blockPos[0], blockPos[1], blockPos[2]);
 		return packLightValues(@splat(fullValues));
 	}
-	if (extraQuadInfo.alignedNormalDirection) |dir| { // Fast path using precomputed samples
+	if (extraQuadInfo.alignedNormalDirection) |dir| {
 		var lightValues: [4]LightVector = @splat(@splat(0));
 		for (extraQuadInfo.lightSampleListForAxisAlignedModels) |sample| {
 			const lightVal = getLightSampleAligned(parent, blockPos +% sample.offset, dir);
@@ -495,7 +495,7 @@ pub fn getLight(parent: *ChunkMesh, blockPos: Vec3i, textureIndex: u16, quadInde
 		}
 		return packLightValues(lightValues);
 	}
-	if (extraQuadInfo.hasOnlyCornerVertices) { // Fast path for simple quads.
+	if (extraQuadInfo.hasOnlyCornerVertices) {
 		var rawVals: [4]LightVector = undefined;
 		for (0..4) |i| {
 			const vertexPos: Vec3f = quadInfo.corners[i];

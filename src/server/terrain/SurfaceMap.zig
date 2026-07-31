@@ -23,8 +23,8 @@ pub const MapFragmentPosition = struct {
 	voxelSizeShift: u5,
 
 	pub fn init(wx: i32, wy: i32, voxelSize: u31) MapFragmentPosition {
-		std.debug.assert(voxelSize - 1 & voxelSize == 0); // voxelSize must be a power of 2.
-		std.debug.assert(wx & voxelSize - 1 == 0 and wy & voxelSize - 1 == 0); // The coordinates are misaligned. They need to be aligned to the voxelSize grid.
+		std.debug.assert(voxelSize - 1 & voxelSize == 0);
+		std.debug.assert(wx & voxelSize - 1 == 0 and wy & voxelSize - 1 == 0);
 		return MapFragmentPosition{
 			.wx = wx,
 			.wy = wy,
@@ -59,10 +59,9 @@ pub const MapFragmentPosition = struct {
 	}
 };
 
-/// Generates and stores the height and Biome maps of the planet.
-pub const MapFragment = struct { // MARK: MapFragment
+pub const MapFragment = struct {
 	pub const biomeShift = 5;
-	/// The average diameter of a biome.
+
 	pub const biomeSize = 1 << biomeShift;
 	pub const mapShift = 8;
 	pub const mapSize = 1 << mapShift;
@@ -150,7 +149,7 @@ pub const MapFragment = struct { // MARK: MapFragment
 			.neighborInfo = @bitCast(try fullReader.readInt(u8)),
 		};
 		switch (header.version) {
-			0 => { // TODO: Remove after next breaking change
+			0 => {
 				const rawData: []u8 = main.stackAllocator.alloc(u8, mapSize*mapSize*(@sizeOf(u32) + 2*@sizeOf(f32)));
 				defer main.stackAllocator.free(rawData);
 				if (try main.utils.Compression.inflateTo(rawData, fullReader.remaining) != rawData.len) return error.CorruptedFile;
@@ -212,7 +211,7 @@ pub const MapFragment = struct { // MARK: MapFragment
 		for (0..mapSize) |x| for (0..mapSize) |y| writer.writeInt(i32, self.heightMap[x][y]);
 		for (0..mapSize) |x| for (0..mapSize) |y| writer.writeInt(i32, (if (originalData) |map| map else &self.heightMap)[x][y]);
 
-		const compressedData = main.utils.Compression.deflate(main.stackAllocator, writer.data.items, .fastest); // Using fast to increase performance of the regenerating map LODs step
+		const compressedData = main.utils.Compression.deflate(main.stackAllocator, writer.data.items, .fastest);
 		defer main.stackAllocator.free(compressedData);
 
 		var outputWriter = BinaryWriter.initCapacity(main.stackAllocator, @sizeOf(StorageHeader) + compressedData.len);
@@ -243,7 +242,6 @@ pub const MapFragment = struct { // MARK: MapFragment
 	}
 };
 
-/// Generates the detailed(block-level precision) height and biome maps from the climate map.
 pub const MapGenerator = struct {
 	init: *const fn (parameters: ZonElement) void,
 	generateMapFragment: *const fn (fragment: *MapFragment, seed: u64) void,
@@ -269,8 +267,8 @@ pub const MapGenerator = struct {
 	}
 };
 
-const cacheSize = 1 << 6; // Must be a power of 2!
-const associativity = 8; // ~400MiB MiB Cache size
+const cacheSize = 1 << 6;
+const associativity = 8;
 var cache: Cache(MapFragment, cacheSize, associativity, MapFragment.deferredDeinit) = .{};
 var profile: TerrainGenerationProfile = undefined;
 
@@ -286,21 +284,7 @@ fn cacheInit(pos: MapFragmentPosition) *MapFragment {
 }
 
 const InterpolationPolynomial = struct {
-	// Basically we want an interpolation function with the following properties:
-	// f(0) = 0
-	// f(1) = 1
-	// f'(0) = 0
-	// f'(1) = 0
-	// f(0.5) = noise
-	// This must be a polynomial of degree 4 with a factor x²
-	// f(x) = ax⁴ + bx³ + cx²
-	// f'(x) = 4ax³ + 3x² + 2cx
-	// f(1) = a + b + c = 1 → c = 1 - a - b
-	// f'(1) = 4a + 3b + 2c = 0 → 4a + 3b + 2 - 2a - 2b = 0 → 2a + b + 2 = 0 → b = -2a - 2
-	// f(0.5) = a 0.5⁴ + b 0.5³ + c 0.5² = noise → a 0.5⁴ + (-2a - 2) 0.5³ + (3 + a) 0.5² = noise → a (0.5⁴ - 2·0.5³ + 0.5²) = 2·0.5³ - 3 0.5² + noise
-	// → a 0.5⁴ = 0.5² - 3 0.5² + noise
-	// → a = (-0.5 + noise)·2⁴
-	// → a = 16·noise - 8
+
 	a: f32,
 	b: f32,
 	c: f32,
@@ -347,12 +331,12 @@ const TiledNoise = struct {
 	}
 };
 
-pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
+pub fn regenerateLOD(worldName: []const u8) !void {
 	std.log.info("Regenerating map LODs...", .{});
 
 	var noise: TiledNoise = .init(main.stackAllocator, 8*MapFragment.mapSize);
 	defer noise.deinit(main.stackAllocator);
-	// Delete old LODs:
+
 	for (1..main.settings.highestSupportedLod + 1) |i| {
 		const lod = @as(u32, 1) << @intCast(i);
 		const path = main.stackAllocator.print("saves/{s}/maps/{}", .{worldName, lod});
@@ -363,7 +347,7 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 			}
 		};
 	}
-	// Find all the stored maps:
+
 	var mapPositions: main.List(MapFragmentPosition) = .empty;
 	defer mapPositions.deinit(main.stackAllocator);
 	const path = main.stackAllocator.print("saves/{s}/maps/1", .{worldName});
@@ -386,7 +370,7 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 			}
 		}
 	}
-	// Load all the stored maps and update their next LODs.
+
 	const interpolationDistance = MapFragment.mapSize/2;
 	for (mapPositions.items) |pos| {
 		main.heap.GarbageCollection.syncPoint();
@@ -415,11 +399,9 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 			continue;
 		};
 		if (@as(u8, @bitCast(neighborInfo)) != @as(u8, @bitCast(oldNeighborInfo))) {
-			// Now we do the fun stuff
-			// Basically we want to only keep the interpolated map in the direction of the changes.
-			// Edges:
+
 			if (neighborInfo.@"+o" != oldNeighborInfo.@"+o" or neighborInfo.@"-o" != oldNeighborInfo.@"-o" or neighborInfo.@"o+" != oldNeighborInfo.@"o+" or neighborInfo.@"o-" != oldNeighborInfo.@"o-") {
-				for (0..interpolationDistance) |a| { // edges
+				for (0..interpolationDistance) |a| {
 					for (interpolationDistance..MapFragment.mapSize - interpolationDistance) |b| {
 						if (neighborInfo.@"+o" and !oldNeighborInfo.@"+o") {
 							const x = MapFragment.mapSize - 1 - a;
@@ -444,21 +426,20 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 					}
 				}
 			}
-			// Corners:
+
 			{
-				for (0..interpolationDistance) |a| { // corners:
+				for (0..interpolationDistance) |a| {
 					for (0..interpolationDistance) |b| {
 						const weirdSquareInterpolation = struct {
 							fn interp(x: f32, y: f32) f32 {
-								// Basically we want to interpolate the values such that two sides of the square have value zero, while the opposing two sides have value 1.
-								// Change coordinate system:
+
 								if (x == y) return 0.5;
 								const sqrt2 = @sqrt(0.5);
 								const k = sqrt2*x + sqrt2*y - sqrt2;
 								const l = -sqrt2*x + sqrt2*y;
 								const maxMagnitude = sqrt2 - @abs(k);
 								return l/maxMagnitude*0.5 + 0.5;
-								// if x = y:
+
 							}
 						}.interp;
 						var factorA = @as(f32, @floatFromInt(a))/interpolationDistance;
@@ -509,7 +490,7 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 				}
 			}
 		}
-		{ // Interpolate the terraing height:
+		{
 			const generatedMap = main.stackAllocator.create(MapFragment);
 			defer main.stackAllocator.destroy(generatedMap);
 			generatedMap.init(pos.wx, pos.wy, pos.voxelSize);
@@ -517,7 +498,7 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 
 			@memcpy(&mapFragment.heightMap, &originalHeightMap);
 			for (0..MapFragment.mapSize) |b| {
-				for (0..interpolationDistance) |a| { // edges
+				for (0..interpolationDistance) |a| {
 					if (!neighborInfo.@"+o") {
 						const x = MapFragment.mapSize - 1 - a;
 						const y = b;
@@ -560,7 +541,7 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 					}
 				}
 			}
-			for (0..interpolationDistance) |a| { // corners:
+			for (0..interpolationDistance) |a| {
 				for (0..interpolationDistance) |b| {
 					if (!neighborInfo.@"++" and neighborInfo.@"+o" and neighborInfo.@"o+") {
 						const x = MapFragment.mapSize - 1 - a;
@@ -613,8 +594,8 @@ pub fn regenerateLOD(worldName: []const u8) !void { // MARK: regenerateLOD()
 				}
 			}
 		}
-		mapFragment.save(&originalHeightMap, neighborInfo); // Store the interpolated map
-		// Generate LODs
+		mapFragment.save(&originalHeightMap, neighborInfo);
+
 		var cur = mapFragment;
 		while (cur.pos.voxelSizeShift < main.settings.highestSupportedLod) {
 			var nextPos = cur.pos;
@@ -679,7 +660,6 @@ pub fn deinit() void {
 	cache.clear();
 }
 
-/// Call deinit on the result.
 pub fn getOrGenerateFragment(wx: i32, wy: i32, voxelSize: u31) *MapFragment {
 	const compare = MapFragmentPosition.init(
 		wx & ~@as(i32, MapFragment.mapMask*voxelSize | voxelSize - 1),

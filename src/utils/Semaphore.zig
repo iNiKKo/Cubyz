@@ -1,27 +1,3 @@
-// TODO: Remove after https://codeberg.org/ziglang/zig/issues/31912 was merged
-
-// zig fmt: off
-
-//! A semaphore is an unsigned integer that blocks the kernel thread if
-//! the number would become negative.
-//! This API supports static initialization and does not require deinitialization.
-//!
-//! Example:
-//! ```
-//! var s = Semaphore{};
-//!
-//! fn consumer() void {
-//!     s.wait();
-//! }
-//!
-//! fn producer() void {
-//!     s.post();
-//! }
-//!
-//! const thread = try std.Thread.spawn(.{}, producer, .{});
-//! consumer();
-//! thread.join();
-//! ```
 
 const std = @import("std");
 const main = @import("main");
@@ -32,7 +8,7 @@ const Semaphore = @This();
 
 mutex: Mutex = .{},
 cond: Condition = .{},
-/// It is OK to initialize this field to any value.
+
 permits: usize = 0,
 
 pub fn wait(sem: *Semaphore) void {

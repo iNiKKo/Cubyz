@@ -8,8 +8,6 @@ const CaveBiomeMapFragment = terrain.CaveBiomeMap.CaveBiomeMapFragment;
 const Biome = terrain.biomes.Biome;
 const Vec3i = main.vec.Vec3i;
 
-// Generates the climate map using a fluidynamics simulation, with a circular heat distribution.
-
 pub const id = "cubyz:random_biome";
 
 pub const priority = 1024;

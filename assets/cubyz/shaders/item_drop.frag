@@ -42,15 +42,13 @@ layout(std430, binding = 1) buffer _animatedTexture
 	float animatedTexture[];
 };
 
-// block drops -------------------------------------------------------------------------------------------------------------------------
-
 float lightVariation(vec3 normal) {
 	const vec3 directionalPart = vec3(0, contrast/2, contrast);
 	const float baseLighting = 1 - contrast;
 	return baseLighting + dot(normal, directionalPart);
 }
 
-vec4 fixedCubeMapLookup(vec3 v) { // Taken from http://the-witness.net/news/2012/02/seamless-cube-map-filtering/
+vec4 fixedCubeMapLookup(vec3 v) {
 	float M = max(max(abs(v.x), abs(v.y)), abs(v.z));
 	float scale = (reflectionMapSize - 1)/reflectionMapSize;
 	if (abs(v.x) != M) v.x *= scale;
@@ -89,8 +87,7 @@ void mainBlockDrop() {
 
 	vec3 pixelLight = ambientLight*max(vec3(normalVariation), texture(emissionSampler, textureCoords).r*4);
 	vec4 albedo = texture(textureSampler, textureCoords);
-	// Match foliage/entity alpha coverage under MSAA. The old ordered-dither alpha test produced
-	// dark one-sample outlines on tool icons and other textured item models.
+
 	float alphaDerivative = fwidth(albedo.a);
 	float coverage = clamp((albedo.a - 0.5) / max(alphaDerivative, 0.0001) + 0.5, 0.0, 1.0);
 	if (coverage < 0.001) discard;
@@ -102,8 +99,6 @@ void mainBlockDrop() {
 	fragColor.a = coverage;
 	gl_FragDepth = gl_FragCoord.z;
 }
-
-// itemDrops -------------------------------------------------------------------------------------------------------------------------
 
 layout(std430, binding = 2) buffer _modelInfo
 {
@@ -121,7 +116,7 @@ vec4 decodeColor(uint block) {
 }
 
 void mainItemDrop() {
-	// Implementation of "A Fast Voxel Traversal Algorithm for Ray Tracing"  http://www.cse.yorku.ca/~amana/research/grid.pdf
+
 	ivec3 step = ivec3(sign(direction));
 	vec3 t1 = (floor(startPosition) - startPosition)/direction;
 	vec3 tDelta = 1/direction;
@@ -191,7 +186,7 @@ void mainItemDrop() {
 	gl_FragDepth = (((glDepthRange.y - glDepthRange.x) * depth) + glDepthRange.x + glDepthRange.y)/2.0;
 
 	fragColor = decodeColor(block);
-	fragColor.a = 1; // No transparency supported!
+	fragColor.a = 1;
 	fragColor = fragColor*vec4(ambientLight*normalVariations[lastNormal], 1);
 }
 

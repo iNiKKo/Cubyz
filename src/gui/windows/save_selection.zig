@@ -83,7 +83,7 @@ pub fn openWorld(name: []const u8) void {
 	gui.openHud();
 }
 
-fn openWorldWrap(index: usize) void { // TODO: Improve this situation. Maybe it makes sense to always use 2 arguments in the Callback.
+fn openWorldWrap(index: usize) void {
 	openWorld(worldList.items[index].fileName);
 }
 

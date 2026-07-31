@@ -29,11 +29,7 @@ pub const Degrees = enum(u2) {
 	@"270" = 3,
 };
 
-// TODO: Why not just use a tagged union?
-/// Each block gets 16 bit of additional storage(apart from the reference to the block type).
-/// These 16 bits are accessed and interpreted by the `RotationMode`.
-/// With the `RotationMode` interface there is almost no limit to what can be done with those 16 bit.
-pub const RotationMode = struct { // MARK: RotationMode
+pub const RotationMode = struct {
 	pub const DefaultFunctions = struct {
 		pub fn model(block: Block) ModelIndex {
 			return blocks.meshes.modelIndexStart(block);
@@ -83,7 +79,7 @@ pub const RotationMode = struct { // MARK: RotationMode
 				}
 			}
 			if (minimum != null) {
-				// Invert the normal if the player is behind the face (eg. cross model)
+
 				if (vec.dot(normal.?, relativePlayerPos) < 0.0) {
 					normal = -normal.?;
 				}
@@ -142,24 +138,18 @@ pub const RotationMode = struct { // MARK: RotationMode
 		yes_costsItems: u16,
 	};
 
-	/// if the block should be destroyed or changed when a certain neighbor is removed.
 	dependsOnNeighbors: bool = false,
 
-	/// The default rotation data intended for generation algorithms
 	naturalStandard: u16 = 0,
 
 	model: *const fn (block: Block) ModelIndex = &DefaultFunctions.model,
 
-	// Rotates block data counterclockwise around the Z axis.
 	rotateZ: *const fn (data: u16, angle: Degrees) u16 = DefaultFunctions.rotateZ,
 
 	createBlockModel: *const fn (block: Block, modeData: *u16, zon: ZonElement) ModelIndex = &DefaultFunctions.createBlockModel,
 
-	/// Updates the block data of a block in the world or places a block in the world.
-	/// return true if the placing was successful, false otherwise.
 	generateData: *const fn (world: *main.game.World, pos: Vec3i, relativePlayerPos: Vec3f, playerDir: Vec3f, relativeDir: Vec3i, neighbor: ?Neighbor, currentData: *Block, neighborBlock: Block, blockPlacing: bool) bool = DefaultFunctions.generateData,
 
-	/// Updates data of a placed block if the RotationMode dependsOnNeighbors.
 	updateData: *const fn (block: *Block, neighbor: Neighbor, neighborBlock: Block) bool = &DefaultFunctions.updateData,
 
 	modifyBlock: *const fn (block: *Block, newType: u16) bool = DefaultFunctions.modifyBlock,
@@ -186,7 +176,6 @@ pub fn rotationMatrixTransform(quad: *main.models.QuadInfo, transformMatrix: Mat
 	}
 }
 
-/// Modified from https://en.wikipedia.org/wiki/Möller–Trumbore_intersection_algorithm#Implementations
 fn rayTriangleIntersection(origin: Vec3f, direction: Vec3f, triangle: [3]Vec3f) ?f32 {
 	const e1 = triangle[1] - triangle[0];
 	const e2 = triangle[2] - triangle[0];
@@ -219,8 +208,6 @@ fn rayTriangleIntersection(origin: Vec3f, direction: Vec3f, triangle: [3]Vec3f) 
 		return null;
 	}
 }
-
-// MARK: init/register
 
 pub fn init() void {
 	rotationModes = .init(main.globalAllocator.allocator);

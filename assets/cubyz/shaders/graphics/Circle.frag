@@ -5,7 +5,6 @@ layout(location = 0) out vec4 frag_color;
 layout(location = 0) in vec2 unitPosition;
 layout(location = 1) flat in vec4 color;
 
-// Like smooth step, but with linear interpolation instead of s-curve.
 float linearstep(float edge0, float edge1, float x) {
 	return clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
 }

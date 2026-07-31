@@ -122,7 +122,6 @@ pub fn render(inputTexture: c_uint, depthTexture: c_uint, inputWidth: u31, input
 	c.glDispatchCompute(groupX, groupY, 1);
 	c.glMemoryBarrier(c.GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | c.GL_TEXTURE_FETCH_BARRIER_BIT);
 
-	// Apply RCAS Sharpening on FSR 2.2 temporal upscaled output
 	const fsr = @import("fsr.zig");
 	fsr.runRcas(outputTexture, outputWidth, outputHeight, targetFBO);
 }

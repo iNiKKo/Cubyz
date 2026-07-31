@@ -42,7 +42,7 @@ pub fn init(parameters: ZonElement) void {
 		localSbbList.append(main.stackAllocator, .{.sbb = entry, .hasParent = false, .reachable = false});
 	}
 
-	{ // Mark all SBBs that are children of other SBBs.
+	{
 		outer: for (localSbbList.items) |*candidate| {
 			for (localSbbList.items) |other| {
 				if (other.sbb == candidate.sbb) continue;
@@ -57,7 +57,7 @@ pub fn init(parameters: ZonElement) void {
 	}
 	var rootSbbList: main.List(*const StructureBuildingBlock) = .initCapacity(main.stackAllocator, localSbbList.items.len);
 	defer rootSbbList.deinit(main.stackAllocator);
-	{ // Ensure that every structure was reachable (in case of recursion)
+	{
 		var unreachables: main.List(*Entry) = .initCapacity(main.stackAllocator, localSbbList.items.len);
 		defer unreachables.deinit(main.stackAllocator);
 

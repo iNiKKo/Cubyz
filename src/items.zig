@@ -27,7 +27,7 @@ pub const recipes = @import("items/recipes.zig");
 
 pub const Inventory = @import("Inventory.zig");
 
-const Material = struct { // MARK: Material
+const Material = struct {
 	massDamage: f32 = undefined,
 	hardnessDamage: f32 = undefined,
 	durability: f32 = undefined,
@@ -233,7 +233,7 @@ const MaterialProperty = enum {
 	}
 };
 
-pub const BaseItemIndex = enum(u16) { // MARK: BaseItemIndex
+pub const BaseItemIndex = enum(u16) {
 	_,
 
 	pub fn fromId(_id: []const u8) ?BaseItemIndex {
@@ -277,9 +277,9 @@ pub const BaseItemIndex = enum(u16) { // MARK: BaseItemIndex
 	}
 };
 
-pub const BaseItem = struct { // MARK: BaseItem
+pub const BaseItem = struct {
 	image: graphics.Image,
-	texture: ?graphics.Texture, // TODO: Properly deinit
+	texture: ?graphics.Texture,
 	id: []const u8,
 	name: []const u8,
 	tags: []const Tag,
@@ -288,7 +288,7 @@ pub const BaseItem = struct { // MARK: BaseItem
 	stackSize: u16,
 	material: ?Material,
 	block: ?u16,
-	foodValue: f32, // TODO: Effects.
+	foodValue: f32,
 
 	fn init(self: *BaseItem, allocator: NeverFailingAllocator, texturePath: []const u8, replacementTexturePath: []const u8, id: []const u8, zon: ZonElement) void {
 		self.id = allocator.dupe(u8, id);
@@ -377,8 +377,7 @@ const allNeighborOffsets = [_][2]i8{.{-1, -1}, .{0, -1}, .{1, -1}, .{-1, 0}, .{1
 const orthogonalOffsets = [_][2]i8{.{0, -1}, .{-1, 0}, .{1, 0}, .{0, 1}};
 const diagonalOffsets = [_][2]i8{.{-1, -1}, .{1, -1}, .{-1, 1}, .{1, 1}};
 
-/// Generates the texture of a ProceduralItem using the material information.
-const TextureGenerator = struct { // MARK: TextureGenerator
+const TextureGenerator = struct {
 	fn generateHeightMap(itemGrid: *[16][16]?BaseItemIndex, seed: *u64) [17][17]f32 {
 		var heightMap: [17][17]f32 = undefined;
 		var x: u8 = 0;
@@ -386,8 +385,7 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 			var y: u8 = 0;
 			while (y < 17) : (y += 1) {
 				heightMap[x][y] = 0;
-				// The heighmap basically consists of the amount of neighbors this pixel has.
-				// Also check if there are different neighbors.
+
 				const oneItem = itemGrid[if (x == 0) x else x - 1][if (y == 0) y else y - 1];
 				var hasDifferentItems: bool = false;
 				var dx: i32 = -1;
@@ -404,12 +402,10 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 					}
 				}
 
-				// If there is multiple items at this junction, make it go inward to make embedded parts stick out more:
 				if (hasDifferentItems) {
 					heightMap[x][y] -= 1;
 				}
 
-				// Take into account further neighbors with lower priority:
 				dx = -2;
 				while (dx <= 1) : (dx += 1) {
 					if (x + dx < 0 or x + dx >= 16) continue;
@@ -429,9 +425,9 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 	fn calculateRawLight(heightMap: *const [17][17]f32, pos: [2]u8) f32 {
 		const lightTL = heightMap[pos[0] + 1][pos[1] + 1] - heightMap[pos[0]][pos[1]];
 		const lightTR = heightMap[pos[0]][pos[1] + 1] - heightMap[pos[0] + 1][pos[1]];
-		var light = (lightTL*2 + lightTR)/3; // value of this typically ranges from -7 to 5
-		light += 4; // illuminate everything by an amount
-		light /= 8; // near-normalize the light value
+		var light = (lightTL*2 + lightTR)/3;
+		light += 4;
+		light /= 8;
 		return light;
 	}
 
@@ -567,7 +563,6 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 		var seed: u64 = proceduralItem.seed;
 		random.scrambleSeed(&seed);
 
-		// Generate a height map, which will be used for lighting calulations.
 		const heightMap = generateHeightMap(&proceduralItem.materialGrid, &seed);
 		var x: u8 = 0;
 		while (x < 16) : (x += 1) {
@@ -575,7 +570,7 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 			while (y < 16) : (y += 1) {
 				if (proceduralItem.materialGrid[x][y]) |item| {
 					if (item.material()) |material| {
-						// Calculate the lighting based on the nearest free space:
+
 						const light = calculateLight(&heightMap, .{x, y});
 						const colorIndex: usize = @round(light*@as(f32, @floatFromInt(material.colorPalette.len - 1)));
 						img.setRGB(x, 15 - y, material.colorPalette[colorIndex]);
@@ -593,9 +588,8 @@ const TextureGenerator = struct { // MARK: TextureGenerator
 	}
 };
 
-/// Determines the physical properties of a proceduralItem to calculate in-game parameters such as durability and speed.
-const ProceduralItemPhysics = struct { // MARK: ProceduralItemPhysics
-	/// Determines all the basic properties of the proceduralItem.
+const ProceduralItemPhysics = struct {
+
 	pub fn evaluateProceduralItem(proceduralItem: *ProceduralItem) void {
 		proceduralItem.properties = @splat(0);
 		var tempModifiers: main.List(Modifier) = .empty;
@@ -695,12 +689,12 @@ const ProceduralItemPhysics = struct { // MARK: ProceduralItemPhysics
 	}
 };
 
-const SlotInfo = packed struct { // MARK: SlotInfo
+const SlotInfo = packed struct {
 	disabled: bool = false,
 	optional: bool = false,
 };
 
-const PropertyMatrix = struct { // MARK: PropertyMatrix
+const PropertyMatrix = struct {
 	source: ?MaterialProperty,
 	destination: ?ProceduralItemProperty,
 	weights: [25]f32,
@@ -769,7 +763,7 @@ pub const ProceduralItemTypeIndex = enum(u16) {
 	}
 };
 
-pub const ProceduralItemType = struct { // MARK: ProceduralItemType
+pub const ProceduralItemType = struct {
 	id: []const u8,
 	tags: []main.Tag,
 	properties: []PropertyMatrix,
@@ -781,7 +775,7 @@ pub const ProceduralItemType = struct { // MARK: ProceduralItemType
 const ProceduralItemProperty = enum {
 	damage,
 	maxDurability,
-	/// how long it takes before the next swing happens
+
 	swingSpeed,
 
 	fn fromString(string: []const u8) ?ProceduralItemProperty {
@@ -792,7 +786,7 @@ const ProceduralItemProperty = enum {
 	}
 };
 
-pub const ProceduralItem = struct { // MARK: ProceduralItem
+pub const ProceduralItem = struct {
 	const craftingGridSize = 25;
 	const CraftingGridMask = std.meta.Int(.unsigned, craftingGridSize);
 
@@ -810,14 +804,12 @@ pub const ProceduralItem = struct { // MARK: ProceduralItem
 
 	durability: u32,
 
-	///  Where the player holds the procedural Item.
 	handlePosition: Vec2f,
-	/// Moment of inertia relative to the handle.
+
 	inertiaHandle: f32,
 
-	/// Where the procedural Item rotates around when being thrown.
 	centerOfMass: Vec2f,
-	/// Moment of inertia relative to the center of mass.
+
 	inertiaCenterOfMass: f32,
 
 	pub fn init() *ProceduralItem {
@@ -829,10 +821,7 @@ pub const ProceduralItem = struct { // MARK: ProceduralItem
 	}
 
 	pub fn deinit(self: *const ProceduralItem) void {
-		// TODO: This is leaking textures!
-		// if(self.texture) |texture| {
-		// texture.deinit();
-		// }
+
 		self.image.deinit(main.globalAllocator);
 		self.tooltip.deinit();
 		main.globalAllocator.free(self.modifiers);
@@ -866,8 +855,7 @@ pub const ProceduralItem = struct { // MARK: ProceduralItem
 		self.seed = seed;
 		self.craftingGrid = craftingGrid;
 		self.type = typ;
-		// Produce the procedural Item and its textures:
-		// The material grid, which comes from texture generation, is needed on both server and client, to generate the procedural item properties.
+
 		TextureGenerator.generate(self);
 		ProceduralItemPhysics.evaluateProceduralItem(self);
 		return self;
@@ -976,10 +964,7 @@ pub const ProceduralItem = struct { // MARK: ProceduralItem
 	pub fn hashCode(self: ProceduralItem) u32 {
 		var hash: u32 = 0;
 		for (self.craftingGrid) |nullItem| {
-			// Not every base item has a material (e.g. non-craftable-material items) - skip those slots
-			// the same way property/modifier computation above already does, rather than force-unwrapping.
-			// A crafted item using such an ingredient previously crashed any client that tried to hash it
-			// (e.g. rendering it in another player's hand), even though it's a perfectly valid item.
+
 			const material = (nullItem orelse continue).material() orelse continue;
 			hash = 33*%hash +% material.hashCode();
 		}
@@ -1080,7 +1065,7 @@ const ItemType = enum(u7) {
 	null,
 };
 
-pub const Item = union(ItemType) { // MARK: Item
+pub const Item = union(ItemType) {
 	baseItem: BaseItemIndex,
 	proceduralItem: *ProceduralItem,
 	null: void,
@@ -1149,7 +1134,7 @@ pub const Item = union(ItemType) { // MARK: Item
 			.proceduralItem => {
 				return .{.proceduralItem = try ProceduralItem.fromBytes(reader)};
 			},
-			.null => return error.UnexpectedItemType, // null should be handled at the call-site
+			.null => return error.UnexpectedItemType,
 		}
 	}
 
@@ -1243,7 +1228,7 @@ pub const Item = union(ItemType) { // MARK: Item
 	}
 };
 
-pub const ItemStack = struct { // MARK: ItemStack
+pub const ItemStack = struct {
 	item: Item = .null,
 	amount: u16 = 0,
 
@@ -1298,7 +1283,7 @@ pub const ItemStack = struct { // MARK: ItemStack
 	}
 };
 
-pub const Recipe = struct { // MARK: Recipe
+pub const Recipe = struct {
 	sourceItems: []BaseItemIndex,
 	sourceAmounts: []u16,
 	resultItem: BaseItemIndex,
@@ -1356,7 +1341,6 @@ var modifierRestrictions: std.StringHashMapUnmanaged(*const ModifierRestriction.
 pub var itemList: [65536]BaseItem = undefined;
 pub var itemListSize: u16 = 0;
 
-// Due to migrations multiple indices can map to the same item. This must be resolved during inventory loading using this map.
 var itemDeduplicationMap: [65536]BaseItemIndex = undefined;
 
 var recipeList: main.ListManaged(Recipe) = .init(main.worldArena);

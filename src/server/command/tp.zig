@@ -36,7 +36,7 @@ pub fn execute(args: Args, source: Source) void {
 			}
 			const radius = 16384;
 			const mapSize: i32 = main.server.terrain.ClimateMap.ClimateMapFragment.mapSize;
-			// Explore chunks in a spiral from the center:
+
 			const spiralLen = 2*radius/mapSize*2*radius/mapSize;
 			var wx = user.lastPos[0] & ~(mapSize - 1);
 			var wy = user.lastPos[1] & ~(mapSize - 1);
@@ -73,7 +73,7 @@ pub fn execute(args: Args, source: Source) void {
 						else => unreachable,
 					}
 					dirChanges += 1;
-					// Every second turn the number of steps needed doubles.
+
 					stepsRemaining = dirChanges/2;
 				}
 			}

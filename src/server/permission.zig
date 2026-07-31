@@ -9,7 +9,7 @@ const NeverFailingArenaAllocator = main.heap.NeverFailingArenaAllocator;
 const ZonElement = main.ZonElement;
 const sync = main.sync;
 
-const PermissionMap = struct { // MARK: PermissionMap
+const PermissionMap = struct {
 	map: std.StringHashMapUnmanaged(void) = .{},
 
 	pub fn fromBytes(self: *PermissionMap, arena: NeverFailingAllocator, reader: *main.utils.BinaryReader) !void {
@@ -39,7 +39,7 @@ const PermissionMap = struct { // MARK: PermissionMap
 	}
 };
 
-pub const Permissions = struct { // MARK: Permissions
+pub const Permissions = struct {
 	pub const ListType = enum {
 		white,
 		black,
@@ -109,14 +109,9 @@ pub const Permissions = struct { // MARK: Permissions
 	}
 };
 
-pub const Group = struct { // MARK: Group
+pub const Group = struct {
 	permissions: Permissions,
-	// Each group must have a unique ID to avoid stale membership issues.
-	// Example scenario:
-	// - User1 joins Group1
-	// - Group1 is deleted while User1 is offline (so their data isn’t updated)
-	// - A new Group1 is created
-	// - When User1 reconnects, they are incorrectly treated as a member of the new Group1
+
 	id: u32,
 	name: []const u8,
 
@@ -203,7 +198,7 @@ pub const Group = struct { // MARK: Group
 var groups: std.StringHashMapUnmanaged(*Group) = .{};
 
 var groupsArena: NeverFailingArenaAllocator = undefined;
-var currentId: u32 = 0; // Needed to identify groups even after deletion, so that players who join a server after deletion of a group don't automatically join another group witht the same name.
+var currentId: u32 = 0;
 
 pub fn init(allocator: NeverFailingAllocator, _currentId: u32) void {
 	sync.threadContext.assertCorrectContext(.server);
@@ -287,10 +282,6 @@ pub fn deleteGroup(allocator: NeverFailingAllocator, name: []const u8) bool {
 	};
 	return true;
 }
-
-// ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-// MARK: Testing
-// ––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 
 test "whitePermission" {
 	var permissions: Permissions = .init(main.heap.testingAllocator);

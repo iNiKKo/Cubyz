@@ -10,7 +10,6 @@ pub const Vec4i = @Vector(4, i32);
 pub const Vec4f = @Vector(4, f32);
 pub const Vec4d = @Vector(4, f64);
 
-// copied from zmath library (MIT Liscence) : https://github.com/zig-gamedev/zmath/blob/3a5955b2b72cd081563fbb084eff05bffd1e3fbb/src/root.zig#L1430
 pub const Vec4fComponent = enum { x, y, z, w };
 
 pub inline fn swizzle(
@@ -147,11 +146,9 @@ pub const CoordinateSystem = enum {
 	}
 };
 
-// MARK: Quaternion
 pub const Quat = struct {
 	q: Vec4f = Vec4f{0, 0, 0, 1},
 
-	// copied from zmath library (MIT Liscence) :  https://github.com/zig-gamedev/zmath/blob/9f7beb0753bd5cf885285dda8b00361c87c5b6b3/src/root.zig#L2985
 	pub fn quatFromAxisAngle(axis: Vec3f, angle: f32) Quat {
 		const normal = normalize(axis);
 		const n = Vec4f{normal[0], normal[1], normal[2], 1.0};
@@ -160,7 +157,6 @@ pub const Quat = struct {
 		return .{.q = n*Vec4f{sc[0], sc[0], sc[0], sc[1]}};
 	}
 
-	/// Standard Hamilton product; applying the result rotates by `self` first, then by `other`.
 	pub fn mul(self: Quat, other: Quat) Quat {
 		const a = self.q;
 		const b = other.q;
@@ -173,7 +169,7 @@ pub const Quat = struct {
 	}
 };
 
-pub const Mat4f = struct { // MARK: Mat4f
+pub const Mat4f = struct {
 	rows: [4]Vec4f,
 	pub fn identity() Mat4f {
 		return Mat4f{
@@ -197,7 +193,7 @@ pub const Mat4f = struct { // MARK: Mat4f
 		};
 	}
 
-	pub fn scale(vector: Vec3f) Mat4f { // zig fmt: off
+	pub fn scale(vector: Vec3f) Mat4f {
 		return Mat4f{
 			.rows = [4]Vec4f{
 				Vec4f{vector[0], 0,         0,         0},
@@ -206,7 +202,7 @@ pub const Mat4f = struct { // MARK: Mat4f
 				Vec4f{0,         0,         0,         1},
 			},
 		};
-	} // zig fmt: on
+	}
 
 	pub fn rotationX(rad: f32) Mat4f {
 		const s = @sin(rad);
@@ -247,16 +243,14 @@ pub const Mat4f = struct { // MARK: Mat4f
 		};
 	}
 
-	// copied from zmath library (MIT Liscence) : https://github.com/zig-gamedev/zmath/blob/3a5955b2b72cd081563fbb084eff05bffd1e3fbb/src/root.zig#L634
 	inline fn andInt(v0: anytype, v1: anytype) @TypeOf(v0, v1) {
 		const T = @TypeOf(v0, v1);
 		const Tu = @Vector(@typeInfo(T).vector.len, u32);
 		const v0u = @as(Tu, @bitCast(v0));
 		const v1u = @as(Tu, @bitCast(v1));
-		return @as(T, @bitCast(v0u & v1u)); // andps
+		return @as(T, @bitCast(v0u & v1u));
 	}
 
-	// copied from zmath library (MIT Liscence) : https://github.com/zig-gamedev/zmath/blob/3a5955b2b72cd081563fbb084eff05bffd1e3fbb/src/root.zig#L2726
 	pub fn rotationQuat(quat: Quat) Mat4f {
 		const f32x4_mask3: Vec4f = Vec4f{
 			@as(f32, @bitCast(@as(u32, 0xffff_ffff))),
@@ -308,7 +302,7 @@ pub const Mat4f = struct { // MARK: Mat4f
 		return m;
 	}
 
-	pub fn perspective(fovY: f32, aspect: f32, near: f32, far: f32) Mat4f { // zig fmt: off
+	pub fn perspective(fovY: f32, aspect: f32, near: f32, far: f32) Mat4f {
 		const tanY = std.math.tan(fovY*0.5);
 		const tanX = aspect*tanY;
 		return Mat4f{
@@ -319,12 +313,9 @@ pub const Mat4f = struct { // MARK: Mat4f
 				Vec4f{0,      1,                          0,      0},
 			},
 		};
-	} // zig fmt: on
+	}
 
-	/// Orthographic projection following the same convention as perspective(): view space is
-	/// X = right, Y = forward/depth, Z = up. Maps view.x in [-width/2, width/2] and view.z in
-	/// [-height/2, height/2] to clip [-1, 1], and view.y in [near, far] to clip depth [-1, 1].
-	pub fn orthographic(width: f32, height: f32, near: f32, far: f32) Mat4f { // zig fmt: off
+	pub fn orthographic(width: f32, height: f32, near: f32, far: f32) Mat4f {
 		return Mat4f{
 			.rows = [4]Vec4f{
 				Vec4f{2/width, 0,             0,       0},
@@ -333,23 +324,8 @@ pub const Mat4f = struct { // MARK: Mat4f
 				Vec4f{0,       0,             0,       1},
 			},
 		};
-	} // zig fmt: on
+	}
 
-	/// Rotation-only view matrix that looks along `forward` (an arbitrary, non-unit direction is fine).
-	/// Used to build the light-space view matrix for shadow mapping, mirroring how game.camera's view
-	/// matrix is a pure rotation around the player (positions are already player-relative).
-	///
-	/// The perpendicular (right, trueUp) basis is built with the branchless orthonormal-basis
-	/// construction from Duff et al., "Building an Orthonormal Basis, Revisited" (2017), rather than
-	/// the more common `cross(forward, upReference)` with a hard-switched upReference. That older
-	/// approach has a hard discontinuity exactly where `abs(dot(fwd, up)) > 0.999` flips which
-	/// reference vector is used: the whole right/trueUp basis instantly re-orients by ~90 degrees.
-	/// Since the sun direction fed in here sweeps up toward vertical (z -> 1) around midday, that
-	/// discontinuity was hit constantly and showed up as a sudden shadow-map re-orientation — visible
-	/// as tree/block textures looking stretched or "swimming" whenever the sun was high overhead. The
-	/// Duff construction has no reference vector and no branch: it stays smooth all the way to z = 1,
-	/// which is exactly the region the elevation clamp above (min z = 0.18) keeps every light
-	/// direction within (z in [0.18, 1], never crossing the construction's own seam at z = 0).
 	pub fn lookInDirection(forward: Vec3f) Mat4f {
 		const fwd = normalize(forward);
 		const sign: f32 = std.math.copysign(@as(f32, 1.0), fwd[2]);
@@ -424,7 +400,7 @@ pub const Mat4f = struct { // MARK: Mat4f
 	}
 };
 
-pub const Complex = struct { // MARK: Complex
+pub const Complex = struct {
 	val: Vec2d,
 
 	fn valSquare(a: Complex) f64 {
@@ -486,8 +462,6 @@ pub const Complex = struct { // MARK: Complex
 		return complexFactor.mulScalar(realFactor);
 	}
 };
-
-// MARK: Box
 
 pub const Boxi = struct {
 	min: Vec3i,

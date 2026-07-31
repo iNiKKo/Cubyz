@@ -14,7 +14,7 @@ const Vec3i = vec.Vec3i;
 
 pub const id = "cubyz:terrain";
 
-pub const priority = 1024; // Within Cubyz the first to be executed, but mods might want to come before that for whatever reason.
+pub const priority = 1024;
 
 pub const generatorSeed = 0x65c7f9fdc0641f94;
 
@@ -97,7 +97,7 @@ pub fn generate(worldSeed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap
 						const soilCreep: f32 = biome.soilCreep;
 						var bseed: u64 = random.initSeed3D(worldSeed, .{chunk.super.pos.wx + x, chunk.super.pos.wy + y, chunk.super.pos.wz + z});
 						const airBlockBelow = caveMap.findTerrainChangeBelow(x, y, z);
-						// Add the biomes surface structure:
+
 						z = @min(z + chunk.super.pos.voxelSize, biome.structure.addSubTerranian(chunk, surfaceBlock, @max(airBlockBelow, zBiome - 1), slope, soilCreep, x, y, &bseed));
 						z -= chunk.super.pos.voxelSize;
 						if (z < zBiome) break;

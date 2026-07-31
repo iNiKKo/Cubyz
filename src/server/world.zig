@@ -63,7 +63,7 @@ pub const Settings = struct {
 };
 
 fn findValidFolderName(allocator: main.heap.NeverFailingAllocator, name: []const u8) []const u8 {
-	// Remove illegal ASCII characters:
+
 	const escapedName = main.stackAllocator.alloc(u8, name.len);
 	defer main.stackAllocator.free(escapedName);
 	for (name, 0..) |char, i| {
@@ -74,7 +74,6 @@ fn findValidFolderName(allocator: main.heap.NeverFailingAllocator, name: []const
 		};
 	}
 
-	// Avoid duplicates:
 	var resultName = main.stackAllocator.dupe(u8, escapedName);
 	defer main.stackAllocator.free(resultName);
 	var i: usize = 0;
@@ -114,18 +113,17 @@ pub fn tryCreateWorld(worldName: []const u8, worldSettings: Settings, preset: Zo
 
 		try main.files.cubyzDir().writeZon(worldInfoPath, worldInfo);
 	}
-	{ // Make assets subfolder
+	{
 		const assetsPath = main.stackAllocator.print("saves/{s}/assets", .{worldPath});
 		defer main.stackAllocator.free(assetsPath);
 		try main.files.cubyzDir().makePath(assetsPath);
 	}
 }
 
-pub const ChunkManager = struct { // MARK: ChunkManager
+pub const ChunkManager = struct {
 	world: *ServerWorld,
 	terrainGenerationProfile: server.terrain.TerrainGenerationProfile,
 
-	// There will be at most 1 GiB of chunks in here. TODO: Allow configuring this in the server settings.
 	const reducedChunkCacheMask = 2047;
 	var chunkCache: Cache(ServerChunk, reducedChunkCacheMask + 1, 4, chunkDeinitFunctionForCache) = .{};
 	const HashContext = struct {
@@ -170,7 +168,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 	pub fn tryRemoveSimulationChunk(ch: *SimulationChunk) void {
 		mutex.lock();
 		defer mutex.unlock();
-		if (ch.refCount.load(.monotonic) == 1) { // Only we hold it.
+		if (ch.refCount.load(.monotonic) == 1) {
 			std.debug.assert(simulationChunkHashMap.remove(ch.pos));
 			ch.decreaseRefCount();
 		}
@@ -181,7 +179,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		simulationChunk: *SimulationChunk,
 	};
 
-	const ChunkLoadTask = struct { // MARK: ChunkLoadTask
+	const ChunkLoadTask = struct {
 		pos: ChunkPosition,
 		source: Source,
 
@@ -224,11 +222,11 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		}
 
 		pub fn isStillNeeded(self: *ChunkLoadTask) bool {
-			switch (self.source) { // Remove the task if it's far enough away from the player:
+			switch (self.source) {
 				.player => |player| {
 					const user = server.getUserByIndex(player) orelse return false;
 					const minDistSquare = self.pos.getMinDistanceSquared(user.clientUpdatePos);
-					//                                                                              ↓ Margin for error. (diagonal of 1 chunk)
+
 					var targetRenderDistance: i64 = @as(i64, user.renderDistance)*chunk.chunkSize + @as(i64, @ceil(@as(comptime_int, chunk.chunkSize)*@sqrt(3.0)));
 					targetRenderDistance *= self.pos.voxelSize;
 					return minDistSquare <= targetRenderDistance*targetRenderDistance;
@@ -252,7 +250,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		}
 	};
 
-	const LightMapLoadTask = struct { // MARK: LightMapLoadTask
+	const LightMapLoadTask = struct {
 		pos: terrain.SurfaceMap.MapFragmentPosition,
 		source: ?main.server.PlayerIndex,
 
@@ -287,7 +285,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		}
 
 		pub fn isStillNeeded(self: *LightMapLoadTask) bool {
-			_ = self; // TODO: Do these tasks need to be culled?
+			_ = self;
 			return true;
 		}
 
@@ -311,7 +309,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		}
 	};
 
-	pub fn init(world: *ServerWorld, settings: ZonElement) !ChunkManager { // MARK: init()
+	pub fn init(world: *ServerWorld, settings: ZonElement) !ChunkManager {
 		const self = ChunkManager{
 			.world = world,
 			.terrainGenerationProfile = try server.terrain.TerrainGenerationProfile.init(settings, world.settings.seed),
@@ -343,7 +341,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		ChunkLoadTask.scheduleAndDecreaseRefCount(pos, .{.player = source.playerIndex});
 	}
 
-	pub fn generateChunk(pos: ChunkPosition, source: Source) void { // MARK: generateChunk()
+	pub fn generateChunk(pos: ChunkPosition, source: Source) void {
 		const ch = getOrGenerateChunkAndIncreaseRefCount(pos);
 		switch (source) {
 			.player => |player| {
@@ -359,7 +357,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 
 	fn chunkInitFunctionForCacheAndIncreaseRefCount(pos: ChunkPosition) *ServerChunk {
 		if (pos.voxelSize == 1) {
-			if (getSimulationChunkAndIncreaseRefCount(pos)) |simulationChunk| { // Check if we already have it in memory.
+			if (getSimulationChunkAndIncreaseRefCount(pos)) |simulationChunk| {
 				defer simulationChunk.decreaseRefCount();
 				if (simulationChunk.getChunk()) |ch| {
 					ch.increaseRefCount();
@@ -379,7 +377,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 			@as(usize, @intCast(pos.wx -% region.pos.wx))/pos.voxelSize/chunk.chunkSize,
 			@as(usize, @intCast(pos.wy -% region.pos.wy))/pos.voxelSize/chunk.chunkSize,
 			@as(usize, @intCast(pos.wz -% region.pos.wz))/pos.voxelSize/chunk.chunkSize,
-		)) |data| blk: { // Load chunk from file:
+		)) |data| blk: {
 			defer main.stackAllocator.free(data);
 			storage.ChunkCompression.loadChunk(&ch.super, .server, data) catch {
 				std.log.err("Storage for chunk {} in region file at {} is corrupted", .{pos, region.pos});
@@ -396,7 +394,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 		for (server.world.?.chunkManager.terrainGenerationProfile.generators) |generator| {
 			generator.generate(server.world.?.settings.seed ^ generator.generatorSeed, ch, caveMap, biomeMap);
 		}
-		if (pos.voxelSize != 1) { // Generate LOD replacements
+		if (pos.voxelSize != 1) {
 			for (ch.super.data.palette()) |*block| {
 				block.store(.{.typ = block.load(.unordered).lodReplacement(), .data = block.load(.unordered).data}, .unordered);
 			}
@@ -407,7 +405,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 	fn chunkDeinitFunctionForCache(ch: *ServerChunk) void {
 		ch.decreaseRefCount();
 	}
-	/// Generates a normal chunk at a given location, or if possible gets it from the cache.
+
 	pub fn getOrGenerateChunkAndIncreaseRefCount(pos: ChunkPosition) *ServerChunk {
 		const mask = pos.voxelSize*chunk.chunkSize - 1;
 		std.debug.assert(pos.wx & mask == 0 and pos.wy & mask == 0 and pos.wz & mask == 0);
@@ -425,7 +423,7 @@ pub const ChunkManager = struct { // MARK: ChunkManager
 
 pub const worldDataVersion: u32 = 5;
 
-pub const ServerWorld = struct { // MARK: ServerWorld
+pub const ServerWorld = struct {
 	itemDropManager: ItemDropManager = undefined,
 	blockPalette: *main.assets.Palette = undefined,
 	itemPalette: *main.assets.Palette = undefined,
@@ -474,7 +472,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 
 	pub const Mode = enum { singleplayer, multiplayer };
 
-	pub fn init(path: []const u8, mode: Mode) !*ServerWorld { // MARK: init()
+	pub fn init(path: []const u8, mode: Mode) !*ServerWorld {
 		const self = main.globalAllocator.create(ServerWorld);
 		errdefer main.globalAllocator.destroy(self);
 		self.* = ServerWorld{
@@ -520,7 +518,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		try self.loadPlayerLoginInfo(dir);
 
 		try main.assets.loadWorldAssets(arena.print("{s}/saves/{s}/assets/", .{files.cubyzDirStr(), path}), self.blockPalette, self.itemPalette, self.proceduralItemPalette, self.biomePalette, self.entityModelPalette, self.entityComponentPalette);
-		// Store the block palette now that everything is loaded.
+
 		try dir.writeZon("palette.zig.zon", self.blockPalette.storeToZon(arena));
 		try dir.writeZon("item_palette.zig.zon", self.itemPalette.storeToZon(arena));
 		try dir.writeZon("tool_palette.zig.zon", self.proceduralItemPalette.storeToZon(arena));
@@ -580,8 +578,8 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		main.globalAllocator.destroy(self);
 	}
 
-	pub fn loadWorldConfig(self: *ServerWorld, arena: NeverFailingAllocator, dir: main.files.Dir, worldData: ZonElement) !void { // MARK: loadWorldConfig
-		if ((worldData.get(u32, "version") orelse 0) == 2) { // TODO: #2458
+	pub fn loadWorldConfig(self: *ServerWorld, arena: NeverFailingAllocator, dir: main.files.Dir, worldData: ZonElement) !void {
+		if ((worldData.get(u32, "version") orelse 0) == 2) {
 			std.log.info("Migrating old world with world version 2 to version 3", .{});
 
 			const gamerules = try dir.readToZon(arena, "gamerules.zig.zon");
@@ -604,9 +602,9 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 			try dir.deleteFile("generatorSettings.zig.zon");
 		}
 
-		if ((worldData.get(u32, "version") orelse 0) == 3) { // TODO: #2458
+		if ((worldData.get(u32, "version") orelse 0) == 3) {
 			std.log.info("Migrating old world with world version 3 to version 4", .{});
-			// In version 0.1.0 these values were written incorrectly
+
 			const settings = worldData.getChild("settings");
 			if (settings.removeChild("default_gamemode")) |gamemode| {
 				settings.put("defaultGamemode", gamemode);
@@ -619,9 +617,9 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 			try dir.writeZon("world.zig.zon", worldData);
 		}
 
-		if ((worldData.get(u32, "version") orelse 0) == 4) { // TODO: #2458
+		if ((worldData.get(u32, "version") orelse 0) == 4) {
 			std.log.info("Migrating old world with world version 4 to version 5", .{});
-			// Player file names are now numerical instead of based on the name.
+
 			var fileNames: main.List([]const u8) = .empty;
 			var playerDir = try dir.openIterableDir("players");
 			defer playerDir.close();
@@ -714,7 +712,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		}
 	}
 
-	const RegenerateLODTask = struct { // MARK: RegenerateLODTask
+	const RegenerateLODTask = struct {
 		pos: ChunkPosition,
 		storeMaps: bool,
 
@@ -792,7 +790,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		if (hasSurfaceMaps) {
 			try terrain.SurfaceMap.regenerateLOD(self.path);
 		}
-		// Delete old LODs:
+
 		for (1..main.settings.highestSupportedLod + 1) |i| {
 			const lod = @as(u32, 1) << @intCast(i);
 			const path = main.stackAllocator.print("saves/{s}/chunks/{}", .{self.path, lod});
@@ -803,7 +801,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 				}
 			};
 		}
-		// Find all the stored chunks:
+
 		var chunkPositions: main.List(ChunkPosition) = .empty;
 		defer chunkPositions.deinit(main.stackAllocator);
 		const path = main.stackAllocator.print("saves/{s}/chunks/1", .{self.path});
@@ -836,7 +834,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 				}
 			}
 		}
-		// Load all the stored chunks and update their next LODs.
+
 		for (chunkPositions.items) |pos| {
 			RegenerateLODTask.schedule(pos, !hasSurfaceMaps);
 		}
@@ -874,7 +872,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 			var seed: u64 = self.settings.seed ^ 275892235728371;
 			std.log.info("Finding spawn position...", .{});
 			foundPosition: {
-				// Explore chunks in a spiral from the center:
+
 				const radius = 65536;
 				const mapSize = terrain.ClimateMap.ClimateMapFragment.mapSize;
 				const spiralLen = 2*radius/mapSize*2*radius/mapSize;
@@ -917,7 +915,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 							else => unreachable,
 						}
 						dirChanges += 1;
-						// Every second turn the number of steps needed doubles.
+
 						stepsRemaining = dirChanges/2;
 					}
 				}
@@ -983,7 +981,6 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		const player = user.player();
 		const loadingError = player.loadFrom(user.id, playerData.getChild("entity"), .server);
 
-		// override the name for players.
 		if (player.name) |name| {
 			main.globalAllocator.free(name);
 		}
@@ -1126,7 +1123,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		}
 	}
 
-	pub fn update(self: *ServerWorld) void { // MARK: update()
+	pub fn update(self: *ServerWorld) void {
 		const newTime = main.timestamp();
 		var deltaTime = @as(f32, @floatFromInt(self.lastUpdateTime.durationTo(newTime).toNanoseconds()))/1.0e9;
 		self.lastUpdateTime = newTime;
@@ -1137,7 +1134,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 
 		while (self.milliTime.durationTo(newTime).toMilliseconds() > 100) {
 			self.milliTime = self.milliTime.addDuration(.fromMilliseconds(100));
-			if (self.doGameTimeCycle) self.gameTime +%= 1; // gameTime is measured in 100ms.
+			if (self.doGameTimeCycle) self.gameTime +%= 1;
 		}
 		if (self.lastUnimportantDataSent.durationTo(newTime).toSeconds() > 2) {
 			self.lastUnimportantDataSent = newTime;
@@ -1148,11 +1145,9 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 			}
 		}
 		self.tick();
-		// TODO: Entities
 
-		// Item Entities
 		self.itemDropManager.update(deltaTime);
-		{ // Collect item entities:
+		{
 			const userList = server.getUserList(main.stackAllocator);
 			defer main.stackAllocator.free(userList);
 			for (userList) |user| {
@@ -1160,9 +1155,6 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 			}
 		}
 
-		// Store chunks and regions.
-		// Stores at least one chunk and one region per iteration.
-		// All chunks and regions will be stored within the storage time.
 		const insertionTime = newTime.subDuration(main.settings.storageTime);
 		self.mutex.lock();
 		defer self.mutex.unlock();
@@ -1211,25 +1203,6 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		return map.getBiome(wx - map.pos.wx, wy - map.pos.wy, wz - map.pos.wz);
 	}
 
-	/// Like getBiome, but also returns a seed unique to the specific biome patch occupying this position —
-	/// used by WeatherMap to key persistent per-patch weather state, so re-entering the same patch of e.g.
-	/// jungle later finds its weather where it was left.
-	///
-	/// BUG, FIXED (2026-07-28): this originally went through CaveBiomeMapView.getBiomeAndSeed, mirroring
-	/// getBiome above. That function only ever writes its `seed` out-param in the *cave* fallback path
-	/// (getRoughBiome) — when checkSurfaceBiome succeeds, which is virtually always true for a player
-	/// standing on the surface, it returns early without touching `seed` at all, leaving it as whatever
-	/// garbage happened to be on the stack. That meant WeatherMap's per-patch key was effectively random
-	/// every tick for surface biomes (the overwhelmingly common case), so the occupancy timer never
-	/// actually accumulated toward entryDelayMillis and no roll ever fired — reported by the player as
-	/// "3-5 minutes in a wet biome, nothing happened." Fixed by getting the seed from ClimateMap directly
-	/// (the actual surface biome placement system — see ClimateMap.zig's BiomeSample.seed, populated in
-	/// climategen/NoiseBasedVoronoi.zig as `random.initSeed2D(worldSeed, closestBiomePoint.pos)`), which
-	/// is always defined, sidestepping the surface/cave ambiguity entirely rather than patching
-	/// CaveBiomeMapView. This also means weather is purely a surface-climate concept now — a player
-	/// underground in a cave gets the overlying surface biome's weather roll, which is harmless since
-	/// clouds/rain aren't visible underground anyway (there's no "can the player see the sky" check
-	/// anywhere in this feature yet; not attempted here).
 	pub fn getBiomeAndSeed(_: *const ServerWorld, wx: i32, wy: i32, _: i32) struct {biome: *const terrain.biomes.Biome, seed: u64} {
 		const biomeSize: i32 = terrain.SurfaceMap.MapFragment.biomeSize;
 		const alignedX = wx & ~(biomeSize - 1);
@@ -1264,7 +1237,6 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		return block;
 	}
 
-	/// Returns the actual block on failure
 	pub fn cmpxchgBlock(self: *ServerWorld, wx: i32, wy: i32, wz: i32, oldBlock: ?Block, _newBlock: Block) ?Block {
 		main.sync.threadContext.assertCorrectContext(.server);
 		const baseChunk = ChunkManager.getOrGenerateChunkAndIncreaseRefCount(.{.wx = wx & ~@as(i32, chunk.chunkMask), .wy = wy & ~@as(i32, chunk.chunkMask), .wz = wz & ~@as(i32, chunk.chunkMask), .voxelSize = 1});
@@ -1332,7 +1304,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 		for (userList) |user| {
 			main.network.protocols.blockUpdate.send(user.conn, &.{.{.pos = .{wx, wy, wz}, .newBlock = newBlock, .blockEntityData = &.{}}});
 		}
-		// onBreak event
+
 		if (oldBlock) |block| {
 			if (block.typ != newBlock.typ) {
 				_ = block.onBreak().run(.{
@@ -1351,10 +1323,7 @@ pub const ServerWorld = struct { // MARK: ServerWorld
 	}
 
 	pub fn triggerNeighborBlockUpdatesWithDelay(self: *ServerWorld, wx: i32, wy: i32, wz: i32, delayMs: i64) void {
-		// Includes the changed position itself (not just its 6 neighbors) - a block that just got
-		// placed/replaced needs the same chance to react to its own new state (e.g. water normalizing
-		// a freshly placed source, see fluid_spread.zig) as its neighbors get to react to it changing.
-		// onUpdate is .noop for the overwhelming majority of block types, so this costs nothing for them.
+
 		var positions: [7]Vec3i = undefined;
 		positions[0] = .{wx, wy, wz};
 		for (chunk.Neighbor.iterable, 1..) |value, i| {

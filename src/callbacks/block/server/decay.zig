@@ -18,22 +18,18 @@ blockDrops: []const blocks.BlockDrop,
 pub fn init(zon: ZonElement, creator: main.callbacks.Creator) ?*@This() {
 	const block = switch (creator) {
 		.block => |b| b,
-		// TODO: Add when a new creator type exists
-		// else => {
-		// std.log.err("decay callback can only be used for blocks", .{});
-		// return null;
-		// },
+
 	};
 	const result = main.worldArena.create(@This());
-	// replacement
+
 	if (zon.get([]const u8, "replacement")) |blockname| {
 		result.decayReplacement = main.blocks.parseBlock(blockname);
 	} else result.decayReplacement = main.blocks.Block.air;
-	// custom drop
+
 	if (zon.getChildOrNull("drops")) |_| {
 		result.blockDrops = blocks.loadBlockDrop(block.id(), zon);
 	} else result.blockDrops = block.blockDrops();
-	// prevention
+
 	result.prevention = &.{};
 	if (zon.getChildOrNull("prevention")) |tagNames| {
 		if (tagNames == .array) {
@@ -66,7 +62,6 @@ fn preventsDecay(self: *@This(), log: Block) bool {
 }
 fn foundWayToLog(self: *@This(), world: *server.ServerWorld, leaf: Block, wx: i32, wy: i32, wz: i32) bool {
 
-	// init array to mark already searched blocks.
 	const checkRange = 5;
 	const checkLength = checkRange*2 + 1;
 	var checked: [checkLength*checkLength*checkLength]bool = undefined;
@@ -74,7 +69,6 @@ fn foundWayToLog(self: *@This(), world: *server.ServerWorld, leaf: Block, wx: i3
 		checked[i] = false;
 	}
 
-	// queue for breadth-first search
 	var queue = main.utils.CircularBufferQueue(Vec3i).init(main.stackAllocator, 32);
 	defer queue.deinit();
 
@@ -85,14 +79,13 @@ fn foundWayToLog(self: *@This(), world: *server.ServerWorld, leaf: Block, wx: i3
 	const sourceIsBranch = leaf.mode() == branchRotation;
 
 	while (queue.popFront()) |value| {
-		// get the (potential) log
+
 		if (world.getBlock(value[0] +% wx, value[1] +% wy, value[2] +% wz)) |log| {
-			// it is a log ? end search.
+
 			if (self.preventsDecay(log)) {
 				return true;
 			}
 
-			// it is the same type of leaf? continue search! (Don't do it for branches. We've got isConnected instead!)
 			if (!sourceIsBranch and log.typ != leaf.typ) continue;
 			if (sourceIsBranch and log.mode() != branchRotation and !log.viewThrough()) return true;
 			const branchData = branch.BranchData.init(log.data);
@@ -100,11 +93,9 @@ fn foundWayToLog(self: *@This(), world: *server.ServerWorld, leaf: Block, wx: i3
 			for (main.chunk.Neighbor.iterable) |offset| {
 				const relativePosition = value + offset.relPos();
 
-				// out of range
 				if (vec.lengthSquare(relativePosition) > checkRange*checkRange) continue;
 				if (sourceIsBranch and !branchData.isConnected(offset)) continue;
 
-				// mark as checked
 				if (checked[getIndexInCheckArray(relativePosition, checkRange)]) continue;
 				checked[getIndexInCheckArray(relativePosition, checkRange)] = true;
 				queue.pushBack(relativePosition);
@@ -129,16 +120,15 @@ pub fn run(self: *@This(), params: main.callbacks.ServerBlockCallback.Params) ma
 
 	if (server.world) |world| {
 		if (world.getBlock(wx, wy, wz)) |leaf| {
-			// check if there is any log in the proximity?^
+
 			if (self.foundWayToLog(world, leaf, wx, wy, wz)) return .ignored;
 
-			// no, there is no log in proximity
 			if (world.cmpxchgBlock(wx, wy, wz, leaf, self.decayReplacement) == null) {
 				for (self.blockDrops) |drop| {
 					if (drop.chance == 1 or main.random.nextFloat(&main.seed) < drop.chance) {
 						for (drop.items) |stack| {
 							var dir = main.vec.normalize(main.random.nextFloatVectorSigned(3, &main.seed));
-							// Bias upwards
+
 							dir[2] += main.random.nextFloat(&main.seed)*4.0;
 							const model = leaf.mode().model(leaf).model();
 							const pos = Vec3f{

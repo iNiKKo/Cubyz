@@ -6,8 +6,7 @@ layout(location = 1) in float cameraDistance;
 layout(location = 0) out vec4 fragColor;
 
 uniform vec3 tint;
-// thin_clouds.zig's playerXY + wind drift — added to localPos below to recover an absolute world-XY
-// noise coordinate (see thin_clouds.zig's doc comment for why localPos alone isn't already that).
+
 uniform vec2 noiseOrigin;
 uniform float coverageThreshold;
 uniform float maxAlpha;
@@ -18,10 +17,8 @@ uniform float weatherFogStrength;
 const float noiseScale = 220.0;
 const float detailNoiseScale = noiseScale*0.4;
 const float detailWeight = 0.35;
-const float edgeSoftness = 0.15; // smoothstep width around the threshold — soft wispy edges.
+const float edgeSoftness = 0.15;
 
-// Standard hash-based 2D value noise (lattice of pseudo-random corner values, bilinearly interpolated
-// with a smoothstep-shaped blend) — no CPU-side texture needed, this whole layer is computed on the fly.
 float hash(vec2 p) {
 	p = fract(p*vec2(123.34, 456.21));
 	p += dot(p, p + 45.32);
@@ -39,16 +36,8 @@ float valueNoise(vec2 p) {
 	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// This layer is one giant flat quad (planeHalfSize = 4096 blocks in thin_clouds.zig) with no
-// distance-based falloff at all — from a first-person camera, a huge span of that flat plane compresses
-// into a thin, near-horizontal strip right at the horizon (classic infinite-flat-plane grazing-angle
-// behavior), which reads as the cloud layer "stretching as far as it can" toward the horizon rather than
-// fading into haze/distance like real clouds or this engine's own 3D cloud layers do. Fading alpha out
-// with horizontal distance from the player closes that off — matching the "fade the edge, don't show a
-// hard boundary" principle already used for this engine's 3D cloud coverage grid edge and the
-// render-distance fog wall.
-const float horizonFadeStart = 2500.0; // Blocks — fully opaque before this distance.
-const float horizonFadeEnd = 4000.0; // Blocks — fully faded by this distance (inside planeHalfSize=4096, so the plane's own edge is never visible).
+const float horizonFadeStart = 2500.0;
+const float horizonFadeEnd = 4000.0;
 
 void main() {
 	vec2 worldPos = localPos + noiseOrigin;

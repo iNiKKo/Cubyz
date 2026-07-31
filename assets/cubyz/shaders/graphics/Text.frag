@@ -7,7 +7,6 @@ layout(location = 1) flat in vec4 color;
 
 layout(binding = 0) uniform sampler2D textureSampler;
 
-// in pixels
 layout(location = 0) uniform vec4 textureRect;
 layout(location = 1) uniform vec2 scene;
 layout(location = 2) uniform vec2 offset;
@@ -35,7 +34,7 @@ void main() {
 				textureRectPercentage.y+
 				frag_face_pos.y*textureRectPercentage.w
 			);
-	if ((fontEffects & 0x01000000) != 0) { // make it bold in y by sampling more pixels.
+	if ((fontEffects & 0x01000000) != 0) {
 		vec2 pixel_offset = 1/fontSize;
 		vec4 textureBoundsPercentage = vec4(convert2Proportional(textureBounds.xy, fontSize), convert2Proportional(textureBounds.zw, fontSize));
 		vec2 minTextureCoord = textureBoundsPercentage.xy;

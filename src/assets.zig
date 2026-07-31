@@ -108,7 +108,7 @@ pub const Assets = struct {
 			.structureBuildingBlocks = self.structureBuildingBlocks.clone(allocator.allocator) catch unreachable,
 			.blueprints = self.blueprints.clone(allocator.allocator) catch unreachable,
 			.particles = self.particles.clone(allocator.allocator) catch unreachable,
-			.worldPresets = .{}, // Not accessible inside the world
+			.worldPresets = .{},
 			.entityModelDescriptions = self.entityModelDescriptions.clone(allocator.allocator) catch unreachable,
 			.entityModelMigrations = self.entityModelMigrations.clone(allocator.allocator) catch unreachable,
 		};
@@ -363,7 +363,6 @@ fn createAssetStringID(
 	@memcpy(assetId[0..addonName.len], addonName);
 	assetId[addonName.len] = ':';
 
-	// Convert from windows to unix style separators.
 	for (0..pathNoExtension.len) |i| {
 		if (pathNoExtension[i] == '\\') {
 			assetId[addonName.len + 1 + i] = '/';
@@ -421,7 +420,7 @@ fn registerBlock(assetFolder: []const u8, id: []const u8, zon: ZonElement) !void
 
 fn assignBlockItem(stringId: []const u8) !void {
 	const block = blocks.getTypeById(stringId);
-	// TODO: This must be gone in PixelGuys/Cubyz#1205
+
 	const index = items.BaseItemIndex.fromId(stringId).?;
 	const item = &items.itemList[@intFromEnum(index)];
 	item.block = block;
@@ -436,7 +435,7 @@ fn registerRecipesFromZon(zon: ZonElement) void {
 	items.registerRecipes(zon);
 }
 
-pub const Palette = struct { // MARK: Palette
+pub const Palette = struct {
 	allocator: NeverFailingAllocator,
 	palette: main.List([]const u8),
 
@@ -474,7 +473,7 @@ pub const Palette = struct { // MARK: Palette
 		return self;
 	}
 	fn loadFromZonLegacy(allocator: NeverFailingAllocator, zon: ZonElement) !*Palette {
-		// Using zon.object.count() here has the implication that array can not be sparse.
+
 		const paletteLength = zon.object.count();
 		const translationPalette = main.stackAllocator.alloc(?[]const u8, paletteLength);
 		defer main.stackAllocator.free(translationPalette);
@@ -543,9 +542,9 @@ pub const Palette = struct { // MARK: Palette
 pub var worldAssetFolder: []const u8 = undefined;
 var refCount: std.atomic.Value(u8) = .init(0);
 
-pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPalette: *Palette, proceduralItemPalette: *Palette, biomePalette: *Palette, entityModelPalette: *Palette, entityComponentPalette: *Palette) !void { // MARK: loadWorldAssets()
+pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPalette: *Palette, proceduralItemPalette: *Palette, biomePalette: *Palette, entityModelPalette: *Palette, entityComponentPalette: *Palette) !void {
 	const prevVal = refCount.fetchAdd(1, .monotonic);
-	if (prevVal != 0) return; // The assets already got loaded by the server.
+	if (prevVal != 0) return;
 
 	worldAssetFolder = main.worldArena.dupe(u8, assetFolder);
 
@@ -574,7 +573,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 	migrations.registerAll(.entityComponent, &worldAssets.entityComponentMigrations);
 	migrations.apply(.entityComponent, entityComponentPalette);
 
-	// models (block optimized):
 	{
 		var modelIterator = worldAssets.blockModels.iterator();
 		while (modelIterator.next()) |entry| {
@@ -583,14 +581,13 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		}
 	}
 
-	// EntityModels:
 	{
-		// First models from the palette to enforce ID values.
+
 		for (entityModelPalette.palette.items) |entityModelId| {
 			std.log.debug("Registering entity model {s}", .{entityModelId});
 			_ = main.entityModel.register(assetFolder, entityModelId, worldAssets.entityModelDescriptions.get(entityModelId) orelse .null);
 		}
-		// Then all the models that were missing in palette but are present in the game.
+
 		var entModelIterator = worldAssets.entityModelDescriptions.iterator();
 		while (entModelIterator.next()) |entry| {
 			const entityModelId = entry.key_ptr.*;
@@ -606,13 +603,10 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 
 	if (!main.settings.launchConfig.headlessServer) blocks.meshes.registerBlockBreakingAnimation(assetFolder);
 
-	// Blocks:
-	// First blocks from the palette to enforce ID values.
 	for (blockPalette.palette.items) |stringId| {
 		try registerBlock(assetFolder, stringId, worldAssets.blocks.get(stringId) orelse .null);
 	}
 
-	// Then all the blocks that were missing in palette but are present in the game.
 	var iterator = worldAssets.blocks.iterator();
 	while (iterator.next()) |entry| {
 		const stringId = entry.key_ptr.*;
@@ -624,10 +618,8 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		blockPalette.add(stringId);
 	}
 
-	// Items:
-	// First from the palette to enforce ID values.
 	for (itemPalette.palette.items) |stringId| {
-		// Some items are created automatically from blocks.
+
 		if (worldAssets.blocks.get(stringId)) |zon| {
 			if (!(zon.get(bool, "hasItem") orelse true)) continue;
 			try registerItem(assetFolder, stringId, zon.getChild("item"));
@@ -636,7 +628,7 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 			}
 			continue;
 		}
-		// Items not related to blocks should appear in items hash map.
+
 		if (worldAssets.items.get(stringId)) |zon| {
 			try registerItem(assetFolder, stringId, zon);
 			continue;
@@ -645,7 +637,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		try registerItem(assetFolder, stringId, .null);
 	}
 
-	// Then missing block-items to keep backwards compatibility of ID order.
 	for (blockPalette.palette.items) |stringId| {
 		const zon = worldAssets.blocks.get(stringId) orelse .null;
 
@@ -656,7 +647,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		itemPalette.add(stringId);
 	}
 
-	// And finally normal items.
 	iterator = worldAssets.items.iterator();
 	while (iterator.next()) |entry| {
 		const stringId = entry.key_ptr.*;
@@ -669,7 +659,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		itemPalette.add(stringId);
 	}
 
-	// After we have registered all items and all blocks, we can assign block references to those that come from blocks.
 	for (blockPalette.palette.items) |stringId| {
 		const zon = worldAssets.blocks.get(stringId) orelse .null;
 
@@ -683,7 +672,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		registerProceduralItem(assetFolder, id, worldAssets.proceduralItems.get(id) orelse .null);
 	}
 
-	// procedural items:
 	iterator = worldAssets.proceduralItems.iterator();
 	while (iterator.next()) |entry| {
 		const id = entry.key_ptr.*;
@@ -692,7 +680,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		proceduralItemPalette.add(id);
 	}
 
-	// block drops:
 	blocks.finishBlocks(worldAssets.blocks);
 
 	iterator = worldAssets.recipes.iterator();
@@ -709,7 +696,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		particles.ParticleManager.register(assetFolder, entry.key_ptr.*, entry.value_ptr.*);
 	}
 
-	// Biomes:
 	var nextBiomeNumericId: u32 = 0;
 	for (biomePalette.palette.items) |id| {
 		registerBiome(nextBiomeNumericId, id, worldAssets.biomes.get(id) orelse .null);
@@ -724,22 +710,18 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 	}
 	biomes.finishLoading();
 
-	// Cave layers:
 	try main.server.terrain.cave_layers.registerCaveLayers(&worldAssets.caveLayers);
 
-	// EntityComponents
 	{
 		var map: std.StringHashMap(u32) = .init(main.stackAllocator.allocator);
 		defer map.deinit();
 		var index: u32 = 0;
 
-		// the already exisiting ones:
 		for (entityComponentPalette.palette.items) |value| {
 			map.put(value, index) catch unreachable;
 			index += 1;
 		}
 
-		// now give each component it's id:
 		inline for (@typeInfo(main.entity.components).@"struct".decls) |decl| {
 			const name = decl.name;
 			if (map.get(name)) |id| {
@@ -753,7 +735,6 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		main.entity.initComponents();
 	}
 
-	// Register paths for asset hot reloading:
 	var dir = main.files.cwd().openIterableDir("assets") catch |err| {
 		std.log.err("Can't open asset path {s}: {s}", .{"assets", @errorName(err)});
 		return;
@@ -767,7 +748,7 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 		if (addon.kind == .directory) {
 			const path = main.stackAllocator.printSentinel("assets/{s}/blocks/textures", .{addon.name}, 0);
 			defer main.stackAllocator.free(path);
-			// Check for access rights
+
 			if (!main.files.cwd().hasDir(path)) continue;
 			main.utils.file_monitor.listenToPath(path, main.blocks.meshes.reloadTextures, 0);
 		}
@@ -776,7 +757,7 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 	worldAssets.log(.world);
 }
 
-pub fn unloadAssets() void { // MARK: unloadAssets()
+pub fn unloadAssets() void {
 	const prevVal = refCount.fetchSub(1, .monotonic);
 	std.debug.assert(prevVal != 0);
 	if (prevVal != 1) return;
@@ -795,7 +776,6 @@ pub fn unloadAssets() void { // MARK: unloadAssets()
 	main.Tag.resetTags();
 	main.entityModel.reset();
 
-	// Remove paths from asset hot reloading:
 	var dir = main.files.cwd().openIterableDir("assets") catch |err| {
 		std.log.err("Can't open asset path {s}: {s}", .{"assets", @errorName(err)});
 		return;
@@ -809,7 +789,7 @@ pub fn unloadAssets() void { // MARK: unloadAssets()
 		if (addon.kind == .directory) {
 			const path = main.stackAllocator.printSentinel("assets/{s}/blocks/textures", .{addon.name}, 0);
 			defer main.stackAllocator.free(path);
-			// Check for access rights
+
 			if (!main.files.cwd().hasDir(path)) continue;
 			main.utils.file_monitor.removePath(path);
 		}

@@ -1,5 +1,4 @@
-/// A collection of things that should make dealing with opengl easier.
-/// Also contains some basic 2d drawing stuff.
+
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -23,7 +22,7 @@ pub const Pipeline = pipelines.Pipeline;
 
 pub const vulkan = @import("graphics/vulkan.zig");
 
-pub const draw = struct { // MARK: draw
+pub const draw = struct {
 	var color: Vec4f = @splat(1);
 	var clip: ?Vec4i = null;
 	var translation: Vec2f = Vec2f{0, 0};
@@ -50,7 +49,6 @@ pub const draw = struct { // MARK: draw
 		};
 	}
 
-	/// Returns the previous translation.
 	pub fn setTranslation(newTranslation: Vec2f) Vec2f {
 		const oldTranslation = translation;
 		translation += newTranslation*@as(Vec2f, @splat(scale));
@@ -61,7 +59,6 @@ pub const draw = struct { // MARK: draw
 		translation = previousTranslation;
 	}
 
-	/// Returns the previous scale.
 	pub fn setScale(newScale: f32) f32 {
 		std.debug.assert(newScale >= 0);
 		const oldScale = scale;
@@ -73,7 +70,6 @@ pub const draw = struct { // MARK: draw
 		scale = previousScale;
 	}
 
-	/// Returns the previous clip.
 	pub fn setClip(clipRect: Vec2f) ?Vec4i {
 		std.debug.assert(@reduce(.And, clipRect >= Vec2f{0, 0}));
 		var viewport: [4]c_int = undefined;
@@ -121,7 +117,6 @@ pub const draw = struct { // MARK: draw
 		};
 	}
 
-	/// Should be used to restore the old clip when leaving the render function.
 	pub fn restoreClip(previousClip: ?Vec4i) void {
 		clip = previousClip;
 	}
@@ -138,8 +133,6 @@ pub const draw = struct { // MARK: draw
 		};
 	};
 
-	// ----------------------------------------------------------------------------
-	// MARK: fillRect()
 	var rectUniforms: struct {
 		screen: c_int,
 		start: c_int,
@@ -196,8 +189,6 @@ pub const draw = struct { // MARK: draw
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: fillRectBorder()
 	var rectBorderUniforms: struct {
 		screen: c_int,
 		start: c_int,
@@ -275,8 +266,6 @@ pub const draw = struct { // MARK: draw
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 10);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: drawLine()
 	var lineUniforms: struct {
 		screen: c_int,
 		start: c_int,
@@ -344,16 +333,14 @@ pub const draw = struct { // MARK: draw
 		var viewport: [4]c_int = undefined;
 		c.glGetIntegerv(c.GL_VIEWPORT, &viewport);
 		c.glUniform2f(lineUniforms.screen, @floatFromInt(viewport[2]), @floatFromInt(viewport[3]));
-		c.glUniform2f(lineUniforms.start, pos[0], pos[1]); // Move the coordinates, so they are in the center of a pixel.
-		c.glUniform2f(lineUniforms.direction, dim[0] - 1, dim[1] - 1); // The height is a lot smaller because the inner edge of the rect is drawn.
+		c.glUniform2f(lineUniforms.start, pos[0], pos[1]);
+		c.glUniform2f(lineUniforms.direction, dim[0] - 1, dim[1] - 1);
 		c.glUniform1i(lineUniforms.lineColor, @bitCast(getColor()));
 
 		lineVao.bind();
 		c.glDrawArrays(c.GL_LINE_LOOP, 0, 5);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: fillCircle()
 	var circleUniforms: struct {
 		screen: c_int,
 		center: c_int,
@@ -401,17 +388,14 @@ pub const draw = struct { // MARK: draw
 		var viewport: [4]c_int = undefined;
 		c.glGetIntegerv(c.GL_VIEWPORT, &viewport);
 		c.glUniform2f(circleUniforms.screen, @floatFromInt(viewport[2]), @floatFromInt(viewport[3]));
-		c.glUniform2f(circleUniforms.center, center[0], center[1]); // Move the coordinates, so they are in the center of a pixel.
-		c.glUniform1f(circleUniforms.radius, radius); // The height is a lot smaller because the inner edge of the rect is drawn.
+		c.glUniform2f(circleUniforms.center, center[0], center[1]);
+		c.glUniform1f(circleUniforms.radius, radius);
 		c.glUniform1i(circleUniforms.circleColor, @bitCast(getColor()));
 
 		circleVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: drawImage()
-	// Luckily the vao of the regular rect can used.
 	var imageUniforms: struct {
 		screen: c_int,
 		start: c_int,
@@ -478,11 +462,9 @@ pub const draw = struct { // MARK: draw
 		const widthSlice = slices[0]*sliceScale;
 		const heightSlice = slices[1]*sliceScale;
 
-		// Construct UV
 		const u: Vec2f = .{slices[0]/textureSize[0], (textureSize[0] - slices[0])/textureSize[0]};
 		const v: Vec2f = .{slices[1]/textureSize[1], (textureSize[1] - slices[1])/textureSize[1]};
 
-		// Draw all Slices
 		drawSlice(.{pos[0], pos[1]}, .{pos[0] + widthSlice, pos[1] + heightSlice}, .{0, 0}, .{u[0], v[0]});
 		drawSlice(.{pos[0] + widthSlice, pos[1]}, .{pos[0] + dim[0] - widthSlice, pos[1] + heightSlice}, .{u[0], 0}, .{u[1], v[0]});
 		drawSlice(.{pos[0] + dim[0] - widthSlice, pos[1]}, .{pos[0] + dim[0], pos[1] + heightSlice}, .{u[1], 0}, .{1, v[0]});
@@ -516,9 +498,6 @@ pub const draw = struct { // MARK: draw
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: customShadedRect()
-
 	pub fn customShadedRect(uniforms: anytype, _pos: Vec2f, _dim: Vec2f) void {
 		var pos = _pos;
 		var dim = _dim;
@@ -540,9 +519,6 @@ pub const draw = struct { // MARK: draw
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
 
-	// ----------------------------------------------------------------------------
-	// MARK: text()
-
 	pub fn text(_text: []const u8, x: f32, y: f32, fontSize: f32) void {
 		TextRendering.renderText(_text, x, y, fontSize, .{});
 	}
@@ -554,7 +530,7 @@ pub const draw = struct { // MARK: draw
 	}
 };
 
-pub const TextBuffer = struct { // MARK: TextBuffer
+pub const TextBuffer = struct {
 
 	pub const Alignment = enum {
 		left,
@@ -787,7 +763,7 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 			.lines = .init(allocator),
 			.lineBreaks = .init(allocator),
 		};
-		// Parse the input text:
+
 		var parser = Parser{
 			.unicodeIterator = std.unicode.Utf8Iterator{.bytes = text, .i = 0},
 			.currentFontEffect = initialFontEffect,
@@ -805,7 +781,6 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 			return self;
 		}
 
-		// Let harfbuzz do its thing:
 		const buffer = c.hb_buffer_create() orelse @panic("Out of Memory while creating harfbuzz buffer");
 		defer c.hb_buffer_destroy(buffer);
 		c.hb_buffer_add_utf32(buffer, parser.parsedText.items.ptr, @intCast(parser.parsedText.items.len), 0, @intCast(parser.parsedText.items.len));
@@ -823,7 +798,6 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 			glyphPositions.len = len;
 		}
 
-		// Guess the text index from the given cluster indices. Only works if the number of glyphs and the number of characters in a cluster is the same.
 		const textIndexGuess = main.stackAllocator.alloc(u32, glyphInfos.len);
 		defer main.stackAllocator.free(textIndexGuess);
 		for (textIndexGuess, 0..) |*index, i| {
@@ -840,7 +814,6 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 			}
 		}
 
-		// Merge it all together:
 		self.glyphs = allocator.alloc(GlyphData, glyphInfos.len);
 		for (self.glyphs, 0..) |*glyph, i| {
 			glyph.x_advance = @as(f32, @floatFromInt(glyphPositions[i].x_advance))/TextRendering.fontUnitsPerPixel;
@@ -854,7 +827,6 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 			glyph.characterIndex = parser.characterIndex.items[textIndexGuess[i]];
 		}
 
-		// Find the lines:
 		self.initLines(true);
 		self.initLines(false);
 		self.lineBreaks.append(.{.index = 0, .width = 0});
@@ -916,7 +888,6 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 		}
 	}
 
-	/// Returns the calculated dimensions of the text block.
 	pub fn calculateLineBreaks(self: *TextBuffer, fontSize: f32, maxLineWidth: f32) Vec2f {
 		self.lineBreaks.clearRetainingCapacity();
 		const spaceCharacterWidth = 8;
@@ -962,7 +933,7 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 		var y: f32 = 0;
 		var i: usize = 0;
 		var j: usize = 0;
-		// Find the start row:
+
 		outer: while (i < self.lineBreaks.items.len - 1) : (i += 1) {
 			x = self.getLineOffset(i);
 			while (j < self.lineBreaks.items[i + 1].index) : (j += 1) {
@@ -1055,13 +1026,13 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 		const b: f32 = @floatFromInt(color & 255);
 		const perceivedBrightness = @sqrt(0.299*r*r + 0.587*g*g + 0.114*b*b);
 		if (perceivedBrightness < 64) {
-			return 0xffffff; // Make shadows white for better readability.
+			return 0xffffff;
 		} else {
 			return 0;
 		}
 	}
 
-	fn renderShadow(self: TextBuffer, _x: f32, _y: f32, _fontSize: f32) void { // Basically a copy of render with some color and position changes.
+	fn renderShadow(self: TextBuffer, _x: f32, _y: f32, _fontSize: f32) void {
 		const oldTranslation = draw.setTranslation(.{_x + _fontSize/16.0, _y + _fontSize/16.0});
 		defer draw.restoreTranslation(oldTranslation);
 		const oldScale = draw.setScale(_fontSize/16.0);
@@ -1119,7 +1090,7 @@ pub const TextBuffer = struct { // MARK: TextBuffer
 	}
 };
 
-const TextRendering = struct { // MARK: TextRendering
+const TextRendering = struct {
 	const Glyph = struct {
 		textureX: i32,
 		size: Vec2i,
@@ -1181,7 +1152,7 @@ const TextRendering = struct { // MARK: TextRendering
 
 		glyphMapping = .init(main.globalAllocator);
 		glyphData = .init(main.globalAllocator);
-		glyphData.append(undefined); // 0 is a reserved value.
+		glyphData.append(undefined);
 		c.glGenTextures(2, &glyphTexture);
 		c.glBindTexture(c.GL_TEXTURE_2D, glyphTexture[0]);
 		c.glTexImage2D(c.GL_TEXTURE_2D, 0, c.GL_R8, textureWidth, textureHeight, 0, c.GL_RED, c.GL_UNSIGNED_BYTE, null);
@@ -1234,7 +1205,7 @@ const TextRendering = struct { // MARK: TextRendering
 		if (index >= glyphMapping.items.len) {
 			glyphMapping.appendNTimes(0, index - glyphMapping.items.len + 1);
 		}
-		if (glyphMapping.items[index] == 0) { // glyph was not initialized yet.
+		if (glyphMapping.items[index] == 0) {
 			try ftError(c.FT_Load_Glyph(freetypeFace, index, c.FT_LOAD_RENDER | c.FT_LOAD_NO_AUTOHINT));
 			const glyph = freetypeFace.*.glyph;
 			const bitmap = glyph.*.bitmap;
@@ -1263,7 +1234,7 @@ const TextRendering = struct { // MARK: TextRendering
 		y = @ceil(y);
 		c.glUniform1i(uniforms.fontEffects, fontEffects);
 		c.glUniform4f(uniforms.textureBounds, @floatFromInt(glyph.textureX), 0, @floatFromInt(glyph.size[0]), @floatFromInt(glyph.size[1]));
-		if (fontEffects & 0x1000000 != 0) { // bold
+		if (fontEffects & 0x1000000 != 0) {
 			c.glUniform2f(uniforms.offset, @as(f32, @floatFromInt(glyph.bearing[0]))*draw.scale + x - 1, @as(f32, @floatFromInt(glyph.bearing[1]))*draw.scale + y - 1);
 			c.glUniform4f(uniforms.textureRect, @floatFromInt(glyph.textureX - 1), -1, @floatFromInt(glyph.size[0] + 2), @floatFromInt(glyph.size[1] + 2));
 		} else {
@@ -1281,7 +1252,7 @@ const TextRendering = struct { // MARK: TextRendering
 	}
 };
 
-pub fn init() void { // MARK: init()
+pub fn init() void {
 	draw.initCircle();
 	draw.initImage();
 	draw.initLine();
@@ -1309,7 +1280,7 @@ pub fn deinit() void {
 	pipelines.deinit();
 }
 
-pub const RenderPass = struct { // MARK: RenderPass
+pub const RenderPass = struct {
 	renderPass: c.VkRenderPass,
 
 	pub var renderToWindow: RenderPass = undefined;
@@ -1328,7 +1299,7 @@ pub const RenderPass = struct { // MARK: RenderPass
 
 	pub fn init() !RenderPass {
 		const colorAttachment = c.VkAttachmentDescription{
-			.format = vulkan.SwapChain.imageFormat, // TODO: This needs to be configurable to be able to render to f16 framebuffer
+			.format = vulkan.SwapChain.imageFormat,
 			.samples = c.VK_SAMPLE_COUNT_1_BIT,
 			.loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
 			.storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
@@ -1374,7 +1345,7 @@ pub const RenderPass = struct { // MARK: RenderPass
 	}
 };
 
-pub const VertexArray = struct { // MARK: VertexArray
+pub const VertexArray = struct {
 	vao: c_uint,
 	vbo: c_uint,
 	ibo: ?c_uint,
@@ -1442,14 +1413,8 @@ pub const VertexArray = struct { // MARK: VertexArray
 		c.glBindVertexArray(self.vao);
 	}
 
-	/// Re-uploads vertex (and optionally index) data into the buffers created by init(), reusing the
-	/// already-configured vertex attribute layout. For geometry rebuilt every frame (e.g. clouds)
-	/// rather than the GL_STATIC_DRAW-only data init() takes.
 	pub fn update(self: VertexArray, T: type, data: []const T, indices_: ?[]const u32) void {
-		// GL_ELEMENT_ARRAY_BUFFER's binding is captured per-VAO, unlike GL_ARRAY_BUFFER — without
-		// binding this VAO first, glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ...) below would silently
-		// repoint whichever *other* VAO was last bound (e.g. from the previous draw call) at this
-		// VertexArray's index buffer instead, corrupting that other VAO's geometry.
+
 		c.glBindVertexArray(self.vao);
 		c.glBindBuffer(c.GL_ARRAY_BUFFER, self.vbo);
 		c.glBufferData(c.GL_ARRAY_BUFFER, @intCast(data.len*@sizeOf(T)), data.ptr, c.GL_DYNAMIC_DRAW);
@@ -1462,7 +1427,7 @@ pub const VertexArray = struct { // MARK: VertexArray
 	}
 };
 
-pub const SSBO = struct { // MARK: SSBO
+pub const SSBO = struct {
 	bufferID: c_uint,
 	pub fn init() SSBO {
 		var self = SSBO{.bufferID = undefined};
@@ -1518,8 +1483,7 @@ pub const SubAllocation = struct {
 	len: u31,
 };
 
-/// A big SSBO that is able to allocate/free smaller regions.
-pub fn LargeBuffer(comptime Entry: type) type { // MARK: LargerBuffer
+pub fn LargeBuffer(comptime Entry: type) type {
 	return struct {
 		ssbo: SSBO,
 		freeBlocks: main.ListManaged(SubAllocation),
@@ -1575,9 +1539,9 @@ pub fn LargeBuffer(comptime Entry: type) type { // MARK: LargerBuffer
 			const endTime = main.timestamp().addDuration(.fromMilliseconds(5));
 			while (self.fencedFreeLists[self.activeFence].popOrNull()) |allocation| {
 				self.finalFree(allocation);
-				if (main.timestamp().durationTo(endTime).nanoseconds < 0) break; // TODO: Remove after #1434
+				if (main.timestamp().durationTo(endTime).nanoseconds < 0) break;
 			}
-			_ = c.glClientWaitSync(self.fences[self.activeFence], 0, c.GL_TIMEOUT_IGNORED); // Make sure the render calls that accessed these parts of the buffer have finished.
+			_ = c.glClientWaitSync(self.fences[self.activeFence], 0, c.GL_TIMEOUT_IGNORED);
 		}
 
 		pub fn endRender(self: *Self) void {
@@ -1608,7 +1572,7 @@ pub fn LargeBuffer(comptime Entry: type) type { // MARK: LargerBuffer
 				const oldBuffer = self.ssbo;
 				defer oldBuffer.deinit();
 				const oldCapacity = self.capacity;
-				self.createBuffer(self.capacity*|2); // TODO: Is there a way to free the old buffer before creating the new one?
+				self.createBuffer(self.capacity*|2);
 				self.used += self.capacity - oldCapacity;
 				self.finalFree(.{.start = oldCapacity, .len = self.capacity - oldCapacity});
 
@@ -1644,7 +1608,6 @@ pub fn LargeBuffer(comptime Entry: type) type { // MARK: LargerBuffer
 			self.fencedFreeLists[self.activeFence].append(allocation);
 		}
 
-		/// Must unmap after use!
 		pub fn allocateAndMapRange(self: *Self, len: usize, allocation: *SubAllocation) []Entry {
 			self.free(allocation.*);
 			if (len == 0) {
@@ -1688,7 +1651,7 @@ pub fn LargeBuffer(comptime Entry: type) type { // MARK: LargerBuffer
 	};
 }
 
-pub const FrameBuffer = struct { // MARK: FrameBuffer
+pub const FrameBuffer = struct {
 	frameBuffer: c_uint,
 	texture: c_uint,
 	hasDepthTexture: bool,
@@ -1725,8 +1688,6 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 	}
 
-	/// A framebuffer with only a depth attachment (no color texture at all), suitable for shadow maps.
-	/// The depth texture is set up for hardware-filtered PCF via sampler2DShadow (GL_COMPARE_REF_TO_TEXTURE).
 	pub fn initDepthOnly(self: *FrameBuffer, textureFilter: c_int, textureWrap: c_int) void {
 		self.* = FrameBuffer{
 			.frameBuffer = undefined,
@@ -1818,17 +1779,12 @@ pub const FrameBuffer = struct { // MARK: FrameBuffer
 	}
 };
 
-/// A framebuffer with a multisampled color+depth attachment, for MSAA. Its textures can't be sampled
-/// directly by the usual `sampler2D`-based post-process shaders (Bloom, GodRays, the deferred
-/// composite) — call `resolveTo` after rendering into this buffer to get a plain, regularly-sampled
-/// `FrameBuffer` those passes can keep consuming unchanged.
-pub const MultisampledFrameBuffer = struct { // MARK: MultisampledFrameBuffer
+pub const MultisampledFrameBuffer = struct {
 	frameBuffer: c_uint,
 	texture: c_uint,
 	depthTexture: c_uint,
 	samples: c_int,
 
-	/// Queries GL_MAX_SAMPLES so callers never request more than the driver actually supports.
 	pub fn maxSupportedSamples() c_int {
 		var maxSamples: c_int = 1;
 		c.glGetIntegerv(c.GL_MAX_SAMPLES, &maxSamples);
@@ -1895,9 +1851,6 @@ pub const MultisampledFrameBuffer = struct { // MARK: MultisampledFrameBuffer
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 	}
 
-	/// Resolves (down-samples) this buffer's color+depth into a plain, regularly-sampled FrameBuffer
-	/// of the same dimensions, via glBlitFramebuffer. Depth uses GL_NEAREST (the only filter allowed
-	/// for a depth blit — depth values can't be meaningfully linearly filtered/averaged across samples).
 	pub fn resolveTo(self: *const MultisampledFrameBuffer, target: *const FrameBuffer, width: u31, height: u31) void {
 		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, self.frameBuffer);
 		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, target.frameBuffer);
@@ -1909,7 +1862,7 @@ pub const MultisampledFrameBuffer = struct { // MARK: MultisampledFrameBuffer
 	}
 };
 
-pub const TextureArray = struct { // MARK: TextureArray
+pub const TextureArray = struct {
 	textureID: c_uint,
 
 	pub fn init() TextureArray {
@@ -1937,7 +1890,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 			b[i] = @floatFromInt(colors[i].b);
 			a[i] = @floatFromInt(colors[i].a);
 		}
-		// Use gamma corrected average(https://stackoverflow.com/a/832314/13082649):
+
 		var aSum: f32 = 0;
 		var rSum: f32 = 0;
 		var gSum: f32 = 0;
@@ -1961,7 +1914,6 @@ pub const TextureArray = struct { // MARK: TextureArray
 		return Color{.r = @trunc(rSum), .g = @trunc(gSum), .b = @trunc(bSum), .a = @trunc(aSum)};
 	}
 
-	/// (Re-)Generates the GPU buffer.
 	pub fn generate(self: TextureArray, images: []Image, mipmapping: bool, alphaCorrectMipmapping: bool) void {
 		var maxWidth: u31 = 1;
 		var maxHeight: u31 = 1;
@@ -1969,7 +1921,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 			maxWidth = @max(maxWidth, image.width);
 			maxHeight = @max(maxHeight, image.height);
 		}
-		// Make sure the width and height use a power of 2:
+
 		if (maxWidth - 1 & maxWidth != 0) {
 			maxWidth = @as(u31, 2) << std.math.log2_int(u31, maxWidth);
 		}
@@ -1993,7 +1945,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 		}
 
 		for (images, 0..) |image, i| {
-			// Fill the buffer using nearest sampling. Probably not the best solutions for all textures, but that's what happens when someone doesn't use power of 2 textures...
+
 			for (0..maxWidth) |x| {
 				for (0..maxHeight) |y| {
 					const index = x + y*maxWidth;
@@ -2002,7 +1954,6 @@ pub const TextureArray = struct { // MARK: TextureArray
 				}
 			}
 
-			// Calculate the mipmap levels:
 			for (1..lodBuffer.len) |_lod| {
 				const lod: u5 = @intCast(_lod);
 				const curWidth = @max(1, maxWidth >> lod);
@@ -2022,7 +1973,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 					}
 				}
 			}
-			// Give the correct color to alpha 0 pixels, to avoid dark pixels:
+
 			for (1..lodBuffer.len) |_lod| {
 				const lod: u5 = @intCast(lodBuffer.len - 1 - _lod);
 				const curWidth = @max(1, maxWidth >> lod);
@@ -2039,7 +1990,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 					}
 				}
 			}
-			// Upload:
+
 			for (0..lodBuffer.len) |_lod| {
 				const lod: u5 = @intCast(lodBuffer.len - 1 - _lod);
 				const curWidth = @max(1, maxWidth >> lod);
@@ -2055,7 +2006,7 @@ pub const TextureArray = struct { // MARK: TextureArray
 	}
 };
 
-pub const Texture = struct { // MARK: Texture
+pub const Texture = struct {
 	textureID: c_uint,
 
 	pub fn init() Texture {
@@ -2120,7 +2071,6 @@ pub const Texture = struct { // MARK: Texture
 		c.glBindTexture(c.GL_TEXTURE_2D, self.textureID);
 	}
 
-	/// (Re-)Generates the GPU buffer.
 	pub fn generate(self: Texture, image: Image) void {
 		self.bind();
 
@@ -2145,7 +2095,7 @@ pub const Texture = struct { // MARK: Texture
 	}
 };
 
-pub const CubeMapTexture = struct { // MARK: CubeMapTexture
+pub const CubeMapTexture = struct {
 	textureID: c_uint,
 
 	pub fn init() CubeMapTexture {
@@ -2167,7 +2117,6 @@ pub const CubeMapTexture = struct { // MARK: CubeMapTexture
 		c.glBindTexture(c.GL_TEXTURE_CUBE_MAP, self.textureID);
 	}
 
-	/// (Re-)Generates the GPU buffer.
 	pub fn generate(self: CubeMapTexture, width: u31, height: u31) void {
 		self.bind();
 
@@ -2188,24 +2137,24 @@ pub const CubeMapTexture = struct { // MARK: CubeMapTexture
 
 	pub fn faceNormal(face: usize) Vec3f {
 		const normals = [_]Vec3f{
-			.{1, 0, 0}, // +x
-			.{-1, 0, 0}, // -x
-			.{0, 1, 0}, // +y
-			.{0, -1, 0}, // -y
-			.{0, 0, 1}, // +z
-			.{0, 0, -1}, // -z
+			.{1, 0, 0},
+			.{-1, 0, 0},
+			.{0, 1, 0},
+			.{0, -1, 0},
+			.{0, 0, 1},
+			.{0, 0, -1},
 		};
 		return normals[face];
 	}
 
 	pub fn faceUp(face: usize) Vec3f {
 		const ups = [_]Vec3f{
-			.{0, -1, 0}, // +x
-			.{0, -1, 0}, // -x
-			.{0, 0, 1}, // +y
-			.{0, 0, -1}, // -y
-			.{0, -1, 0}, // +z
-			.{0, -1, 0}, // -z
+			.{0, -1, 0},
+			.{0, -1, 0},
+			.{0, 0, 1},
+			.{0, 0, -1},
+			.{0, -1, 0},
+			.{0, -1, 0},
 		};
 		return ups[face];
 	}
@@ -2224,7 +2173,7 @@ pub const CubeMapTexture = struct { // MARK: CubeMapTexture
 	}
 };
 
-pub const Color = packed struct(u32) { // MARK: Color
+pub const Color = packed struct(u32) {
 	r: u8,
 	g: u8,
 	b: u8,
@@ -2244,7 +2193,7 @@ pub const Color = packed struct(u32) { // MARK: Color
 	}
 };
 
-pub const Image = struct { // MARK: Image
+pub const Image = struct {
 	var defaultImageData = [4]Color{
 		Color{.r = 0, .g = 0, .b = 0, .a = 255},
 		Color{.r = 255, .g = 0, .b = 255, .a = 255},
@@ -2289,7 +2238,7 @@ pub const Image = struct { // MARK: Image
 	pub fn readFromFile(allocator: NeverFailingAllocator, path: []const u8, options: struct { orientation: enum { asIs, openGl } }) !Image {
 		var result: Image = undefined;
 		var channel: c_int = undefined;
-		const nullTerminatedPath = main.stackAllocator.dupeZ(u8, path); // TODO: Find a more zig-friendly image loading library.
+		const nullTerminatedPath = main.stackAllocator.dupeZ(u8, path);
 		errdefer main.stackAllocator.free(nullTerminatedPath);
 		switch (options.orientation) {
 			.asIs => {},
@@ -2307,7 +2256,7 @@ pub const Image = struct { // MARK: Image
 	pub fn exportToFile(self: Image, path: []const u8) !void {
 		const nullTerminated = main.stackAllocator.dupeZ(u8, path);
 		defer main.stackAllocator.free(nullTerminated);
-		_ = c.stbi_write_png(nullTerminated.ptr, self.width, self.height, 4, self.imageData.ptr, self.width*4); // TODO: Handle the return type.
+		_ = c.stbi_write_png(nullTerminated.ptr, self.width, self.height, 4, self.imageData.ptr, self.width*4);
 	}
 	pub fn getRGB(self: Image, x: usize, y: usize) Color {
 		std.debug.assert(x < self.width);
@@ -2323,7 +2272,7 @@ pub const Image = struct { // MARK: Image
 	}
 };
 
-pub const frame_uniforms = struct { // MARK: frame_uniforms
+pub const frame_uniforms = struct {
 	const Data = extern struct {
 		projectionMatrix: [4][4]f32,
 		viewMatrix: [4][4]f32,
@@ -2364,7 +2313,7 @@ pub const frame_uniforms = struct { // MARK: frame_uniforms
 		c.glDeleteSync(fences[currentFrame]);
 		fences[currentFrame] = c.glFenceSync(c.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 		currentFrame = (currentFrame + 1)%buffers.len;
-		_ = c.glClientWaitSync(fences[currentFrame], 0, c.GL_TIMEOUT_IGNORED); // Make sure the render calls that accessed these parts of the buffer have finished.
+		_ = c.glClientWaitSync(fences[currentFrame], 0, c.GL_TIMEOUT_IGNORED);
 		c.glBindBuffer(c.GL_UNIFORM_BUFFER, buffers[currentFrame]);
 		c.glBufferSubData(c.GL_UNIFORM_BUFFER, 0, @sizeOf(Data), &data);
 		c.glBindBuffer(c.GL_UNIFORM_BUFFER, 0);
@@ -2387,9 +2336,6 @@ pub const frame_uniforms = struct { // MARK: frame_uniforms
 			c.glDeleteBuffers(1, &self.id);
 		}
 
-		/// Respecifies the buffer contents (relies on driver-side buffer orphaning to avoid stalling
-		/// on in-flight draws). Intended for UBOs that change once per frame, e.g. the shadow pass's
-		/// light-space matrices, unlike the one-shot data most StaticUbo users have.
 		pub fn update(self: StaticUbo, data: Data) void {
 			c.glBindBuffer(c.GL_UNIFORM_BUFFER, self.id);
 			c.glBufferData(c.GL_UNIFORM_BUFFER, @sizeOf(Data), &data, c.GL_STREAM_DRAW);
@@ -2401,12 +2347,12 @@ pub const frame_uniforms = struct { // MARK: frame_uniforms
 		}
 
 		pub fn unbind(_: StaticUbo) void {
-			c.glBindBufferBase(c.GL_UNIFORM_BUFFER, 0, buffers[currentFrame]); // Bind the current frame default instead
+			c.glBindBufferBase(c.GL_UNIFORM_BUFFER, 0, buffers[currentFrame]);
 		}
 	};
 };
 
-pub const Fog = struct { // MARK: Fog
+pub const Fog = struct {
 	fogColor: Vec3f,
 	skyColor: Vec3f,
 	density: f32,
@@ -2414,7 +2360,7 @@ pub const Fog = struct { // MARK: Fog
 	fogHigher: f32,
 };
 
-const block_texture = struct { // MARK: block_texture
+const block_texture = struct {
 	var ubo: frame_uniforms.StaticUbo = undefined;
 	var uniforms: struct {
 		transparent: c_int,
@@ -2456,7 +2402,7 @@ const block_texture = struct { // MARK: block_texture
 			.viewMatrix = Mat4f.identity().mul(Mat4f.rotationX(std.math.pi/4.0)).mul(Mat4f.rotationZ(1.0*std.math.pi/4.0)).toGl(),
 			.playerPositionInteger = @splat(0),
 			.playerPositionFraction = blk: {
-				const i = 4; // Easily switch between the 8 diagonal coordinates.
+				const i = 4;
 				var x: f32 = -65.5 + 1.5;
 				var y: f32 = -65.5 + 1.5;
 				var z: f32 = -92.631 + 1.5;
@@ -2475,7 +2421,7 @@ const block_texture = struct { // MARK: block_texture
 };
 
 pub fn generateBlockTexture(blockType: u16) Texture {
-	const block = main.blocks.Block{.typ = blockType, .data = 0}; // TODO: Use natural standard data.
+	const block = main.blocks.Block{.typ = blockType, .data = 0};
 	const textureSize = block_texture.textureSize;
 	c.glViewport(0, 0, textureSize, textureSize);
 

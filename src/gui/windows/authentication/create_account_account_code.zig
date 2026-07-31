@@ -56,7 +56,7 @@ fn next() void {
 	}
 	gui.closeWindowFromRef(&window);
 	gui.openWindow("authentication/login");
-	// Make sure there remains no trace of the account code in memory
+
 	accountCode.?.deinit();
 	accountCode = null;
 }
@@ -137,9 +137,8 @@ pub fn update() void {
 }
 
 pub fn onClose() void {
-	// Make sure there remains no trace of the account code in memory
+
 	std.crypto.secureZero(@TypeOf(accountCodeLabel.text.glyphs[0]), accountCodeLabel.text.glyphs);
-	// The account code is cleared in the next() function, otherwise it's kept in case the user goes back in the dialog
 
 	if (window.rootComponent) |*comp| {
 		comp.deinit();

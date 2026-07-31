@@ -1,7 +1,4 @@
 #version 460
-// Depth-only shadow pass fragment shader.
-// The "Grass Shadows" option (foliageShadowsEnabled) controls whether grass/flowers cast shadows.
-// Tree leaves perform alpha cutout testing so real-time sunbeams pierce through the canopy.
 
 layout(binding = 0) uniform sampler2DArray textureSampler;
 

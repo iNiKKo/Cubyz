@@ -35,17 +35,10 @@ pub const rain = @import("renderer/rain.zig");
 pub const fsr = @import("renderer/fsr.zig");
 pub const fsr2 = @import("renderer/fsr2.zig");
 
-/// Time after which no more chunk meshes are created. This allows the game to run smoother on movement.
 const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
 pub const zNear = 0.1;
-pub const zFar = 65536.0; // TODO: Fix z-fighting problems.
+pub const zFar = 65536.0;
 
-/// Underwater fog deliberately becomes fully opaque around this range. Do not submit more distant
-/// terrain while submerged: even a tiny remaining silhouette is much more noticeable underwater than
-/// the same terrain on land. Meshes remain loaded, so the ordinary full range returns in the first frame
-/// after the player reaches air.
-// Keep a meaningful underwater view when looking down, while still restricting the range enough for
-// dense water fog to hide distant LOD silhouettes. All underwater shader fades finish before this cap.
 const submergedTerrainRenderDistance: f64 = 72.0;
 
 fn isWithinSubmergedTerrainRenderRange(mesh: *const chunk_meshing.ChunkMesh, playerPos: Vec3d) bool {
@@ -66,7 +59,7 @@ var deferredUniforms: struct {
 	@"fog.fogHigher": c_int,
 	fogWhitening: c_int,
 	weatherFogStrength: c_int,
-	/// Dedicated aerial transition, applied in the deferred shader only to low-altitude ground.
+
 	skyIslandGroundFade: c_int,
 	skyIslandMistStrength: c_int,
 	skyIslandFogColor: c_int,
@@ -191,18 +184,11 @@ fn initReflectionCubeMap() void {
 }
 
 var worldFrameBuffer: graphics.FrameBuffer = undefined;
-/// Premultiplied translucent cloud colour/alpha with a private per-frame depth copy. It receives opaque
-/// terrain depth before clouds render, then may add cloud depth without changing the terrain fog depth.
+
 var cloudFrameBuffer: graphics.FrameBuffer = undefined;
-/// Private premultiplied colour mask for the water surface as seen from underwater. It deliberately
-/// has its own depth copy: the normal transparent water target must remain depth-write-free.
+
 var waterSurfaceFrameBuffer: graphics.FrameBuffer = undefined;
 
-/// Standard TAA sub-pixel jitter sequence (Halton(2,3), 8 samples) covering the pixel footprint before
-/// repeating. Applied to a copy of game.projectionMatrix uploaded to frame_uniforms — see
-/// jitteredProjectionMatrix — game.projectionMatrix itself is deliberately never mutated: many other
-/// systems (particles, item drops, skybox stars, GodRays/Bloom's tanXY direction reconstruction, the
-/// deferred composite) read it directly and are not (yet) jitter-aware.
 const haltonJitterSequence = [8]Vec2f{
 	.{1.0/2.0 - 0.5, 1.0/3.0 - 0.5},
 	.{1.0/4.0 - 0.5, 2.0/3.0 - 0.5},
@@ -215,11 +201,6 @@ const haltonJitterSequence = [8]Vec2f{
 };
 var taaJitterIndex: usize = 0;
 
-/// Adds this frame's TAA jitter (in NDC units) to a copy of the given projection matrix. Only valid
-/// for this engine's non-standard Z-up/Y-forward Mat4f.perspective layout (verified by hand: row 0's
-/// second column is the coefficient on view-space y in the clip.x formula, row 1's second column is
-/// the same for clip.z/up — adding jx/jy there shifts NDC.xy by exactly (jx, jy) independent of depth,
-/// with zero effect on tanXY-style FOV terms at rows[0][0]/rows[1][2] or on clip.w/depth).
 fn jitteredProjectionMatrix(base: Mat4f, pixelWidth: u31, pixelHeight: u31) Mat4f {
 	if (settings.antiAliasingMode != .taa and settings.upscalerMode != .fsr2) return base;
 	const jitter = haltonJitterSequence[taaJitterIndex % haltonJitterSequence.len];
@@ -251,8 +232,7 @@ pub fn updateViewport(width: u31, height: u31) void {
 }
 
 pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
-	// TODO: player bobbing
-	// TODO: Handle colors and sun position in the world.
+
 	std.debug.assert(game.world != null);
 
 	const nightColor: Vec3f = .{0.3, 0.4, 0.5};
@@ -268,7 +248,7 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 }
 
 pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Vec3f {
-	// stolen code from Frustum.init
+
 	const invRotationMatrix = rotationMatrix.transpose();
 	const cameraDir = vec.xyz(invRotationMatrix.mulVec(Vec4f{0, 1, 0, 1}));
 	const cameraUp = vec.xyz(invRotationMatrix.mulVec(Vec4f{0, 0, 1, 1}));
@@ -284,20 +264,12 @@ pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: 
 	const scale = (Vec2f{-1, 1} + Vec2f{2, -2}*screenCoord/screenSize)*sides;
 	const forwards = cameraDir;
 	const horizontal = cameraRight*@as(Vec3f, @splat(scale[0]));
-	const vertical = cameraUp*@as(Vec3f, @splat(scale[1])); // adjust for y coordinate
+	const vertical = cameraUp*@as(Vec3f, @splat(scale[1]));
 
 	const adjusted = forwards + horizontal + vertical;
 	return adjusted;
 }
 
-/// Projects a world-space *direction* (e.g. the sun's direction, not a position) into screen-space
-/// texture coordinates ([0,1]x[0,1]). No Y flip: matches this codebase's own fullscreen-quad convention
-/// (`gl_Position = vec4(inTexCoords*2 - 1, 0, 1)` in mask.vert/blur.vert/deferred_render_pass.vert —
-/// inTexCoords and NDC share the same Y direction, unflipped) rather than the more common
-/// texture-sampling Y-down convention, which would otherwise vertically mirror the result relative to
-/// where the sun/moon's own billboard actually renders. Returns null if the direction is behind the
-/// camera (`clip[3] <= 0`), since a screen position isn't meaningful there — callers (god rays) should
-/// fall back to their disabled/faded-out path in that case.
 fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
 	const clip = viewProj.mulVec(Vec4f{dir[0], dir[1], dir[2], 0});
 	if (clip[3] <= 1e-4) return null;
@@ -305,7 +277,7 @@ fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
 	return ndc*@as(Vec2f, @splat(0.5)) + Vec2f{0.5, 0.5};
 }
 
-pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void { // MARK: renderWorld()
+pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	const msaaActive = settings.antiAliasingMode == .msaa;
 	if (msaaActive) {
 		MSAA.updateSize(lastWidth, lastHeight);
@@ -334,7 +306,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		.viewMatrix = game.camera.viewMatrix.toGl(),
 	});
 
-	// Uses FrustumCulling on the chunks.
 	const frustum = Frustum.init(Vec3f{0, 0, 0}, game.camera.viewMatrix, lastFov, lastWidth, lastHeight);
 
 	const time: u32 = @intCast(main.timestamp().toMilliseconds() & std.math.maxInt(u32));
@@ -359,10 +330,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	chunk_meshing.quadsDrawn = 0;
 	chunk_meshing.transparentQuadsDrawn = 0;
-	// Submersion is a camera-local physical state, so it must use the exact LOD0 voxel. The previous
-	// any-LOD fallback could sample a coarse terrain voxel thousands of blocks tall while flying at a sky
-	// island; if that coarse voxel contained water down at ground level it incorrectly enabled every
-	// underwater post-process and render-distance path despite the camera being in open air.
+
 	const playerBlock = mesh_storage.getBlockFromRenderThread(@floor(playerPos[0]), @floor(playerPos[1]), @floor(playerPos[2])) orelse blocks.Block{.typ = 0, .data = 0};
 	const isSubmerged = blocks.meshes.hasFog(playerBlock);
 	const meshes = mesh_storage.updateAndGetRenderChunks(world.conn, &frustum, playerPos, settings.renderDistance);
@@ -382,8 +350,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
 	}
 
-	// Must run before opaque terrain draws: terrain samples the cloud coverage texture this uploads
-	// for cloud shadows, even though the clouds' own geometry isn't drawn until later (clouds.draw()).
 	clouds.update(playerPos);
 	rain.update(playerPos, game.camera.viewMatrix, ambientLight);
 
@@ -405,12 +371,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	}
 
 	gpu_performance_measuring.startQuery(.entity_rendering);
-	// Entity models use hard alpha masks (their Blockbench-exported material mode), while item icons
-	// use coverage smoothing below. Do not apply A2C to entities: it blends transparent black texels
-	// into their silhouettes and causes the MSAA strings visible on Snale/Cubert models.
+
 	main.entity.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
-	// Entities don't cast shadows: the voxel raymarch (see ShadowRaymarch) only tests against static
-	// terrain occupancy, not entity meshes.
 
 	if (msaaActive) c.glEnable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
@@ -426,11 +388,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	particles.ParticleSystem.render(game.projectionMatrix, game.camera.viewMatrix, ambientLight);
 	gpu_performance_measuring.stopQuery();
 
-	// Resolve MSAA's multisampled opaque-geometry buffer into worldFrameBuffer here, before transparent
-	// rendering: transparent_fragment.frag samples worldFrameBuffer's depth as a plain sampler2D (soft-
-	// particle-style depth test against opaque geometry, renderer.zig ~worldFrameBuffer.bindDepthTexture
-	// below) which a still-multisampled texture can't be bound as. Only opaque geometry is multisampled
-	// — transparent/clouds/rain continue drawing into worldFrameBuffer directly like always, unaffected.
 	if (msaaActive) {
 		gpu_performance_measuring.startQuery(.msaa_resolve);
 		MSAA.frameBuffer.resolveTo(&worldFrameBuffer, lastWidth, lastHeight);
@@ -440,7 +397,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
-	// Rebind block textures back to their original slots
 	c.glActiveTexture(c.GL_TEXTURE0);
 	blocks.meshes.blockTextureArray.bind();
 	c.glActiveTexture(c.GL_TEXTURE1);
@@ -448,7 +404,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	MeshSelection.render(playerPos);
 
-	// Render transparent chunk meshes:
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE5);
 
@@ -470,9 +425,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
-	// Transparent water is intentionally absent from worldFrameBuffer's depth texture. Render a second,
-	// depth-writing mask after terrain: underwater it provides the visible ceiling, and during weather it
-	// prevents deferred terrain fog from revealing a far lake bed through a faded transparent surface.
 	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
 	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, waterSurfaceFrameBuffer.frameBuffer);
 	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
@@ -485,25 +437,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	}
 	worldFrameBuffer.bind();
 
-	// Drawn after transparent blocks (ice, glass, water, ...), not before: those don't write depth (see
-	// transparentPipeline's .depthWrite = false), so a cloud in front of one couldn't otherwise occlude
-	// it — the transparent block would draw right over the cloud regardless of which was actually closer
-	// to the camera, showing through "perfectly clear" instead of being obscured like opaque terrain
-	// already correctly is. Drawing clouds last composites them over both opaque and transparent geometry
-	// alike, using the same depth test (against the opaque depth buffer, still the only depth transparent
-	// draws leave behind) that already made clouds correctly occlude opaque blocks.
-	// Clear every frame (including underwater/high-altitude frames) so a previous frame's cloud layer can
-	// never be composited after clouds are intentionally skipped. Copy opaque terrain depth into the cloud
-	// target first: clouds can depth-test against terrain and against each other, but terrain fog continues
-	// reading the untouched depth in worldFrameBuffer.
 	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
 	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, cloudFrameBuffer.frameBuffer);
 	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
 	cloudFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
-	// Cloud layers fade over the same aerial transition as sky-island mist instead of disappearing at
-	// the old 2k boundary.
+
 	if (!isSubmerged and playerPos[2] < 6000.0) {
 		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
@@ -526,8 +466,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	} else {
 		Bloom.bindReplacementImage();
 	}
-	// Direct crepuscular rays cannot remain visible beneath a local storm ceiling. Bind the replacement
-	// texture while weather is active so the final pass has a stable input without rendering the effect.
+
 	if (settings.godRays and game.world.?.dayTime.weatherVisibility < 0.02) {
 		gpu_performance_measuring.startQuery(.god_rays);
 		GodRays.render(lastWidth, lastHeight, game.camera.viewMatrix);
@@ -543,8 +482,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	waterSurfaceFrameBuffer.bindTexture(c.GL_TEXTURE12);
 	worldFrameBuffer.unbind();
 	deferredRenderPassPipeline.bind(null);
-	// This is deliberately independent of block/underwater fog. It fades only low ground during the
-	// ascent from the ordinary world; sky islands do not exist until roughly Z=10k.
+
 	const skyIslandGroundFade = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 2000.0)/4000.0)), 0.0, 1.0);
 	c.glUniform1f(deferredUniforms.skyIslandGroundFade, skyIslandGroundFade);
 	const skyIslandMistStrength = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
@@ -561,36 +499,29 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	} else if (!blocks.meshes.hasFog(playerBlock)) {
 		const skyColorVal = game.world.?.dayTime.fog.skyColor;
 		const baseFogColor = game.world.?.dayTime.fog.fogColor;
-		// The aerial fade uses the ordinary clear-sky haze colour, not water's absorption colour.
+
 		c.glUniform3fv(deferredUniforms.skyIslandFogColor, 1, @ptrCast(&skyColorVal));
 		var fogColor = skyColorVal;
 		var fogDensity = game.world.?.dayTime.fog.density;
 		const playerZ: f32 = @floatCast(playerPos[2]);
 
-		// Calculate smooth cloud altitude factor around the raised low 3D deck (Z=448..458).
 		const cloudAltDist = @abs(playerZ - 453.0);
 		const cloudAltFactor = 1.0 - std.math.clamp((cloudAltDist - 10.0) / 40.0, 0.0, 1.0);
 
-		// Calculate total maximum distance of all loaded LOD chunks combined (HQ LOD0 + low-res LODs):
 		const lodScale: f32 = @floatFromInt(@as(u32, 1) << main.settings.highestLod);
 		const totalMaxLodDist: f32 = @as(f32, @floatFromInt(@as(u32, main.settings.renderDistance) * 32)) * lodScale;
-		// Clear-air visibility normally comes from the loaded LOD range.
+
 		if (totalMaxLodDist > 0) fogDensity = 1.0 / totalMaxLodDist;
-		// Sky islands begin around Z=10k. Their own distinct distance mist ramps in only as that layer is
-		// approached, so it hides far islands without incorrectly fogging the entire 2k-to-6k ascent.
+
 		const skyIslandMist = std.math.clamp((playerZ - 8000.0)/2000.0, 0.0, 1.0);
 		const skyIslandFogRange: f32 = 750.0;
 		fogDensity = std.math.lerp(fogDensity, 1.0/skyIslandFogRange, skyIslandMist);
 
 		if (playerZ <= 2000.0) {
-			// Near the raised cloud altitude (Z ~ 448), smoothly blend toward the soft cloud fog colour.
+
 			fogColor = skyColorVal + (baseFogColor - skyColorVal) * @as(Vec3f, @splat(cloudAltFactor));
 		}
-		// Ground-level rendering deliberately derives its base fog from LOD range above. Weather haze
-		// needs an independent density floor, not a multiplier of that base: otherwise its range changes
-		// with the player's LOD/render-distance setting. During weather, use DayTime's locally tinted haze
-		// instead of sky blue: this prevents clouds from bleaching white and makes the horizon wall merge
-		// with fog rather than tracing distant mountain silhouettes.
+
 		const weatherVisibility = if (playerZ > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
 		if (weatherVisibility > 0.001) {
 			const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
@@ -600,15 +531,10 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&fogColor));
 		c.glUniform1f(deferredUniforms.@"fog.density", fogDensity);
-		// Existing worlds may still have the old sky-islands biome data until their assets reload. Never
-		// pass that biome's former 1e10 underwater sentinel into the deferred shader at sky-island height.
+
 		c.glUniform1f(deferredUniforms.@"fog.fogLower", if (playerZ > 2000.0) -1e5 else game.world.?.dayTime.fog.fogLower);
 		c.glUniform1f(deferredUniforms.@"fog.fogHigher", if (playerZ > 2000.0) 1e5 else game.world.?.dayTime.fog.fogHigher);
-		// The clear-weather LOD horizon benefits from a pale atmospheric fade. Weather haze must retain
-		// its blue-grey tint instead; whitening it is what made rainy cloud undersides read pure white.
-		// Aerial mist must converge to the real sky hue. The ordinary LOD-fog whitening is useful near
-		// ground, but at sky-island height it turns the mist grey/white and leaves dark island silhouettes
-		// reading as sharp cut-outs instead of being absorbed into the blue atmosphere.
+
 		c.glUniform1f(deferredUniforms.fogWhitening, if (weatherVisibility > 0.001 or skyIslandMist > 0.001) 0.0 else 0.7);
 		c.glUniform1f(deferredUniforms.weatherFogStrength, weatherVisibility);
 	} else {
@@ -628,12 +554,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds)) * 1e-9);
 	c.glUniform1f(deferredUniforms.waterTime, waterTime);
 	{
-		// Sun-colored during the day, moon-colored (near-white, not warm yellow) at night — matches
-		// Skybox.drawCelestial's own tints for the two bodies, so the ray color agrees with whichever
-		// billboard is actually visible. Was checking getShadowLightDirection()[2] >= 0, which is true
-		// for *both* bodies whenever each is the one currently active (that's exactly the condition
-		// under which getShadowLightDirection returns them) — always picked the sun's warm tint even at
-		// night. isSunlight() actually distinguishes which body is providing the light.
+
 		const isSunlight = game.world.?.dayTime.isSunlight();
 		const tint: Vec3f = if (isSunlight) Vec3f{1.0, 0.9, 0.6} else Vec3f{0.9, 0.92, 0.95};
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
@@ -653,12 +574,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	switch (settings.antiAliasingMode) {
 		.fxaa => FXAA.render(lastWidth, lastHeight),
 		.taa => {
-			// TAA.render's invViewMatrix parameter: passed camera.viewMatrix directly, not an actual
-			// inverse — matches every other invViewMatrix uniform in this file (deferredUniforms,
-			// Bloom's colorExtractUniforms, GodRays' maskUniforms). camera.viewMatrix is a pure rotation
-			// (world->view, no translation — see game.zig's updateViewMatrix), so its transpose (applied
-			// at upload via glUniformMatrix4fv's transpose flag) already equals its inverse (view->world)
-			// for an orthonormal rotation matrix — the actual inversion this technique needs.
+
 			gpu_performance_measuring.stopQuery();
 			gpu_performance_measuring.startQuery(.taa_resolve);
 			TAA.render(playerPos, jitteredProjection, game.camera.viewMatrix);
@@ -687,22 +603,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	gpu_performance_measuring.stopQuery();
 }
 
-/// Hardware multisample anti-aliasing for opaque geometry. Only the opaque-terrain/entity/particle
-/// draw passes render into MSAA.frameBuffer — transparent chunks, clouds, and rain keep drawing into
-/// worldFrameBuffer directly like always, since transparent_fragment.frag samples worldFrameBuffer's
-/// depth as a plain sampler2D (a soft-particle-style depth test against already-drawn opaque geometry)
-/// which a still-multisampled texture can't be bound as. MSAA.frameBuffer is resolved into
-/// worldFrameBuffer (see renderWorld's msaaActive branch) right after opaque geometry finishes, before
-/// that depth read happens. Note MSAA only smooths true polygon edges — it does not multisample
-/// discarded fragments inside a triangle, so it does not fix aliasing on alpha-cutout foliage (see
-/// FXAA's doc comment below for that problem; TAA is the option that actually addresses it).
-const MSAA = struct { // MARK: MSAA
+const MSAA = struct {
 	var frameBuffer: graphics.MultisampledFrameBuffer = undefined;
 	var width: u31 = std.math.maxInt(u31);
 	var height: u31 = std.math.maxInt(u31);
-	/// 0 (never a valid sample count) forces updateSize's first call to (re-)initialize the framebuffer
-	/// at whatever settings.msaaSamples is at that point, alongside the usual width/height staleness
-	/// check below — same lazy-refresh pattern, just also keyed on this setting.
+
 	var lastSamples: u8 = 0;
 
 	pub fn init() void {
@@ -715,40 +620,25 @@ const MSAA = struct { // MARK: MSAA
 	}
 
 	fn updateSize(currentWidth: u31, currentHeight: u31) void {
-		// Sample count is fixed per-framebuffer at allocation time in OpenGL (there's no way to change
-		// it on an existing multisampled texture the way updateSize below resizes width/height) — if the
-		// player changes the MSAA quality setting at runtime, the whole framebuffer (not just its size)
-		// needs tearing down and recreating with the new sample count.
+
 		if (lastSamples != main.settings.msaaSamples) {
 			frameBuffer.deinit();
 			frameBuffer.init(main.settings.msaaSamples);
 			lastSamples = main.settings.msaaSamples;
-			width = std.math.maxInt(u31); // Force the size check below to also run again this frame.
+			width = std.math.maxInt(u31);
 			height = std.math.maxInt(u31);
 		}
 		if (width != currentWidth or height != currentHeight) {
 			width = currentWidth;
 			height = currentHeight;
-			// RGBA16F (not RGB16F): 3-component multisample color textures are a known rough edge on
-			// some GL drivers (poor/incorrect hardware support forces slow emulated paths, sometimes
-			// buggy ones) — RGBA is the safe, universally well-supported multisample format.
+
 			frameBuffer.updateSize(width, height, c.GL_RGBA16F);
 			std.debug.assert(frameBuffer.validate());
 		}
 	}
 };
 
-/// Final-image post-process anti-aliasing (FXAA). Distant high-frequency detail (e.g. tree canopies
-/// made of many small alpha-cutout leaf quads) has nothing smoothing its silhouette edges and reads as
-/// a blobby, hard-to-make-out mass rather than a legible shape once it's more than a few pixels wide on
-/// screen — MSAA above doesn't fix this (alpha-cutout discard isn't a polygon edge). FXAA runs last
-/// (after deferredRenderPassPipeline has already composited bloom/god-rays/fog into a plain LDR image)
-/// purely as an edge-detection blur over the finished picture, so it needs no changes to the
-/// geometry/shading passes that precede it — but being a blur with no real geometric information, it
-/// can't tell "jagged edge" from "dense real detail," so on foliage-heavy medium-far range scenes it
-/// trades pixelation for a soft/blurry look rather than genuinely resolving it. TAA is the option that
-/// actually fixes foliage aliasing well.
-const FXAA = struct { // MARK: FXAA
+const FXAA = struct {
 	var buffer: graphics.FrameBuffer = undefined;
 	var width: u31 = std.math.maxInt(u31);
 	var height: u31 = std.math.maxInt(u31);
@@ -777,8 +667,6 @@ const FXAA = struct { // MARK: FXAA
 		pipeline.deinit();
 	}
 
-	/// Redirects the upcoming deferredRenderPassPipeline draw into FXAA's own intermediate buffer
-	/// instead of straight to activeFrameBuffer/screen, so FXAA has a finished LDR image to read from.
 	fn preDraw(currentWidth: u31, currentHeight: u31) void {
 		if (width != currentWidth or height != currentHeight) {
 			width = currentWidth;
@@ -800,23 +688,10 @@ const FXAA = struct { // MARK: FXAA
 	}
 };
 
-/// Temporal Anti-Aliasing. Accumulates renderWorld's per-frame sub-pixel jitter (see
-/// jitteredProjectionMatrix) into a persistent history buffer via reprojection, giving each on-screen
-/// pixel effectively many sub-pixel-shifted samples over time — this is what actually resolves
-/// alpha-cutout foliage aliasing well (MSAA above only smooths true polygon edges; FXAA is a blur with
-/// no real geometric information). Scoped smaller than "full" TAA: reprojection here is camera-only
-/// (no per-object motion vectors, since this engine has none), so moving entities/the player's own
-/// hand-held item will show some ghosting — bounded by the resolve shader's neighborhood clamping, not
-/// eliminated. Runs in the same "final post-process pass" slot FXAA/plain passthrough use.
-const TAA = struct { // MARK: TAA
-	/// Pre-resolve buffer: deferredRenderPassPipeline renders here (like FXAA.buffer) before the resolve
-	/// shader reads it as this frame's new, un-blended color.
+const TAA = struct {
+
 	var currentBuffer: graphics.FrameBuffer = undefined;
-	/// Ping-pong pair holding the actual temporal accumulation: one holds this frame's just-resolved
-	/// (blended-with-history) output, the other holds last frame's, swapping roles every frame — can't
-	/// read and write the same texture within one draw, hence two buffers instead of one. They are RGB
-	/// only: the resolve never reads or writes alpha, so packed R11G11B10F cuts history bandwidth in half
-	/// versus RGBA16F without discarding any colour data TAA uses.
+
 	var resolveBuffers: [2]graphics.FrameBuffer = undefined;
 	var resolveIndex: usize = 0;
 	var width: u31 = std.math.maxInt(u31);
@@ -832,7 +707,6 @@ const TAA = struct { // MARK: TAA
 		historyBlendFactor: c_int,
 	} = undefined;
 
-	/// Un-jittered — TAA-specific state, distinct from any of renderer.zig's other per-frame caches.
 	var lastPlayerPos: Vec3d = .{0, 0, 0};
 	var lastViewMatrix: Mat4f = Mat4f.identity();
 	var lastProjectionMatrix: Mat4f = Mat4f.identity();
@@ -874,19 +748,15 @@ const TAA = struct { // MARK: TAA
 				buffer.updateSize(width, height, c.GL_R11F_G11F_B10F);
 				std.debug.assert(buffer.validate());
 			}
-			hasHistory = false; // Old resolve buffers are the wrong size/stale — start fresh instead of sampling garbage/stretched history.
+			hasHistory = false;
 		}
 	}
 
-	/// Redirects the upcoming deferredRenderPassPipeline draw into TAA's own intermediate buffer
-	/// instead of straight to activeFrameBuffer/screen, so TAA has a finished LDR image to resolve.
 	fn preDraw(currentWidth: u31, currentHeight: u31) void {
 		updateSize(currentWidth, currentHeight);
 		currentBuffer.bind();
 	}
 
-	/// depthTexture must already be bound to GL_TEXTURE4 by the caller (renderWorld already does this
-	/// for the deferred composite pass, right before this runs).
 	fn render(playerPos: Vec3d, projectionMatrix: Mat4f, invViewMatrix: Mat4f) void {
 		const writeIndex = resolveIndex;
 		const readIndex = 1 - resolveIndex;
@@ -904,9 +774,7 @@ const TAA = struct { // MARK: TAA
 
 		const cameraDelta: Vec3f = @floatCast(playerPos - lastPlayerPos);
 		c.glUniform3fv(uniforms.cameraDelta, 1, @ptrCast(&cameraDelta));
-		// lastProjectionMatrix is un-jittered (renderer.zig only ever writes game.projectionMatrix here,
-		// never the jittered copy) — reprojecting against a jittered matrix would bias the history
-		// sample by up to a pixel every frame, drifting rather than converging.
+
 		const lastViewProj = lastProjectionMatrix.mul(lastViewMatrix);
 		c.glUniformMatrix4fv(uniforms.lastViewProjMatrix, 1, c.GL_TRUE, @ptrCast(&lastViewProj.transpose()));
 
@@ -915,7 +783,6 @@ const TAA = struct { // MARK: TAA
 		graphics.draw.rectVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 
-		// Present this frame's resolved result (just-written buffer) to the real target.
 		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, resolveBuffers[writeIndex].frameBuffer);
 		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
 		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, targetFBO);
@@ -931,7 +798,7 @@ const TAA = struct { // MARK: TAA
 	}
 };
 
-const Bloom = struct { // MARK: Bloom
+const Bloom = struct {
 	var buffer1: graphics.FrameBuffer = undefined;
 	var buffer2: graphics.FrameBuffer = undefined;
 	var emptyBuffer: graphics.Texture = undefined;
@@ -1072,13 +939,7 @@ const Bloom = struct { // MARK: Bloom
 	}
 };
 
-/// Screen-space volumetric light shafts ("god rays"), radiating from wherever the sun/moon peeks
-/// through gaps in terrain/foliage. Classic two-pass technique (mask, then radial blur toward the
-/// light's screen position) rather than true 3D ray-marching — cheaper, and needs no new depth-pyramid
-/// infrastructure. Mirrors Bloom's overall shape (quarter-res buffer(s), publish result on a free
-/// texture unit for the final composite to additively sample) but only needs one blur pass, since a
-/// radial blur isn't separable the way Bloom's two-pass Gaussian is.
-const GodRays = struct { // MARK: GodRays
+const GodRays = struct {
 	var maskBuffer: graphics.FrameBuffer = undefined;
 	var rayBuffer: graphics.FrameBuffer = undefined;
 	var emptyBuffer: graphics.Texture = undefined;
@@ -1137,16 +998,12 @@ const GodRays = struct { // MARK: GodRays
 		blurPipeline.deinit();
 	}
 
-	// Far off-screen sentinel used when the sun/moon is behind the camera: both passes naturally
-	// produce zero contribution (the mask's proximity test never triggers, and blurPass separately
-	// zeroes `strength`) without either shader needing a special "is there even a light source" branch.
 	const offScreenSentinel = Vec2f{-10, -10};
 
 	fn maskPass(viewMatrix: Mat4f, sunDirection: Vec3f, sunScreenPos: Vec2f, aspectRatio: f32) void {
 		maskPipeline.bind(null);
 		worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE4);
-		// Cloud coverage texture (unit 9) was already bound by clouds.update() earlier this frame and
-		// nothing has rebound that unit since — no need to rebind it here.
+
 		maskBuffer.bind();
 
 		c.glUniformMatrix4fv(maskUniforms.invViewMatrix, 1, c.GL_TRUE, @ptrCast(&viewMatrix.transpose()));
@@ -1184,48 +1041,22 @@ const GodRays = struct { // MARK: GodRays
 			std.debug.assert(rayBuffer.validate());
 		}
 
-		// The *true* (unclamped) direction — deliberately not getShadowLightDirection(), whose elevation
-		// clamp keeps shading stable near the horizon but means it disagrees with where the sun/moon
-		// actually is. God rays need to visually track the real body: using the clamped direction here
-		// made the glow appear to freeze/float above the sun/moon near dawn/dusk instead of continuing to
-		// follow it down toward the horizon.
 		const lightDir = game.world.?.dayTime.getVisibleCelestialDirection();
 		const viewProj = game.projectionMatrix.mul(viewMatrix);
-		// Computed once and shared by both passes below — the mask's bright spot and the blur's
-		// convergence target must always agree exactly, or the glow visibly drifts from the sun's true
-		// position as the camera moves.
+
 		const sunScreenPos = projectDirection(viewProj, lightDir) orelse offScreenSentinel;
-		// Reuses Skybox's own horizon-fade curve so god rays fade in/out in lockstep with the sun/moon
-		// billboard itself, rather than having their own independent (and possibly mismatched) cutoff.
-		// Moonlight rays are dimmer than sunlight ones (mirrors Skybox's own moon billboard, drawn at
-		// horizonFade*0.6 — moonlight is just much weaker than direct sun).
+
 		const moonDimming: f32 = if (game.world.?.dayTime.isSunlight()) 1.0 else 0.5;
-		// Fades the whole god-ray effect in/out based on how close the sun/moon's projected screen
-		// position is to the center of the view, rather than it snapping to full strength the instant
-		// the sun's bright disc first clips into the frame at the edge (which is what the mask's own
-		// proximity test — a small fixed-radius disc around sunScreenPos — controls; that's a separate,
-		// much tighter radius meant to shape the disc itself, not to fade the overall ray strength with
-		// view direction). Not aspect-corrected on purpose: a plain radial distance from screen center
-		// reads fine here since this only needs to be a smooth global multiplier, not a circular disc.
+
 		const centerDist = vec.length(sunScreenPos - Vec2f{0.5, 0.5});
 		const centerFadeInner: f32 = 0.15;
 		const centerFadeOuter: f32 = 0.9;
 		const centerFadeT = std.math.clamp((centerDist - centerFadeInner)/(centerFadeOuter - centerFadeInner), 0.0, 1.0);
-		const centerFade = 1.0 - centerFadeT*centerFadeT*(3.0 - 2.0*centerFadeT); // smoothstep, inverted
-		// getVisibleCelestialDirection() flips 180 degrees in a single frame exactly at the sun/moon
-		// crossing (verified numerically — see DayTime.getShadowTransitionFade's doc comment), so
-		// sunScreenPos (this function's convergence point, computed above from that same lightDir) jumps
-		// to the opposite side of the screen in one frame too. Skybox.horizonFade alone only reaches 0.5
-		// strength exactly at the crossing (direction[2]==0 sits at its window's midpoint, not its zero
-		// end) — not dim enough to hide a convergence point teleporting across the screen at half
-		// brightness. Multiplying by getShadowTransitionFade() (which reaches exactly 0 right at the
-		// crossing, independent of horizonFade's own window) ensures god rays are fully invisible for the
-		// brief moment sunScreenPos actually jumps, then fade back in already converged on the new body.
+		const centerFade = 1.0 - centerFadeT*centerFadeT*(3.0 - 2.0*centerFadeT);
+
 		const transitionFade = game.world.?.dayTime.getShadowTransitionFade();
 		const strength = Skybox.horizonFade(lightDir)*settings.godRayIntensity*moonDimming*centerFade*transitionFade;
-		// tanX/tanY (== width/height, per Mat4f.perspective()'s `tanX = aspect*tanY`) — scales the mask's
-		// screen-space proximity test so the sun's glow disc reads as circular on screen instead of
-		// stretched to match whatever the viewport's aspect ratio happens to be.
+
 		const aspectRatio = (1.0/game.projectionMatrix.rows[0][0])/(1.0/game.projectionMatrix.rows[1][2]);
 
 		c.glViewport(0, 0, width/4, height/4);
@@ -1278,7 +1109,7 @@ pub const MenuBackGround = struct {
 			.{.depthTest = false, .depthWrite = false},
 			.{.attachments = &.{.noBlending}},
 		);
-		// 4 sides of a simple cube with some panorama texture on it.
+
 		const rawData = [_]MenuBackgroundVertex{
 			.{.pos = .{-1, 1, -1}, .uv = .{1, 1}},
 			.{.pos = .{-1, 1, 1}, .uv = .{1, 0}},
@@ -1318,7 +1149,6 @@ pub const MenuBackGround = struct {
 		var dir = try main.files.cubyzDir().openIterableDir("backgrounds");
 		defer dir.close();
 
-		// Whenever the version changes copy over the new background image and display it.
 		if (!std.mem.eql(u8, settings.lastVersionString, settings.version.version)) {
 			const defaultImageData = try main.files.cwd().read(main.stackAllocator, "assets/cubyz/default_background.png");
 			defer main.stackAllocator.free(defaultImageData);
@@ -1327,7 +1157,6 @@ pub const MenuBackGround = struct {
 			return allocator.print("{s}/backgrounds/default_background.png", .{main.files.cubyzDirStr()});
 		}
 
-		// Otherwise load a random texture from the backgrounds folder. The player may make their own pictures which can be chosen as well.
 		var walker = dir.walk(main.stackAllocator);
 		defer walker.deinit();
 		var fileList: main.List([]const u8) = .empty;
@@ -1363,7 +1192,6 @@ pub const MenuBackGround = struct {
 		c.glViewport(0, 0, main.Window.width, main.Window.height);
 		if (texture.textureID == 0) return;
 
-		// Use a simple rotation around the z axis, with a steadily increasing angle.
 		angle += @as(f32, @floatCast(deltaTime))/20.0;
 		const viewMatrix = Mat4f.rotationZ(angle);
 		main.graphics.frame_uniforms.uploadNewFrame(.{
@@ -1381,11 +1209,9 @@ pub const MenuBackGround = struct {
 	}
 
 	pub fn takeBackgroundImage() void {
-		const size: usize = 1024; // Use a power of 2 here, to reduce video memory waste.
+		const size: usize = 1024;
 		const pixels: []u32 = main.stackAllocator.alloc(u32, size*size);
 		defer main.stackAllocator.free(pixels);
-
-		// Change the viewport and the matrices to render 4 cube faces:
 
 		const oldResolutionScale = main.settings.resolutionScale;
 		main.settings.resolutionScale = 1;
@@ -1408,7 +1234,6 @@ pub const MenuBackGround = struct {
 
 		const angles = [_]f32{std.math.pi/2.0, std.math.pi, std.math.pi*3/2.0, std.math.pi*2};
 
-		// All 4 sides are stored in a single image.
 		const image = graphics.Image.init(main.stackAllocator, 4*size, size);
 		defer image.deinit(main.stackAllocator);
 
@@ -1417,18 +1242,18 @@ pub const MenuBackGround = struct {
 			c.glDepthMask(c.GL_TRUE);
 			c.glDisable(c.GL_SCISSOR_TEST);
 			game.camera.rotation = .{0, 0, angles[i]};
-			// Draw to frame buffer.
+
 			buffer.bind();
 			c.glClear(c.GL_DEPTH_BUFFER_BIT | c.GL_STENCIL_BUFFER_BIT | c.GL_COLOR_BUFFER_BIT);
 			main.renderer.render(game.Player.getEyePosBlocking(), 0);
-			// Copy the pixels directly from OpenGL
+
 			buffer.bind();
 			c.glReadPixels(0, 0, size, size, c.GL_RGBA, c.GL_UNSIGNED_BYTE, pixels.ptr);
 
 			for (0..size) |y| {
 				for (0..size) |x| {
 					const index = x + y*size;
-					// Needs to flip the image in y-direction.
+
 					image.setRGB(x + size*i, size - 1 - y, @bitCast(pixels[index]));
 				}
 			}
@@ -1440,7 +1265,7 @@ pub const MenuBackGround = struct {
 		image.exportToFile(fileName) catch |err| {
 			std.log.err("Cannot write file {s} due to {s}", .{fileName, @errorName(err)});
 		};
-		// TODO: Performance is terrible even with -O3. Consider using qoi instead.
+
 	}
 };
 
@@ -1548,7 +1373,6 @@ pub const Skybox = struct {
 
 				temperature = @floatCast(@abs(main.random.nextFloatGauss(&seed)*3000.0 + 5000.0) + 1000.0);
 
-				// 3.6e-12 can be modified to change the brightness of the stars
 				light = (3.6e-12*radius*radius*temperature*temperature*temperature*temperature)/(vec.dot(pos, pos));
 			}
 
@@ -1614,18 +1438,11 @@ pub const Skybox = struct {
 		celestialVao.deinit();
 	}
 
-	/// Fades a celestial body in/out right around the horizon instead of switching abruptly.
 	fn horizonFade(direction: Vec3f) f32 {
 		const halfWindow = 0.05;
 		return std.math.clamp((direction[2] + halfWindow)/(2*halfWindow), 0.0, 1.0);
 	}
 
-	/// World-fixed billboard basis for a celestial body, perpendicular to its direction — deliberately
-	/// *not* derived from the camera's view matrix, so the sun/moon disc doesn't rotate or distort as
-	/// the player looks around; it only changes as `direction` itself sweeps through the day/night
-	/// cycle. Uses the world X axis as a stable reference, matching the rotation axis
-	/// getSunDirection()/the star field's own rotation already sweep around (direction's X component
-	/// is always 0), so `cross(worldXAxis, direction)` is already unit-length — no normalize needed.
 	fn celestialBillboardBasis(direction: Vec3f) struct {right: Vec3f, up: Vec3f} {
 		const worldXAxis = Vec3f{1, 0, 0};
 		const right = vec.cross(worldXAxis, direction);
@@ -1686,12 +1503,12 @@ pub const Skybox = struct {
 	}
 };
 
-pub const Frustum = struct { // MARK: Frustum
+pub const Frustum = struct {
 	const Plane = struct {
 		pos: Vec3f,
 		norm: Vec3f,
 	};
-	planes: [4]Plane, // Who cares about the near/far plane anyways?
+	planes: [4]Plane,
 
 	pub fn init(cameraPos: Vec3f, rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Frustum {
 		const invRotationMatrix = rotationMatrix.transpose();
@@ -1703,17 +1520,17 @@ pub const Frustum = struct { // MARK: Frustum
 		const halfHSide = halfVSide*@as(f32, @floatFromInt(width))/@as(f32, @floatFromInt(height));
 
 		var self: Frustum = undefined;
-		self.planes[0] = Plane{.pos = cameraPos, .norm = vec.cross(cameraUp, cameraDir + cameraRight*@as(Vec3f, @splat(halfHSide)))}; // right
-		self.planes[1] = Plane{.pos = cameraPos, .norm = vec.cross(cameraDir - cameraRight*@as(Vec3f, @splat(halfHSide)), cameraUp)}; // left
-		self.planes[2] = Plane{.pos = cameraPos, .norm = vec.cross(cameraRight, cameraDir - cameraUp*@as(Vec3f, @splat(halfVSide)))}; // top
-		self.planes[3] = Plane{.pos = cameraPos, .norm = vec.cross(cameraDir + cameraUp*@as(Vec3f, @splat(halfVSide)), cameraRight)}; // bottom
+		self.planes[0] = Plane{.pos = cameraPos, .norm = vec.cross(cameraUp, cameraDir + cameraRight*@as(Vec3f, @splat(halfHSide)))};
+		self.planes[1] = Plane{.pos = cameraPos, .norm = vec.cross(cameraDir - cameraRight*@as(Vec3f, @splat(halfHSide)), cameraUp)};
+		self.planes[2] = Plane{.pos = cameraPos, .norm = vec.cross(cameraRight, cameraDir - cameraUp*@as(Vec3f, @splat(halfVSide)))};
+		self.planes[3] = Plane{.pos = cameraPos, .norm = vec.cross(cameraDir + cameraUp*@as(Vec3f, @splat(halfVSide)), cameraRight)};
 		return self;
 	}
 
 	pub fn testAAB(self: Frustum, pos: Vec3f, dim: Vec3f) bool {
 		inline for (self.planes) |plane| {
 			var dist: f32 = vec.dot(pos - plane.pos, plane.norm);
-			// Find the most positive corner:
+
 			dist += @reduce(.Add, @max(Vec3f{0, 0, 0}, dim*plane.norm));
 			if (dist < 0) return false;
 		}
@@ -1721,36 +1538,21 @@ pub const Frustum = struct { // MARK: Frustum
 	}
 };
 
-/// Per-frame chunk-position -> occupancy-offset lookup window for the sun/moon shadow raymarch (see
-/// shadow.glsl's sampleSunShadow). A small, fully-rebuilt-each-frame grid of chunk-sized cells centered
-/// on the player, world-chunk-aligned — mirrors clouds.zig's coverage-grid pattern (a fixed small
-/// window, snapped to world-aligned cell boundaries, reuploaded whole every frame) rather than a GPU
-/// hash table: same shape of problem (world position -> sparse per-chunk data), same solution already
-/// proven stable in this codebase.
-///
-/// Each cell holds either `emptySentinel` (no LOD0 chunk loaded there => treat as passable, matching how
-/// an unloaded chunk never cast a shadow under the old cascade system either) or that chunk's starting
-/// word offset into chunk_meshing.occupancyBuffer.
-pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
+pub const ShadowRaymarch = struct {
 	const emptySentinel: u32 = 0xFFFFFFFF;
-	/// Backing array capacity — mirrors clouds.zig's maxGridDim, sized generously for the shadowDistance
-	/// slider's max (512 blocks radius -> ~18 chunks radius -> up to ~38^3 cells, comfortably under this).
+
 	const maxWindowDim: u32 = 48;
 
 	var indexSSBO: graphics.SSBO = undefined;
 	var indexData: [maxWindowDim*maxWindowDim*maxWindowDim]u32 = undefined;
 
-	/// World-block coordinates (absolute, not player-relative) of the window's corner cell — shader
-	/// side reconstructs an absolute voxel coordinate from worldPosRelative + playerPositionInteger/
-	/// Fraction and subtracts this to index into indexData. Public for chunk_meshing.zig/
-	/// modelRenderer.zig's bindCommonUniforms.
 	pub var windowOrigin: Vec3i = .{0, 0, 0};
-	/// Cells per axis actually populated this frame (<= maxWindowDim).
+
 	pub var windowDim: u32 = 0;
 
 	fn init() void {
 		indexSSBO = .init();
-		indexSSBO.bind(21); // 21, not 12 — collides with Skybox's starSsbo, see shadow.glsl's binding comment
+		indexSSBO.bind(21);
 	}
 
 	fn deinit() void {
@@ -1765,8 +1567,7 @@ pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
 
 		const playerBlock: Vec3i = @as(Vec3i, @floor(playerPos));
 		const halfSpan: i32 = @as(i32, @intCast(dim/2))*size;
-		// Chunk-aligned window origin (world block coords) — cells only ever pop in/out at the window's
-		// outer edge as the player moves, never swim or reindex underfoot.
+
 		const origin = Vec3i{
 			(playerBlock[0] & ~@as(i32, size - 1)) -% halfSpan,
 			(playerBlock[1] & ~@as(i32, size - 1)) -% halfSpan,
@@ -1799,25 +1600,10 @@ pub const ShadowRaymarch = struct { // MARK: ShadowRaymarch
 	}
 };
 
-/// Cascaded Shadow Maps (CSM) — replaces the old DDA voxel raymarch with a projection-based approach
-/// that produces smooth, properly filtered penumbras.  Three cascades cover progressively wider
-/// depth ranges so near objects get sharp, high-res shadows and distant ones get wide, soft ones.
-///
-/// Algorithm:
-///   1. For each cascade, compute a stable orthographic light-space frustum: a player-centered sphere
-///      of that cascade's far distance (not fit to the camera's current view frustum — see
-///      computeLightSpaceMatrix for why coverage deliberately doesn't depend on view direction).
-///      "Stable" means we snap the frustum centre to the nearest shadow-map texel, eliminating the
-///      sub-pixel shimmer the previous CSM removal notice cited as its reason for removal.
-///   2. Render all opaque LOD-0 chunk faces into a depth-only FBO from the light's point of view.
-///   3. Store the resulting light-space VP matrices; chunk_meshing.zig's bindCommonUniforms() uploads
-///      them plus the depth textures to the terrain fragment shader every frame.
-pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
+pub const CascadedShadowMap = struct {
 	pub const numCascades = 3;
 	pub var baseShadowMapSize: u31 = 2048;
-	/// Near shadows retain the requested map size. The mid/far cascades are intentionally softer and
-	/// cover much larger world areas, so rendering them at 75%/50% resolution avoids spending the same
-	/// fill rate on detail that their PCF filter and distance haze cannot preserve visually.
+
 	pub var shadowMapSize: u31 = 2048;
 	pub var shadowMapSizes: [numCascades]u31 = .{ 2048, 1536, 1024 };
 
@@ -1840,23 +1626,12 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		}
 	}
 
-	/// Cascade far distances (blocks from the player); each cascade covers a player-centered sphere of
-	/// this radius, not a near/far depth slice — see computeLightSpaceMatrix.
 	pub var cascadeFarDistances: [numCascades]f32 = .{ 24.0, 96.0, 512.0 };
 
-	/// How many cascades actually got a fresh light-space matrix/depth-map render this session, driven by
-	/// settings.shadowDistance (see update()'s own activeCascades local). Cascades beyond this count keep
-	/// stale/never-computed baseLightSpaceMatrices — shadow.glsl's cross-cascade blend must not sample
-	/// them, or it mixes in garbage right at the edge of the lowest-numbered active cascade (see the
-	/// dated fix note in this file's memory.md for the exact symptom this was found from).
 	pub var activeCascadeCount: usize = 1;
 
-	/// One depth-only FBO per cascade. Initialised with GL_COMPARE_REF_TO_TEXTURE so sampling returns
-	/// hardware-filtered 0..1 PCF values directly from the fragment shader's sampler2DShadow.
 	pub var shadowFBs: [numCascades]graphics.FrameBuffer = undefined;
 
-	/// Shadow-depth-only pipeline: shadow_depth.vert + shadow_depth.frag. Uses depth bias to prevent
-	/// self-shadowing acne on steep faces without discarding entire blocks.
 	var shadowPipeline: graphics.Pipeline = undefined;
 	var shadowPipelineUniforms: struct {
 		lightSpaceMatrix: c_int,
@@ -1865,10 +1640,8 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		weatherWind: c_int,
 	} = undefined;
 
-	/// Light-space VP matrices in the Zig row-major format — used by the cascade frustum computation.
 	var lightSpaceMatrices: [numCascades]Mat4f = undefined;
-	/// The same matrices flattened into OpenGL column-major layout for glUniformMatrix4fv.
-	/// Computed each frame alongside lightSpaceMatrices.
+
 	pub var lightSpaceMatricesGL: [numCascades][4][4]f32 = undefined;
 	var baseLightSpaceMatrices: [numCascades]Mat4f = undefined;
 	var renderedPlayerPos: [numCascades]Vec3d = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } };
@@ -1878,20 +1651,15 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	var lastSunDir: Vec3f = .{ 0, 0, 0 };
 
 	fn init() void {
-		// Depth-only maps have GL_COMPARE_REF_TO_TEXTURE enabled and may only be sampled through
-		// sampler2DShadow. FrameBuffer.initDepthOnly binds its new texture on the *currently active*
-		// unit, so pin initialisation to unit 0 and explicitly unbind it afterwards. Otherwise a menu
-		// or UI shader using sampler2D at unit 0 can accidentally sample this compare-enabled depth
-		// texture, which NVIDIA correctly reports as undefined behaviour.
+
 		c.glActiveTexture(c.GL_TEXTURE0);
 		for (0..numCascades) |i| {
 			shadowFBs[i].initDepthOnly(c.GL_LINEAR, c.GL_CLAMP_TO_BORDER);
-			// For out-of-frustum samples (UV outside [0,1]): treat as fully lit (1.0) so the
-			// terrain beyond a cascade's coverage doesn't go dark.
+
 			const border = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
 			c.glBindTexture(c.GL_TEXTURE_2D, shadowFBs[i].depthTexture);
 			c.glTexParameterfv(c.GL_TEXTURE_2D, c.GL_TEXTURE_BORDER_COLOR, &border);
-			// Allocate each cascade at its appropriate near/mid/far resolution.
+
 			shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
 		}
 		c.glBindTexture(c.GL_TEXTURE_2D, 0);
@@ -1903,7 +1671,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			graphics.VertexArray.EmptyVertex,
 			&.{},
 			.{
-				.cullMode = .none, // Render all faces during shadow pass to avoid missing shadows on single-sided geometry
+				.cullMode = .none,
 				.depthBias = .{ .constantFactor = 2.0, .clamp = 0.0, .slopeFactor = 4.0 },
 			},
 			.{ .depthTest = true, .depthWrite = true },
@@ -1918,23 +1686,9 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		shadowPipeline.deinit();
 	}
 
-	/// Compute the rotation-invariant, texel-snapped light-space orthographic frustum for one cascade,
-	/// covering a player-centered sphere of radius `cascadeFarDepth` (not a sphere fit to the camera's
-	/// current view frustum slice and shifted forward along view direction, which an earlier version
-	/// used). That forward-shifted version saved shadow-map resolution by not covering ground outside
-	/// the camera's current FOV, but it meant the world-space area a cascade actually covered swept
-	/// around with the camera's rotation even while the player stood still — so turning to look away
-	/// from a nearby tree (or anything else) could shift the covered disc enough that the very shadow
-	/// the player was standing in fell outside it and disappeared, even looking straight at the ground
-	/// underneath them. A player-centered sphere matches shadow.glsl's cascade selection (which is
-	/// purely distance-based, `cameraDepth` vs `csmCascadeFar`, with no view-direction term) and
-	/// getShadowRenderChunks' 360-degree occluder gathering, so coverage no longer depends on which way
-	/// the camera happens to be facing — at the cost of some shadow-map resolution being spent on
-	/// terrain outside the current view that a frustum-fitted cascade would have skipped.
 	fn computeLightSpaceMatrix(cascade: usize, cascadeFarDepth: f32, lightView: Mat4f, playerPos: Vec3d, zMargin: f32) Mat4f {
 		const radius = cascadeFarDepth;
 
-		// Add player's fractional offset in light space so snapping is relative to absolute world origin:
 		const playerFrac = Vec3f{
 			@floatCast(@mod(playerPos[0], 1.0)),
 			@floatCast(@mod(playerPos[1], 1.0)),
@@ -1949,7 +1703,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		const diameter = 2.0 * radius;
 		const texelSize = diameter / @as(f32, @floatFromInt(shadowMapSizes[cascade]));
 
-		// Snap absolute world coordinates to exact texel multiples:
 		const snappedAbsX = @floor(absX / texelSize) * texelSize;
 		const snappedAbsZ = @floor(absZ / texelSize) * texelSize;
 		const minL_y = absY - radius - zMargin;
@@ -1957,12 +1710,10 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		const maxL_y = absY + radius + 32.0;
 		const depth = maxL_y - snappedAbsMinL_y;
 
-		// Shift back to player-relative coordinates for the translation matrix:
 		const relSnappedX = snappedAbsX - playerLightVec4[0];
 		const relSnappedMinL_y = snappedAbsMinL_y - playerLightVec4[1];
 		const relSnappedZ = snappedAbsZ - playerLightVec4[2];
 
-		// Orthographic projection matrix:
 		const lightProj = Mat4f.orthographic(diameter, diameter, 0.0, depth);
 		const lightTranslation = Mat4f{
 			.rows = [4]Vec4f{
@@ -1979,7 +1730,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		if (!settings.shadows) return;
 		shadowFrameCounter +%= 1;
 
-		// Dynamically scale shadow map resolution according to settings.shadowRaySteps slider (Shadow Quality):
 		const desiredSize: u31 = if (settings.shadowRaySteps <= 96)
 			1024
 		else if (settings.shadowRaySteps <= 256)
@@ -1991,9 +1741,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		if (mapsResized) {
 			shadowMapSize = desiredSize;
 			updateCascadeMapSizes();
-			// updateSize likewise binds the texture it reallocates. Keep that temporary binding out
-			// of the terrain/UI sampler units; the maps are explicitly rebound to shadow-only units
-			// 6..8 by bindCommonUniforms before any shader samples them.
+
 			c.glActiveTexture(c.GL_TEXTURE0);
 			for (0..numCascades) |i| {
 				shadowFBs[i].updateSize(shadowMapSizes[i], shadowMapSizes[i], c.GL_R8);
@@ -2001,8 +1749,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			c.glBindTexture(c.GL_TEXTURE_2D, 0);
 		}
 
-		// Keep Cascade 0 locked to 24 blocks so nearby tree shadows and leaf texture cutouts stay sharp
-		// regardless of max shadow distance setting, while mid/far cascades expand with settings.shadowDistance:
 		const maxDist = @max(settings.shadowDistance, 24.0);
 		cascadeFarDistances[0] = 24.0;
 		cascadeFarDistances[1] = @min(96.0, maxDist);
@@ -2022,11 +1768,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 		shadowPipeline.bind(null);
 		c.glUniform1i(43, @intFromBool(settings.foliageShadows));
 		c.glUniform3fv(37, 1, @ptrCast(&lightDir));
-		// Same time reference chunk_meshing.zig's bindTransparentShaderAndUniforms uses for the main color
-		// pass's foliage sway — must match exactly, or the shadow-casting geometry sways out of phase with
-		// what's actually visible (see shadow_depth.vert's own doc comment for the full "difference in
-		// shading every ~0.2-0.3s" symptom this fixes). Kept in scope for the whole function since the
-		// per-cascade loop below rebinds shadowPipeline after each compute dispatch and must re-upload it.
+
 		const elapsedNanoseconds = chunk_meshing.startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 		const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 		c.glUniform1f(shadowPipelineUniforms.waterTime, waterTime);
@@ -2046,25 +1788,17 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			3;
 		activeCascadeCount = activeCascades;
 
-		const maxDistSq: f64 = 2.0 * 2.0; // 2 blocks of player movement
-		const maxFrameAge: u32 = 20; // Far/static cascades remain cached while standing still.
+		const maxDistSq: f64 = 2.0 * 2.0;
+		const maxFrameAge: u32 = 20;
 		const refreshNearFoliageShadowEveryFrame = settings.foliageSway and settings.foliageShadows;
-		// Replicated player models are dynamic occluders. Refresh the close cascade while one is nearby so
-		// their shadow follows network interpolation rather than waiting for the normal static 20-frame cache.
+
 		const refreshNearPlayerShadowEveryFrame = main.entity.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
-		// Refreshing all three cascades on the same cache tick made a regular frametime spike every
-		// `maxFrameAge` frames. The close map is always first; mid/far are allowed to follow during the
-		// next two frames. Their light-space matrices compensate camera translation meanwhile, and their
-		// already-soft distant shadows make the tiny sun-direction delay unnoticeable. During startup or
-		// after resizing, still build every map immediately so no cascade samples a blank depth texture.
+
 		const forceFullRefresh = shadowFrameCounter <= 2 or mapsResized;
 		var scheduledRefreshes: usize = 0;
 
 		for (0..activeCascades) |i| {
-			// Foliage vertices sway every render frame. Reusing its near CSM map for 20 frames makes its
-			// ground shadows hold still then snap to a new phase, which reads as noisy/jittery motion.
-			// Cascade 0 is the only close-detail map and refreshes each frame during foliage sway; the much
-			// larger mid/far cascades retain the existing cache cadence for a bounded performance cost.
+
 			const diffX = playerPos[0] - renderedPlayerPos[i][0];
 			const diffY = playerPos[1] - renderedPlayerPos[i][1];
 			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
@@ -2073,8 +1807,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			const cascadeMaxFrameAge: u32 = if ((refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame) and i == 0) 1 else maxFrameAge;
 			const isImmediateNearRefresh = i == 0 and (refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame);
 			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or forceFullRefresh;
-			// A dynamic near map is mandatory every frame. Apart from that, submit only one due cascade per
-			// frame; this turns the former three-map hitch into three small, spread-out updates.
+
 			const canRefreshThisFrame = forceFullRefresh or isImmediateNearRefresh or scheduledRefreshes == 0;
 			if (needsReRender and canRefreshThisFrame) {
 				if (!isImmediateNearRefresh) scheduledRefreshes += 1;
@@ -2091,9 +1824,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 				shadowFBs[i].bind();
 				c.glViewport(0, 0, shadowMapSizes[i], shadowMapSizes[i]);
 				c.glClear(c.GL_DEPTH_BUFFER_BIT);
-				// The preceding cascade may have drawn avatar depth with its dedicated entity program.
-				// Rebind the terrain program before uploading its matrix for this cascade; otherwise the
-				// terrain uniform location is interpreted against the entity program (GL_INVALID_OPERATION).
+
 				shadowPipeline.bind(null);
 				c.glUniform1i(43, @intFromBool(settings.foliageShadows));
 				c.glUniform3fv(37, 1, @ptrCast(&lightDir));
@@ -2142,12 +1873,10 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 					c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, chunk_meshing.commandBuffer.ssbo.bufferID);
 					c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
 				}
-				// Draw player avatar depth after terrain into the same cascade. Their normal position/rotation
-				// replication is enough; no server-side shadow state is required.
+
 				main.entity.systems.modelRenderer.client.renderShadows(&baseLightSpaceMatrices[i], playerPos);
 			}
 
-			// Compensate for player movement delta dynamically in lightSpaceMatricesGL[i]:
 			const deltaX: f32 = @floatCast(playerPos[0] - renderedPlayerPos[i][0]);
 			const deltaY: f32 = @floatCast(playerPos[1] - renderedPlayerPos[i][1]);
 			const deltaZ: f32 = @floatCast(playerPos[2] - renderedPlayerPos[i][2]);
@@ -2163,14 +1892,6 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 			lightSpaceMatricesGL[i] = correctedMatrix.toGl();
 		}
 
-		// Restore normal rendering state. Must rebind whichever buffer renderWorld's opaque pass is
-		// actually using (MSAA.frameBuffer when MSAA is active, worldFrameBuffer otherwise) — this used
-		// to hardcode worldFrameBuffer unconditionally, which silently redirected the rest of the
-		// frame's opaque draws away from MSAA.frameBuffer whenever shadows were enabled. renderWorld's
-		// later MSAA resolve then blitted MSAA.frameBuffer (still just its initial clear color, since no
-		// geometry was ever drawn into it after this point) over the real image, producing severe
-		// corruption — reported by the player as MSAA "just doesn't work," which stopped reproducing
-		// entirely with shadows disabled. That was the actual bug, not MSAA's own FBO/blit setup.
 		c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
 		if (settings.antiAliasingMode == .msaa) {
 			MSAA.frameBuffer.bind();
@@ -2181,7 +1902,7 @@ pub const CascadedShadowMap = struct { // MARK: CascadedShadowMap
 	}
 };
 
-pub const MeshSelection = struct { // MARK: MeshSelection
+pub const MeshSelection = struct {
 	var pipeline: graphics.Pipeline = undefined;
 	var uniforms: struct {
 		projectionMatrix: c_int,
@@ -2218,8 +1939,7 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 	var currentSwingProgress: f32 = 0;
 	var currentSwingTime: f32 = 0;
 	var lastMiningInputTime: std.Io.Timestamp = .fromNanoseconds(0);
-	/// Normalized current mining swing for cosmetic model animation. Null means the player is not
-	/// actively breaking a block; keep the authoritative mining logic above independent from rendering.
+
 	pub fn heldItemSwingProgress() ?f32 {
 		const elapsedSinceInput = lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds();
 		if (currentSwingTime <= 0 or elapsedSinceInput > 150_000_000) return null;
@@ -2235,9 +1955,8 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 		const dir: Vec3d = @floatCast(_dir);
 		lastDir = _dir;
 
-		// Test blocks:
-		const closestDistance: f64 = 6.0; // selection now limited
-		// Implementation of "A Fast Voxel Traversal Algorithm for Ray Tracing"  http://www.cse.yorku.ca/~amana/research/grid.pdf
+		const closestDistance: f64 = 6.0;
+
 		const step: Vec3i = std.math.sign(dir);
 		const invDir = @as(Vec3d, @splat(1))/dir;
 		const tDelta = @abs(invDir);
@@ -2293,14 +2012,14 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 				}
 			}
 		}
-		// TODO: Test entities
+
 	}
 
 	fn canPlaceBlock(pos: Vec3i, block: main.blocks.Block) bool {
 		if (main.physics.collision.collideWithBlock(block, pos[0], pos[1], pos[2], main.game.Player.getPosBlocking() + main.game.Player.outerBoundingBox.center(), main.game.Player.outerBoundingBox.extent(), .{0, 0, 0}) != null) {
 			return false;
 		}
-		return true; // TODO: Check other entities
+		return true;
 	}
 
 	pub fn placeBlock(inventory: main.items.Inventory.ClientInventory, slot: u32) void {
@@ -2312,7 +2031,7 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 					if (baseItem.block()) |itemBlock| {
 						const rotationMode = blocks.Block.mode(.{.typ = itemBlock, .data = 0});
 						var neighborDir = Vec3i{0, 0, 0};
-						// Check if stuff can be added to the block itself:
+
 						if (itemBlock == block.typ) {
 							const relPos: Vec3f = @floatCast(lastPos - @as(Vec3d, @floatFromInt(selectedPos)));
 							if (rotationMode.generateData(main.game.world.?, selectedPos, relPos, lastDir, neighborDir, null, &block, .{.typ = 0, .data = 0}, false)) {
@@ -2327,7 +2046,7 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 								return;
 							}
 						}
-						// Check the block in front of it:
+
 						const neighborPos = posBeforeBlock;
 						neighborDir = selectedPos - posBeforeBlock;
 						const relPos: Vec3f = @floatCast(lastPos - @as(Vec3d, @floatFromInt(neighborPos)));
@@ -2358,7 +2077,7 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 					}
 				},
 				.proceduralItem => |proceduralItem| {
-					_ = proceduralItem; // TODO: Tools might change existing blocks.
+					_ = proceduralItem;
 				},
 				.null => {},
 			}
@@ -2367,8 +2086,7 @@ pub const MeshSelection = struct { // MARK: MeshSelection
 
 	pub fn breakBlock(inventory: main.items.Inventory.ClientInventory, slot: u32, deltaTime: f64) void {
 		const now = main.timestamp();
-		// Releasing the mining control leaves the old damage timer intact until the next click. Reset
-		// its cosmetic phase after a short input gap, otherwise the rendered arm freezes mid-swing.
+
 		if (lastMiningInputTime.durationTo(now).toNanoseconds() > 150_000_000) {
 			currentSwingProgress = 0;
 			currentSwingTime = 0;

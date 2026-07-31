@@ -61,7 +61,7 @@ fn copyIp() void {
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 260, 16);
 	list.add(Label.init(.{0, 0}, width, "Please send your IP to the player who wants to join and enter their IP below.", .center));
-	//                                           255.255.255.255:?65536 (longest possible ip address)
+
 	ipAddressLabel = Label.init(.{0, 0}, width, "                      ", .center);
 	list.add(ipAddressLabel);
 	list.add(Button.initText(.{0, 0}, 100, "Copy IP", .{.onAction = .init(copyIp)}));

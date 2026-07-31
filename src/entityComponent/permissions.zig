@@ -10,7 +10,6 @@ const NeverFailingAllocator = main.heap.NeverFailingAllocator;
 pub var entityComponentID: main.entity.EntityComponentId = undefined;
 pub const entityComponentVersion = 0;
 
-// ############################# Client only stuff ################################
 pub const client = struct {
 	pub fn load(entity: Entity, reader: *BinaryReader, version: u32) main.entity.EntityComponentLoadError!void {
 		_ = entity;
@@ -24,7 +23,7 @@ pub const client = struct {
 	pub fn deinit() void {}
 	pub fn clear() void {}
 };
-// ############################# Server only stuff ################################
+
 pub const server = struct {
 	pub const Component = struct {
 		permissions: main.server.permission.Permissions,

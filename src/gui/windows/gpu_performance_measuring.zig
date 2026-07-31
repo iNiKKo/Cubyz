@@ -61,9 +61,7 @@ const names = [_][]const u8{
 const buffers = 4;
 var curBuffer: u2 = 0;
 var queryObjects: [buffers][@typeInfo(Samples).@"enum".fields.len]c_uint = undefined;
-// Conditional render passes (MSAA, TAA, bloom, shadows, etc.) do not submit a query every frame. Keep
-// track of which queries were actually issued for each ring-buffer slot so the overlay never presents an
-// old timing as if a currently disabled feature had rendered.
+
 var submitted: [buffers][@typeInfo(Samples).@"enum".fields.len]bool = @splat(@splat(false));
 
 var activeSample: ?Samples = null;
@@ -71,7 +69,7 @@ var activeSample: ?Samples = null;
 pub fn init() void {
 	for (&queryObjects) |*buf| {
 		c.glGenQueries(buf.len, buf);
-		for (buf) |queryObject| { // Start them to get an initial value.
+		for (buf) |queryObject| {
 			c.glBeginQuery(c.GL_TIME_ELAPSED, queryObject);
 			c.glEndQuery(c.GL_TIME_ELAPSED);
 		}
@@ -83,14 +81,14 @@ pub fn deinit() void {
 }
 
 pub fn startQuery(sample: Samples) void {
-	std.debug.assert(activeSample == null); // There can be at most one active measurement at a time.
+	std.debug.assert(activeSample == null);
 	activeSample = sample;
 	submitted[curBuffer][@intFromEnum(sample)] = true;
 	c.glBeginQuery(c.GL_TIME_ELAPSED, queryObjects[curBuffer][@intFromEnum(sample)]);
 }
 
 pub fn stopQuery() void {
-	std.debug.assert(activeSample != null); // There must be an active measurement to stop.
+	std.debug.assert(activeSample != null);
 	activeSample = null;
 	c.glEndQuery(c.GL_TIME_ELAPSED);
 }
@@ -120,7 +118,7 @@ pub fn render() void {
 		sum += result;
 		y += 8;
 	}
-	// This slot will receive the next frame's queries after GUI rendering finishes.
+
 	submitted[curBuffer] = @splat(false);
 	draw.print("Total: {} µs", .{@divTrunc(sum, 1000)}, 0, 0, 8);
 	const lightManager = main.itemdrop.ItemDisplayManager;
@@ -136,11 +134,6 @@ pub fn render() void {
 
 const fluid_spread = @import("../../callbacks/block/server/fluid_spread.zig");
 
-/// Temporary debug line for tuning the water spreading physics (fluid_spread.zig): shows the block
-/// currently under the crosshair, and if it's water, decodes its raw `data` field as a fluid level
-/// (fluid_spread.sourceLevel = permanent source, 1..maxFlowLevel = flowing, matching fluid_spread.zig's
-/// own encoding) so spreading/falling/decay behavior can be watched directly in-game instead of guessing
-/// from visuals alone.
 fn printWaterDebug(y: f32) void {
 	const pos = main.renderer.MeshSelection.selectedBlockPos orelse {
 		draw.print("Water debug: no block targeted", .{}, 0, y, 8);

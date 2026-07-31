@@ -3,7 +3,6 @@
 #include "chunk_data.glsl"
 #include "frame_uniforms.glsl"
 
-// The cascade's light-space projection*view matrix.
 layout(location = 44) uniform mat4 lightSpaceMatrix;
 
 struct FaceData {
@@ -57,11 +56,6 @@ void main() {
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
 
-	// Shadow foliage moves in the same time/direction family as visible foliage, but is intentionally a
-	// slightly reduced-amplitude version of visible foliage motion. Copying every leaf's full sway into a
-	// depth map makes alpha-cutout coverage hop between individual shadow texels every frame; reducing the
-	// depth-only amplitude lets PCF average that detail. Keep the exact world-position phase, otherwise
-	// grouped wind origins make a visible canopy appear to lead or lag its own shadow.
 	if (quads[quadIndex].isFoliage != 0 && foliageSway) {
 		vec3 worldPos = vec3(chunks[chunkID].position.xyz) + position*voxelSize;
 		bool isLilyPad = abs(quads[quadIndex].normal.z) > 0.8;
@@ -72,27 +66,13 @@ void main() {
 
 		float windWave = sin(worldPos.x * 1.1 + worldPos.y * 0.7 + waterTime * 2.0) * scale;
 		windWave += cos(worldPos.x * 0.5 - worldPos.y * 1.3 + waterTime * 1.4) * (scale * 0.6);
-		// Sway is applied in true world units (matching chunk_vertex.vert's worldPos.xy +=), but
-		// `position` here is still voxel-local (pre `*= voxelSize`) — divide by voxelSize to convert the
-		// world-space displacement back into this shader's local units before adding it in below, so LOD
-		// chunks (voxelSize > 1) sway by the same real-world distance as full-resolution ones.
+
 		vec2 windDir = length(weatherWind) > 1e-4 ? normalize(weatherWind) : vec2(0.894, 0.447);
 		position.xy += (windDir * windWave * heightMask) / float(voxelSize);
 	}
 
-	// The forward shift closes the grass-blade-to-ground gap, but on a horizontal raised petal plane it
-	// moves the caster over its own visible surface and creates the dark stamp reported by the player.
-	// Keep it for vertical foliage only; horizontal petals cast from their real position.
 	if (quads[quadIndex].isFoliage != 0 && abs(quads[quadIndex].normal.z) < 0.55) {
-		// Shift foliage's recorded shadow-map position toward the sun before writing depth. This is what
-		// actually closes the gap between a grass blade's base and where its ground shadow starts — every
-		// bias tried on the *sampling* side (shadow.glsl) only adjusts how tolerant the read-back is, it
-		// can never move where the occluder itself was recorded. This shift was present in an earlier
-		// revision (git 71efa93b, "New shadows for grass") gated on the old `opaqueInLod == 0` (which also
-		// wrongly caught branches/ore, see the isFoliage/opaqueInLod fix elsewhere), then deleted entirely
-		// in a later revision (git 4b9bcd0d) — that deletion is why no amount of shadow.glsl bias tuning
-		// after that point ever visibly closed the gap. Restored here gated on the real per-quad isFoliage
-		// flag instead.
+
 		vec3 lightDir = sunDirection;
 		float sLen = length(lightDir);
 		if (sLen > 1e-4) {

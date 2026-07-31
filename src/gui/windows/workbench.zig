@@ -64,9 +64,9 @@ fn openInventory() void {
 	craftingGridInv = ClientInventory.init(main.globalAllocator, 25, .serverShared, .{.workbench = .{.playerId = main.game.Player.id, .proceduralItemIndex = proceduralItemTypes.items[currentProceduralItemType]}}, .{.onUpdateCallback = &updateResult, .canPutInto = items.ProceduralItem.canPutIntoWorkbenchCallback});
 	craftingResultInv = ClientInventory.init(main.globalAllocator, 1, .{.workbenchResult = craftingGridInv.super.id}, .other, .{});
 	const list = HorizontalList.init();
-	{ // crafting grid
+	{
 		const grid = VerticalList.init(.{0, 0}, 300, 0);
-		// Inventory:
+
 		for (0..5) |y| {
 			const row = HorizontalList.init();
 			for (0..5) |x| {
@@ -90,7 +90,7 @@ fn openInventory() void {
 	craftingResultList.add(ItemSlot.init(.{8, 0}, craftingResultInv, 0, .craftingResult, .takeOnly));
 	craftingResultList.finish(.{padding, padding}, .center);
 	verticalThing.add(craftingResultList);
-	verticalThing.size[1] += buttonHeight + 2*padding; // Centering the thing
+	verticalThing.size[1] += buttonHeight + 2*padding;
 	verticalThing.finish(.center);
 	list.add(verticalThing);
 	list.finish(.{padding, padding + 16}, .center);
