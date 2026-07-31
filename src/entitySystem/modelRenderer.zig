@@ -381,7 +381,7 @@ pub const client = struct {
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.remoteHeldItem(id) != null, main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.hasRemoteHeldItem(id), main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
 			const entModel = component.entityModel.get();
 			entModel.bind();
 			entModel.defaultTexture.?.bindTo(0);
@@ -472,7 +472,7 @@ pub const client = struct {
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.remoteHeldItem(id) != null, main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.hasRemoteHeldItem(id), main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
 		}
 
 		pipeline.bind(null);

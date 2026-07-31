@@ -561,12 +561,22 @@ pub const ItemDisplayManager = struct { // MARK: ItemDisplayManager
 	/// on the render thread end up holding a dangling pointer if a new held-item packet arrived while the
 	/// old one was still being used (e.g. mid-hashCode() on a `.proceduralItem`'s crafting grid), crashing
 	/// with a segfault deep inside whatever code happened to touch it next. Callers must `.deinit()` the
-	/// returned clone when done with it, per this codebase's normal `Item` ownership convention.
+	/// returned clone when done with it, per this codebase's normal `Item` ownership convention. If you
+	/// only need to know WHETHER something is held (not its contents), use `hasRemoteHeldItem` instead -
+	/// it doesn't allocate.
 	pub fn remoteHeldItem(entityId: main.entity.Entity) ?items.Item {
 		const id = @intFromEnum(entityId);
 		if (id >= maxReplicatedPlayers) return null;
 		const item = remoteHeldItems[id].item;
 		return if (item == .null) null else item.clone();
+	}
+	/// Non-allocating presence check - use this instead of `remoteHeldItem(...) != null` when the actual
+	/// item contents aren't needed, so callers that only care about "is something held" don't need to
+	/// clone-then-immediately-deinit (or, as happened before this function existed, clone and leak).
+	pub fn hasRemoteHeldItem(entityId: main.entity.Entity) bool {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers) return false;
+		return remoteHeldItems[id].item != .null;
 	}
 	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
 		const item = remoteHeldItem(entityId) orelse return null;
