@@ -1018,7 +1018,13 @@ pub const ItemDropRenderer = struct { // MARK: ItemDropRenderer
 			// origin transform as modelRenderer, then append the authored RightItem node. Every bundled
 			// player model supplies this attachment; the fallback remains useful for custom models.
 			var modelMatrix = Mat4f.translation(position + Vec3f{ 0, 0, if (entityModel) |avatarModel| -avatarModel.height/2 else 0 });
-			modelMatrix = modelMatrix.mul(Mat4f.rotationZ(-ent.rot[2]));
+			// Use the same eased body yaw the avatar mesh itself is drawn with (modelRenderer.zig's
+			// component.rootYaw), not the raw replicated ent.rot[2] - the layered look-turn system makes
+			// the visible body yaw lag behind the raw network yaw while the head absorbs a look-direction
+			// change, so using ent.rot[2] here made the held item visibly rotate independently of (and
+			// out of sync with) the body/arm it's supposed to be attached to.
+			const itemBodyYaw = if (modelComponent) |component| component.rootYaw else ent.rot[2];
+			modelMatrix = modelMatrix.mul(Mat4f.rotationZ(-itemBodyYaw));
 			if (modelComponent) |component| {
 				if (component.entityModel.get().nodeIndexMap.get("RightItem")) |nodeId| {
 					modelMatrix = modelMatrix.mul(component.matrices[nodeId].transpose());

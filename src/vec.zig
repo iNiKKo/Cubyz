@@ -159,6 +159,18 @@ pub const Quat = struct {
 		const sc: [2]f32 = .{@sin(a), @cos(a)};
 		return .{.q = n*Vec4f{sc[0], sc[0], sc[0], sc[1]}};
 	}
+
+	/// Standard Hamilton product; applying the result rotates by `self` first, then by `other`.
+	pub fn mul(self: Quat, other: Quat) Quat {
+		const a = self.q;
+		const b = other.q;
+		return .{.q = Vec4f{
+			a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+			a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+			a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+			a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2],
+		}};
+	}
 };
 
 pub const Mat4f = struct { // MARK: Mat4f
