@@ -289,6 +289,7 @@ pub const WeatherGrid = struct {
 		cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
 		revision: u64 = 0,
 		time_millis: i64 = 0,
+		displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
 	};
 
 	mutex: main.utils.Mutex = .{},
@@ -297,6 +298,15 @@ pub const WeatherGrid = struct {
 	cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
 	revision: u64 = 0,
 	time_millis: i64 = 0,
+	/// Smoothed copy of `cells`, eased toward each newly received grid rather than snapping to it
+	/// instantly - a server experiencing tick-pacing stalls (irregular gaps between ticks, e.g. from OS
+	/// scheduling hiccups outside this game's control) can only send weather updates at irregular real-time
+	/// intervals; since each update is still a technically-correct sample of real elapsed time, a big gap
+	/// produces a big jump in the raw grid, which read as clouds/rain flickering on and off abruptly. This
+	/// smooths what's actually SAMPLED for rendering, independent of how choppy the underlying updates are.
+	displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
+	displayOriginCell: Vec2i = .{std.math.minInt(i32), std.math.minInt(i32)}, // Forces a snap on first use.
+	lastDisplayUpdate: ?std.Io.Timestamp = null,
 
 	pub fn update(self: *WeatherGrid, origin_cell: Vec2i, wind: Vec2f, time_millis: i64, cells: [cell_count]Cell) void {
 		self.mutex.lock();
@@ -308,10 +318,56 @@ pub const WeatherGrid = struct {
 		self.time_millis = time_millis;
 	}
 
+	/// Advances `displayCells` toward `cells`, called once per client frame with real elapsed time - not
+	/// tied to how often new grids arrive from the server, so rendering stays smooth even when updates
+	/// come in bursts or with irregular gaps.
+	pub fn advanceDisplay(self: *WeatherGrid, now: std.Io.Timestamp) void {
+		self.mutex.lock();
+		defer self.mutex.unlock();
+		// If the grid re-centered (player moved far enough that the server shifted origin_cell), the same
+		// index in displayCells no longer corresponds to the same physical cell as before the shift -
+		// blending across that would smooth between two unrelated locations' weather. Snap instantly in
+		// that case instead; the origin only moves when the player has physically travelled into new
+		// territory, where an instant weather change reads as arriving somewhere new, not a glitch.
+		if (!std.meta.eql(self.displayOriginCell, self.origin_cell)) {
+			self.displayOriginCell = self.origin_cell;
+			for (&self.displayCells, self.cells) |*display, cell| {
+				display.* = .{
+					.cloud_cover = @as(f32, @floatFromInt(cell.cloud_cover))/255.0,
+					.precipitation = @as(f32, @floatFromInt(cell.precipitation))/255.0,
+					.dust = @as(f32, @floatFromInt(cell.dust))/255.0,
+					.kind = cell.kind,
+				};
+			}
+			self.lastDisplayUpdate = now;
+			return;
+		}
+		const last = self.lastDisplayUpdate orelse now;
+		self.lastDisplayUpdate = now;
+		const dt: f32 = @max(0.0, @as(f32, @floatFromInt(last.durationTo(now).toNanoseconds()))*1e-9);
+		// Fully catches up within ~1.5 seconds regardless of update cadence; a fixed cap keeps a huge dt
+		// (e.g. after a stall or the very first frame) from producing an instant snap either.
+		const t = 1 - @exp(-2.5*@min(dt, 1.5));
+		for (&self.displayCells, self.cells) |*display, cell| {
+			const target: Sample = .{
+				.cloud_cover = @as(f32, @floatFromInt(cell.cloud_cover))/255.0,
+				.precipitation = @as(f32, @floatFromInt(cell.precipitation))/255.0,
+				.dust = @as(f32, @floatFromInt(cell.dust))/255.0,
+				.kind = cell.kind,
+			};
+			display.cloud_cover += (target.cloud_cover - display.cloud_cover)*t;
+			display.precipitation += (target.precipitation - display.precipitation)*t;
+			display.dust += (target.dust - display.dust)*t;
+			// kind (rain/snow/dust/none) is categorical, not eased - swap immediately once the dominant
+			// precipitation type actually changes, since interpolating between categories has no meaning.
+			display.kind = target.kind;
+		}
+	}
+
 	pub fn snapshot(self: *WeatherGrid) Snapshot {
 		self.mutex.lock();
 		defer self.mutex.unlock();
-		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis};
+		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis, .displayCells = self.displayCells};
 	}
 
 	/// Returns the server-authoritative weather at this world position. Outside the most recent snapshot
@@ -326,13 +382,9 @@ pub const WeatherGrid = struct {
 		const rel_x = cell_x - weather_snapshot.origin_cell[0];
 		const rel_y = cell_y - weather_snapshot.origin_cell[1];
 		if (rel_x < 0 or rel_x >= dimension or rel_y < 0 or rel_y >= dimension) return .{};
-		const cell = weather_snapshot.cells[@as(usize, @intCast(rel_y))*dimension + @as(usize, @intCast(rel_x))];
-		return .{
-			.cloud_cover = @as(f32, @floatFromInt(cell.cloud_cover))/255.0,
-			.precipitation = @as(f32, @floatFromInt(cell.precipitation))/255.0,
-			.dust = @as(f32, @floatFromInt(cell.dust))/255.0,
-			.kind = cell.kind,
-		};
+		// Read the smoothed display value, not the raw just-received cell - see displayCells' doc comment
+		// on WeatherGrid for why (irregular server tick pacing can otherwise make weather visibly snap).
+		return weather_snapshot.displayCells[@as(usize, @intCast(rel_y))*dimension + @as(usize, @intCast(rel_x))];
 	}
 };
 
@@ -725,6 +777,7 @@ pub const World = struct { // MARK: World
 			// Sandstorm visibility is local to the same server weather cell that emits dust particles.
 			// It must not tint/fog a player standing in a neighbouring clear biome.
 			const playerPos = Player.getPosBlocking();
+			world.?.weatherGrid.advanceDisplay(main.timestamp());
 			const localWeather = world.?.weatherGrid.sampleAt(playerPos[0], playerPos[1]);
 			// Local cells still retain their server weather above the cloud deck so players below can see
 			// the same storm, but this camera is in clear air: weather particles are already altitude-gated
