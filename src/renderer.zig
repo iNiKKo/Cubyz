@@ -468,9 +468,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 		lightning.draw(playerPos);
 	}
-	c.glDepthRange(0, 0.001);
-	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
-	c.glDepthRange(0.001, 1);
 	worldFrameBuffer.bind();
 	if (!isSubmerged) {
 		rain.draw();
@@ -616,6 +613,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	} else {
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
 	}
+
+	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
 
 	if (!main.gui.hideGui) main.entity.client.renderHud(ambientLight, playerPos);
 	gpu_performance_measuring.stopQuery();

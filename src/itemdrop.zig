@@ -1153,6 +1153,12 @@ pub const ItemDropRenderer = struct {
 		displayItemUbo.bind();
 		defer displayItemUbo.unbind();
 		bindCommonUniforms(ambientLight);
+		c.glDisable(c.GL_DEPTH_TEST);
+		c.glDepthMask(c.GL_FALSE);
+		defer {
+			c.glDepthMask(c.GL_TRUE);
+			c.glEnable(c.GL_DEPTH_TEST);
+		}
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
 		if (item != .null) {
