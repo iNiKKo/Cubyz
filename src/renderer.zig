@@ -346,7 +346,6 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	if (settings.shadows) {
 		gpu_performance_measuring.stopQuery();
 		gpu_performance_measuring.startQuery(.shadow_rendering);
-		ShadowRaymarch.update(playerPos);
 		CascadedShadowMap.update(playerPos);
 		gpu_performance_measuring.stopQuery();
 		gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
@@ -1649,6 +1648,7 @@ pub const CascadedShadowMap = struct {
 	var renderedPlayerPos: [numCascades]Vec3d = .{ .{ 0, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0, 0 } };
 	var lastRenderedFrame: [numCascades]u32 = .{ 0, 0, 0 };
 	pub var shadowFrameCounter: u32 = 0;
+	var lastDynamicShadowRefreshMilliseconds: i64 = 0;
 	var lastShadowPlayerPos: Vec3d = .{ 0, 0, 0 };
 	var lastSunDir: Vec3f = .{ 0, 0, 0 };
 
@@ -1795,6 +1795,8 @@ pub const CascadedShadowMap = struct {
 		const refreshNearFoliageShadowEveryFrame = settings.foliageSway and settings.foliageShadows;
 
 		const refreshNearPlayerShadowEveryFrame = main.entity.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
+		const nowMilliseconds = main.timestamp().toMilliseconds();
+		const dynamicShadowRefreshDue = nowMilliseconds - lastDynamicShadowRefreshMilliseconds >= 16;
 
 		const forceFullRefresh = shadowFrameCounter <= 2 or mapsResized;
 		var scheduledRefreshes: usize = 0;
@@ -1806,13 +1808,14 @@ pub const CascadedShadowMap = struct {
 			const diffZ = playerPos[2] - renderedPlayerPos[i][2];
 			const distSq = diffX * diffX + diffY * diffY + diffZ * diffZ;
 			const frameAge = shadowFrameCounter -% lastRenderedFrame[i];
-			const cascadeMaxFrameAge: u32 = if ((refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame) and i == 0) 1 else maxFrameAge;
-			const isImmediateNearRefresh = i == 0 and (refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame);
-			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= cascadeMaxFrameAge or forceFullRefresh;
+			const hasNearDynamicShadowCaster = (refreshNearFoliageShadowEveryFrame or refreshNearPlayerShadowEveryFrame) and i == 0;
+			const isImmediateNearRefresh = hasNearDynamicShadowCaster and dynamicShadowRefreshDue;
+			const needsReRender = sunMoved or distSq >= maxDistSq or frameAge >= maxFrameAge or isImmediateNearRefresh or forceFullRefresh;
 
 			const canRefreshThisFrame = forceFullRefresh or isImmediateNearRefresh or scheduledRefreshes == 0;
 			if (needsReRender and canRefreshThisFrame) {
 				if (!isImmediateNearRefresh) scheduledRefreshes += 1;
+				if (hasNearDynamicShadowCaster) lastDynamicShadowRefreshMilliseconds = nowMilliseconds;
 				lastRenderedFrame[i] = shadowFrameCounter;
 				renderedPlayerPos[i] = playerPos;
 				baseLightSpaceMatrices[i] = computeLightSpaceMatrix(

@@ -130,9 +130,7 @@ pub const client = struct {
 
 	fn updateLayeredLookYaw(component: *main.entity.components.@"cubyz:model".client.Component, targetYaw: f32, dt: f32, horizontalSpeed: f32) void {
 		const headBudget = std.math.degreesToRadians(30.0);
-		const headTurnSpeed = std.math.degreesToRadians(220.0);
 		const rootTurnSpeed = std.math.degreesToRadians(140.0);
-		const headReturnSpeed = std.math.degreesToRadians(165.0);
 
 		const holdBeforeResetTime = 1.2;
 
@@ -159,14 +157,10 @@ pub const client = struct {
 		const movingThreshold = 0.3;
 		const forceRootCatchUp = component.lookHoldTime >= holdBeforeResetTime or horizontalSpeed > movingThreshold;
 
-		if (@abs(totalDelta) <= headBudget and !forceRootCatchUp) {
-
-			component.headYawOffset = moveToward(component.headYawOffset, totalDelta, headTurnSpeed*dt);
-		} else {
-
+		if (@abs(totalDelta) > headBudget or forceRootCatchUp) {
 			component.rootYaw = component.rootYaw + moveToward(0, totalDelta, rootTurnSpeed*dt);
-			component.headYawOffset = moveToward(component.headYawOffset, 0, headReturnSpeed*dt);
 		}
+		component.headYawOffset = wrapAngle(targetYaw - component.rootYaw);
 	}
 	fn moveToward(current: f32, target: f32, maxDelta: f32) f32 {
 		const diff = target - current;
