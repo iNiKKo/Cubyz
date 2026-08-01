@@ -86,6 +86,8 @@ pub var streamerMode: bool = false;
 
 pub var lastUsedIPAddress: []const u8 = "";
 
+pub var baseServerCompatibility: bool = false;
+
 pub var storedAccount: main.network.authentication.PasswordEncodedAccountCode = .empty;
 
 pub var guiScale: ?f32 = null;

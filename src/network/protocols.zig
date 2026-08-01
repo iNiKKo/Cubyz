@@ -831,6 +831,7 @@ pub const genericUpdate = struct {
 	}
 
 	pub fn sendBlockBreaking(conn: *Connection, pos: Vec3i, progress: f32) void {
+		if (settings.baseServerCompatibility) return;
 		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + @sizeOf(Vec3i) + @sizeOf(f32));
 		defer writer.deinit();
 		writer.writeEnum(UpdateType, .blockBreaking);
@@ -1224,6 +1225,7 @@ pub const heldLight = struct {
 		broadcast(user.id, item, transform, toolRotationYZ, toolScale, miningSwing);
 	}
 	pub fn send(conn: *Connection, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32, miningSwing: f32) void {
+		if (settings.baseServerCompatibility) return;
 		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
 		var itemStack = main.items.ItemStack{ .item = item, .amount = if (item == .null) 0 else 1 };

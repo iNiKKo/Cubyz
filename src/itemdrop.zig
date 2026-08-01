@@ -742,19 +742,23 @@ pub const ItemDisplayManager = struct {
 			heldItemIdentity = .{ .procedural = item.proceduralItem };
 		}
 		if (game.world) |world| {
-			const isTool = item == .proceduralItem;
-			const transform: HeldLightTransform = if (isTool) .{ heldToolOffset[0], heldToolOffset[1], heldToolOffset[2], heldToolRotation[0] } else defaultHeldLightTransform;
-			const toolRotationYZ: Vec2f = if (isTool) .{ heldToolRotation[1], heldToolRotation[2] } else .{0.0, 0.0};
-			const toolScale: f32 = if (isTool) heldToolScale else 1.0;
-			const miningSwing = main.renderer.MeshSelection.heldItemSwingProgress() orelse -1.0;
-			if (!sentInitialHeldLight or !std.meta.eql(heldItemIdentity, lastSentHeldItem) or !std.meta.eql(transform, lastSentHeldLightTransform) or !std.meta.eql(toolRotationYZ, lastSentHeldToolRotationYZ) or toolScale != lastSentHeldToolScale or miningSwing != lastSentMiningSwing) {
-				main.network.protocols.heldLight.send(world.conn, item, transform, toolRotationYZ, toolScale, miningSwing);
-				lastSentHeldItem = heldItemIdentity;
-				lastSentHeldLightTransform = transform;
-				lastSentHeldToolRotationYZ = toolRotationYZ;
-				lastSentHeldToolScale = toolScale;
-				lastSentMiningSwing = miningSwing;
-				sentInitialHeldLight = true;
+			if (main.settings.baseServerCompatibility) {
+				sentInitialHeldLight = false;
+			} else {
+				const isTool = item == .proceduralItem;
+				const transform: HeldLightTransform = if (isTool) .{ heldToolOffset[0], heldToolOffset[1], heldToolOffset[2], heldToolRotation[0] } else defaultHeldLightTransform;
+				const toolRotationYZ: Vec2f = if (isTool) .{ heldToolRotation[1], heldToolRotation[2] } else .{0.0, 0.0};
+				const toolScale: f32 = if (isTool) heldToolScale else 1.0;
+				const miningSwing = main.renderer.MeshSelection.heldItemSwingProgress() orelse -1.0;
+				if (!sentInitialHeldLight or !std.meta.eql(heldItemIdentity, lastSentHeldItem) or !std.meta.eql(transform, lastSentHeldLightTransform) or !std.meta.eql(toolRotationYZ, lastSentHeldToolRotationYZ) or toolScale != lastSentHeldToolScale or miningSwing != lastSentMiningSwing) {
+					main.network.protocols.heldLight.send(world.conn, item, transform, toolRotationYZ, toolScale, miningSwing);
+					lastSentHeldItem = heldItemIdentity;
+					lastSentHeldLightTransform = transform;
+					lastSentHeldToolRotationYZ = toolRotationYZ;
+					lastSentHeldToolScale = toolScale;
+					lastSentMiningSwing = miningSwing;
+					sentInitialHeldLight = true;
+				}
 			}
 		} else {
 			sentInitialHeldLight = false;

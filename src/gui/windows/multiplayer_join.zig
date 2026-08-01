@@ -9,6 +9,7 @@ const gui = @import("../gui.zig");
 const GuiComponent = gui.GuiComponent;
 const GuiWindow = gui.GuiWindow;
 const Button = @import("../components/Button.zig");
+const CheckBox = @import("../components/CheckBox.zig");
 const Label = @import("../components/Label.zig");
 const TextInput = @import("../components/TextInput.zig");
 const VerticalList = @import("../components/VerticalList.zig");
@@ -73,6 +74,11 @@ fn copyIp() void {
 	main.Window.setClipboardString(ipAddress);
 }
 
+fn baseServerCompatibilityCallback(value: bool) void {
+	settings.baseServerCompatibility = value;
+	settings.save();
+}
+
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 300, 16);
 	list.add(Label.init(.{0, 0}, width, "Please send your IP to the host of the game and enter the host's IP below.", .center));
@@ -83,6 +89,7 @@ pub fn onOpen() void {
 	ipAddressEntry = TextInput.init(.{0, 0}, width, 32, settings.lastUsedIPAddress, .{.onNewline = .init(join)});
 	ipAddressEntry.obfuscated = main.settings.streamerMode;
 	list.add(ipAddressEntry);
+	list.add(CheckBox.init(.{0, 0}, width, "Base Server Compatibility", settings.baseServerCompatibility, &baseServerCompatibilityCallback));
 	list.add(Button.initText(.{0, 0}, 100, "Join", .{.onAction = .init(join)}));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();
