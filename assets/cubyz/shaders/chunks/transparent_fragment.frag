@@ -32,6 +32,8 @@ layout(location = 9) uniform float zFar;
 uniform bool reflectionsEnabled;
 
 uniform int waterTextureIndex;
+uniform int lavaTextureIndex;
+uniform bool playerInWater;
 
 uniform float weatherFogStrength;
 
@@ -206,11 +208,13 @@ vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
 }
 
 void main() {
-	if (isBackFace == 0 && !gl_FrontFacing) discard;
-	if (isBackFace != 0 && gl_FrontFacing) discard;
-
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	bool isWater = textureIndex == waterTextureIndex;
+	bool isLava = textureIndex == lavaTextureIndex;
+	if (isBackFace == 0 && !gl_FrontFacing) discard;
+	if (isBackFace != 0 && gl_FrontFacing) discard;
+	if (isLava && isBackFace != 0 && normal.z <= 0.9) discard;
+
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
 	float normalVariation = lightVariation(normal);
 	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
@@ -236,7 +240,7 @@ void main() {
 
 	float playerWorldZ = float(playerPositionInteger.z) + playerPositionFraction.z;
 	bool aboveWaterSurface = isWater && normal.z > 0.9 && playerWorldZ > worldPos.z + 0.05;
-	bool belowWaterSurface = isWater && normal.z > 0.9 && playerWorldZ < worldPos.z - 0.05;
+	bool belowWaterSurface = playerInWater && isWater && normal.z > 0.9 && playerWorldZ < worldPos.z - 0.05 && normalize(direction).z > 0.02;
 	float surfaceDistanceFade = aboveWaterSurface ? 1.0 - exp(-waterDist * 0.035) : 0.0;
 
 	float weatherWaterReflectionFade = aboveWaterSurface ? smoothstep(0.02, 0.25, weatherFogStrength) : 0.0;
@@ -306,7 +310,7 @@ void main() {
 		return;
 	}
 
-	if(isBackFace == 0) {
+	if(isBackFace == 0 || (isLava && normal.z > 0.9)) {
 		vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;
 		blendColor.rgb *= absorption * vec3(depthExtinction);
 
@@ -319,6 +323,7 @@ void main() {
 
 		applyBackfaceFog(airFogDistance, transparentFogColor);
 	} else if (isWater) {
+		if (!playerInWater) discard;
 
 		vec2 rippleUv = direction.xy * 0.35 + vec2(waterTime * 0.3);
 		float wave1 = sin(rippleUv.x * 3.2 + rippleUv.y * 2.1 + waterTime * 1.8) * 0.5 + 0.5;
@@ -331,6 +336,8 @@ void main() {
 		blendColor.rgb = waveModulation;
 		fragColor.a = 1.0;
 		return;
+	} else if (isLava) {
+		discard;
 	} else {
 
 		fragColor.rgb = textureColor.rgb;

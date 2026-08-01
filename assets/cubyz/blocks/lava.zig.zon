@@ -13,7 +13,11 @@
 	.terminalVelocity = 0.8,
 	.mobility = 0.1,
 	.model = "cubyz:cube",
+	.rotation = "cubyz:fluid",
 	.texture = "cubyz:lava",
+	.onUpdate = .{
+		.type = .fluid_spread,
+	},
 	.onTouch = .{
 		.type = .hurt,
 		.dps = 2.0,

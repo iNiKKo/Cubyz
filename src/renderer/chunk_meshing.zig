@@ -62,6 +62,8 @@ const UniformStruct = struct {
 	waterTime: c_int,
 
 	waterTextureIndex: c_int,
+	lavaTextureIndex: c_int,
+	playerInWater: c_int,
 
 	snowTextureIndex: c_int,
 	reflectionsEnabled: c_int,
@@ -277,6 +279,8 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.waterTime, waterTime);
 	const waterBlock: Block = .{.typ = blocks.getTypeById("cubyz:water"), .data = 0};
 	c.glUniform1i(locations.waterTextureIndex, blocks.meshes.textureIndex(waterBlock, 0));
+	const lavaBlock: Block = .{.typ = blocks.getTypeById("cubyz:lava"), .data = 0};
+	c.glUniform1i(locations.lavaTextureIndex, blocks.meshes.textureIndex(lavaBlock, 0));
 	const snowBlock: Block = .{.typ = blocks.getTypeById("cubyz:snow"), .data = 0};
 	c.glUniform1i(locations.snowTextureIndex, blocks.meshes.textureIndex(snowBlock, 0));
 	c.glUniform1i(locations.foliageSway, @intFromBool(main.settings.foliageSway));
@@ -341,6 +345,8 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	transparentPipeline.bind(null);
 
 	const playerPos = game.Player.getEyePosBlocking();
+	const playerBlock = mesh_storage.getBlockFromRenderThread(@intFromFloat(@floor(playerPos[0])), @intFromFloat(@floor(playerPos[1])), @intFromFloat(@floor(playerPos[2])));
+	c.glUniform1i(transparentUniforms.playerInWater, @intFromBool(playerBlock != null and playerBlock.?.typ == blocks.getTypeById("cubyz:water")));
 	const skyIslandAir = playerPos[2] > 2000.0;
 	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
 	var fogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
@@ -856,6 +862,7 @@ pub const ChunkMesh = struct {
 	}
 
 	fn canBeSeenThroughOtherBlock(block: Block, other: Block, neighbor: chunk.Neighbor) bool {
+		if (block.typ == other.typ and block.hasTag(.fluid)) return false;
 		const rotatedModel = blocks.meshes.model(block).model();
 		_ = rotatedModel;
 		return block.typ != 0 and (other.typ == 0 or (block.typ != other.typ and other.viewThrough()) or other.alwaysViewThrough() or !blocks.meshes.model(other).model().isNeighborOccluded[neighbor.reverse().toInt()]);
@@ -1009,7 +1016,7 @@ pub const ChunkMesh = struct {
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
 
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1038,7 +1045,7 @@ pub const ChunkMesh = struct {
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1067,7 +1074,7 @@ pub const ChunkMesh = struct {
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1096,7 +1103,7 @@ pub const ChunkMesh = struct {
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1125,7 +1132,7 @@ pub const ChunkMesh = struct {
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
@@ -1154,7 +1161,7 @@ pub const ChunkMesh = struct {
 						if (depthFilteredViewThroughMask[x][y] & setBit != 0) block.typ = block.opaqueVariant();
 						if (block.viewThrough() and !block.alwaysViewThrough()) {
 							const neighborBlock = self.chunk.data.getValue(neighborPos.toIndex());
-							if (block.typ == neighborBlock.typ and block.data == neighborBlock.data) continue;
+							if (block.typ == neighborBlock.typ and (block.data == neighborBlock.data or block.hasTag(.fluid))) continue;
 						}
 						if (block.transparent()) {
 							if (block.hasBackFace()) {
