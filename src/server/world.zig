@@ -1287,7 +1287,6 @@ pub const ServerWorld = struct {
 			}
 		}
 		baseChunk.mutex.lock();
-		defer baseChunk.mutex.unlock();
 
 		if (currentBlock != _newBlock) {
 			if (currentBlock.blockEntity()) |blockEntity| {
@@ -1304,6 +1303,7 @@ pub const ServerWorld = struct {
 		for (userList) |user| {
 			main.network.protocols.blockUpdate.send(user.conn, &.{.{.pos = .{wx, wy, wz}, .newBlock = newBlock, .blockEntityData = &.{}}});
 		}
+		baseChunk.mutex.unlock();
 
 		if (oldBlock) |block| {
 			if (block.typ != newBlock.typ) {

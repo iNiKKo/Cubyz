@@ -2085,6 +2085,24 @@ pub const MeshSelection = struct {
 		return true;
 	}
 
+	fn canPlaceDoor(pos: Vec3i, block: main.blocks.Block) bool {
+		if (block.mode() != main.rotation.getByID("cubyz:door")) return true;
+		const upper = mesh_storage.getBlockFromRenderThread(pos[0], pos[1], pos[2] + 1) orelse return false;
+		return upper.replaceable() and canPlaceBlock(pos + Vec3i{0, 0, 1}, block);
+	}
+
+	fn placeDoorUpperHalf(pos: Vec3i, block: main.blocks.Block) void {
+		if (block.mode() != main.rotation.getByID("cubyz:door")) return;
+		const upperPos = pos + Vec3i{0, 0, 1};
+		const upper = mesh_storage.getBlockFromRenderThread(upperPos[0], upperPos[1], upperPos[2]) orelse return;
+		if (!upper.replaceable()) return;
+		mesh_storage.updateBlock(.{
+			.pos = upperPos,
+			.newBlock = .{.typ = block.typ, .data = (block.data & 7) | 8},
+			.blockEntityData = &.{},
+		});
+	}
+
 	pub fn placeBlock(inventory: main.items.Inventory.ClientInventory, slot: u32) void {
 		if (selectedBlockPos) |selectedPos| {
 			var oldBlock = mesh_storage.getBlockFromRenderThread(selectedPos[0], selectedPos[1], selectedPos[2]) orelse return;
@@ -2127,8 +2145,9 @@ pub const MeshSelection = struct {
 							block.typ = itemBlock;
 							block.data = 0;
 							if (rotationMode.generateData(main.game.world.?, neighborPos, relPos, lastDir, neighborDir, neighborOfSelection, &block, neighborBlock, true)) {
-								if (!canPlaceBlock(neighborPos, block)) return;
+								if (!canPlaceBlock(neighborPos, block) or !canPlaceDoor(neighborPos, block)) return;
 								updateBlockAndSendUpdate(inventory, slot, neighborPos, oldBlock, block);
+								placeDoorUpperHalf(neighborPos, block);
 								return;
 							}
 						}

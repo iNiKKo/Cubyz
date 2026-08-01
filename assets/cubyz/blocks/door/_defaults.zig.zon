@@ -1,0 +1,13 @@
+.{
+	.tags = .{.choppable, .wood},
+	.blockHealth = 5,
+	.drops = .{
+		.{.items = .{.auto}},
+	},
+	.absorbedLight = 0x202830,
+	.rotation = "cubyz:door",
+	.model = "cubyz:door",
+	.onInteract = .{.type = .toggle_door},
+	.onBreak = .{.type = .door_break},
+	.onUpdate = .{.type = .door_sync},
+}

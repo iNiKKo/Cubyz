@@ -24,6 +24,10 @@
 		.output = "cubyz:sign/{type}",
 	},
 	.{
+		.inputs = .{"2 cubyz:planks/{type}"},
+		.output = "cubyz:door/{type}",
+	},
+	.{
 		.inputs = .{"4 cubyz:planks/{type}"},
 		.output = "cubyz:chest/{type}",
 	},
