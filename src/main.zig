@@ -422,7 +422,7 @@ pub fn clientMain() void {
 		gui.windowlist.save_selection.openWorld(settings.launchConfig.autoEnterWorld);
 	}
 
-	Window.GLFWCallbacks.framebufferSize(undefined, Window.width, Window.height);
+	Window.updateFramebufferSize();
 	var lastBeginRendering = timestamp();
 
 	audio.setMusic("cubyz:totaldemented/cubyz_remastered");

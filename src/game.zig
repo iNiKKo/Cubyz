@@ -561,6 +561,19 @@ pub const World = struct {
 
 		dayTimeFraction: f32 = 0,
 
+		pub fn weatherVisibilityAtAltitude(self: *const DayTime, z: f64) f32 {
+			return if (z > 6000.0) 0.0 else self.weatherVisibility;
+		}
+
+		pub fn weatherFogDensity(self: *const DayTime, baseDensity: f32, z: f64) f32 {
+			return @max(baseDensity, self.weatherVisibilityAtAltitude(z)/self.weatherFogRange);
+		}
+
+		pub fn weatherFogColor(self: *const DayTime, clearColor: Vec3f, visibility: f32) Vec3f {
+			const tint = std.math.clamp(visibility*1.15, 0.0, 0.85);
+			return clearColor + (self.fog.fogColor - clearColor)*@as(Vec3f, @splat(tint));
+		}
+
 		pub fn getDayProgress(self: *DayTime) f32 {
 			return (@as(f32, @floatFromInt(self.dayTime)) + self.dayTimeFraction)/@as(f32, @floatFromInt(dayCycleLength));
 		}
@@ -755,11 +768,13 @@ pub fn releasePlace(_: main.Window.Key.Modifiers) void {
 pub fn pressBreak(_: main.Window.Key.Modifiers) void {
 	const time = main.timestamp();
 	nextBlockBreakTime = time.addDuration(main.settings.updateRepeatDelay);
+	main.renderer.MeshSelection.startAirPunch();
 	Player.breakBlock(0);
 }
 
 pub fn releaseBreak(_: main.Window.Key.Modifiers) void {
 	nextBlockBreakTime = null;
+	main.renderer.MeshSelection.stopBreaking();
 }
 
 pub fn pressAcquireSelectedBlock(_: main.Window.Key.Modifiers) void {

@@ -730,15 +730,14 @@ fn update() void {
 			const half: i32 = @intCast(main.game.WeatherGrid.dimension/2);
 			const originCell = centerCell - @as(Vec2i, @splat(half));
 			var cells: [main.game.WeatherGrid.cell_count]main.game.WeatherGrid.Cell = undefined;
-			var gridWind = weather.wind;
+			const gridWind = weather.wind;
 			for (0..main.game.WeatherGrid.dimension) |gy| {
 				for (0..main.game.WeatherGrid.dimension) |gx| {
 					const cellPos = originCell + Vec2i{@intCast(gx), @intCast(gy)};
 					const sampleX = cellPos[0]*main.game.WeatherGrid.cell_size + @divTrunc(main.game.WeatherGrid.cell_size, 2);
 					const sampleY = cellPos[1]*main.game.WeatherGrid.cell_size + @divTrunc(main.game.WeatherGrid.cell_size, 2);
 					const cellBiome = world.?.getBiomeAndSeed(sampleX, sampleY, pos[2]).biome;
-					const cellWeather = WeatherMap.sample(world.?.settings.seed, cellBiome, sampleX, sampleY, nowMillis);
-					gridWind = cellWeather.wind;
+					const cellWeather = WeatherMap.sampleWithWind(world.?.settings.seed, cellBiome, sampleX, sampleY, nowMillis, gridWind);
 					cells[gy*main.game.WeatherGrid.dimension + gx] = .{
 						.cloud_cover = @intFromFloat(std.math.clamp(cellWeather.cloudCover, 0.0, 1.0)*255.0),
 						.precipitation = @intFromFloat(std.math.clamp(cellWeather.precipitation, 0.0, 1.0)*255.0),

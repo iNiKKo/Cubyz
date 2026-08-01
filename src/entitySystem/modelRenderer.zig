@@ -130,7 +130,9 @@ pub const client = struct {
 
 	fn updateLayeredLookYaw(component: *main.entity.components.@"cubyz:model".client.Component, targetYaw: f32, dt: f32, horizontalSpeed: f32) void {
 		const headBudget = std.math.degreesToRadians(30.0);
-		const turnSpeed = std.math.degreesToRadians(360.0);
+		const headTurnSpeed = std.math.degreesToRadians(220.0);
+		const rootTurnSpeed = std.math.degreesToRadians(140.0);
+		const headReturnSpeed = std.math.degreesToRadians(165.0);
 
 		const holdBeforeResetTime = 1.2;
 
@@ -159,11 +161,11 @@ pub const client = struct {
 
 		if (@abs(totalDelta) <= headBudget and !forceRootCatchUp) {
 
-			component.headYawOffset = moveToward(component.headYawOffset, totalDelta, turnSpeed*dt);
+			component.headYawOffset = moveToward(component.headYawOffset, totalDelta, headTurnSpeed*dt);
 		} else {
 
-			component.rootYaw = component.rootYaw + moveToward(0, totalDelta, turnSpeed*dt);
-			component.headYawOffset = moveToward(component.headYawOffset, 0, turnSpeed*dt);
+			component.rootYaw = component.rootYaw + moveToward(0, totalDelta, rootTurnSpeed*dt);
+			component.headYawOffset = moveToward(component.headYawOffset, 0, headReturnSpeed*dt);
 		}
 	}
 	fn moveToward(current: f32, target: f32, maxDelta: f32) f32 {
@@ -173,6 +175,10 @@ pub const client = struct {
 	}
 
 	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f, horizontalSpeed: f32, verticalVelocity: f32, isHoldingItem: bool, miningSwing: ?f32) void {
+		const renderFrame = renderer.worldRenderFrame;
+		if (component.hasPoseRenderFrame and component.lastPoseRenderFrame == renderFrame) return;
+		component.lastPoseRenderFrame = renderFrame;
+		component.hasPoseRenderFrame = true;
 		const entModel = component.entityModel.get();
 		@memcpy(component.nodes, entModel.nodes);
 		const elapsedNanoseconds = main.renderer.chunk_meshing.startTimestamp.durationTo(main.timestamp()).toNanoseconds();
@@ -211,25 +217,21 @@ pub const client = struct {
 
 		const airborneThreshold = 0.5;
 		const isAirborne = @abs(verticalVelocity) > airborneThreshold;
+		var leftArmTarget: f32 = 0;
+		var rightArmTarget: f32 = 0;
+		var leftLegTarget: f32 = 0;
+		var rightLegTarget: f32 = 0;
 		if (isAirborne) {
 
 			const jumpBlend = std.math.clamp(verticalVelocity/3.0, -1.0, 1.0);
 			const legSplit = 0.35*std.math.clamp(jumpBlend, 0.0, 1.0);
-			if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
-				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -legSplit);
-			}
-			if (entModel.nodeIndexMap.get("RightLeg")) |id| {
-				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, legSplit);
-			}
+			leftLegTarget = -legSplit;
+			rightLegTarget = legSplit;
 
 			const armSwing = 0.6*std.math.clamp(jumpBlend, 0.0, 1.0);
-			if (entModel.nodeIndexMap.get("LeftArm")) |id| {
-				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, armSwing);
-			}
+			leftArmTarget = armSwing;
 			if (!isHoldingItem) {
-				if (entModel.nodeIndexMap.get("RightArm")) |id| {
-					component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -armSwing);
-				}
+				rightArmTarget = -armSwing;
 			}
 		} else {
 
@@ -240,20 +242,33 @@ pub const client = struct {
 
 				const step = @sin(component.walkPhase + phase);
 				const legSwing: f32 = 0.58*walkBlend;
-				if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
-					component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, step*legSwing);
-				}
-				if (entModel.nodeIndexMap.get("RightLeg")) |id| {
-					component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -step*legSwing);
-				}
+				leftLegTarget = step*legSwing;
+				rightLegTarget = -step*legSwing;
 			}
 		}
 
+		const swing = if (miningSwing) |progress| @sin(progress * std.math.pi) * 0.80 else 0.0;
 		if (isHoldingItem) {
-			if (entModel.nodeIndexMap.get("RightArm")) |id| {
-				const swing = if (miningSwing) |progress| @sin(progress * std.math.pi) * 0.80 else 0.0;
-				component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, -0.52 - swing);
-			}
+			rightArmTarget = -0.52 - swing;
+		} else if (miningSwing != null) {
+			rightArmTarget = -swing;
+		}
+		const poseBlend = 1.0 - @exp(-10.0*dt);
+		component.leftArmAngle += (leftArmTarget - component.leftArmAngle)*poseBlend;
+		component.rightArmAngle += (rightArmTarget - component.rightArmAngle)*poseBlend;
+		component.leftLegAngle += (leftLegTarget - component.leftLegAngle)*poseBlend;
+		component.rightLegAngle += (rightLegTarget - component.rightLegAngle)*poseBlend;
+		if (entModel.nodeIndexMap.get("LeftArm")) |id| {
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.leftArmAngle);
+		}
+		if (entModel.nodeIndexMap.get("RightArm")) |id| {
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.rightArmAngle);
+		}
+		if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.leftLegAngle);
+		}
+		if (entModel.nodeIndexMap.get("RightLeg")) |id| {
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.rightLegAngle);
 		}
 		const headId = entModel.nodeIndexMap.get("Head");
 		if (headId) |id| {
@@ -316,7 +331,8 @@ pub const client = struct {
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.hasRemoteHeldItem(id), main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
+			const heldAnimation = main.itemdrop.ItemDisplayManager.remoteHeldAnimationState(id);
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing);
 			const entModel = component.entityModel.get();
 			entModel.bind();
 			entModel.defaultTexture.?.bindTo(0);
@@ -406,7 +422,8 @@ pub const client = struct {
 			const ent = main.client.entity_manager.getEntity(id) orelse continue;
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, main.itemdrop.ItemDisplayManager.hasRemoteHeldItem(id), main.itemdrop.ItemDisplayManager.remoteMiningSwing(id));
+			const heldAnimation = main.itemdrop.ItemDisplayManager.remoteHeldAnimationState(id);
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing);
 		}
 
 		pipeline.bind(null);
@@ -448,23 +465,9 @@ pub const client = struct {
 		c.glUniform3fv(uniforms.dropLightColor7, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.dropLightColors[7]));
 		c.glUniform1f(uniforms.handLightRadius, main.itemdrop.ItemDisplayManager.handLightRadius);
 
-		var nearestRemoteLightPos: Vec3f = @splat(0);
-		var nearestRemoteLightColor: Vec3f = @splat(0);
-		var nearestRemoteLightDistance: f32 = std.math.inf(f32);
-		for (main.client.entity_manager.entities.items()) |ent| {
-			if (ent.id == game.Player.id) continue;
-			const blockType = main.itemdrop.ItemDisplayManager.remoteHeldLight(ent.id) orelse continue;
-			const rel: Vec3f = @floatCast(ent.getRenderPosition() - playerPos + Vec3d{0.35, 0.0, 0.1});
-			const dist = vec.lengthSquare(rel);
-			if (dist < nearestRemoteLightDistance) {
-				nearestRemoteLightDistance = dist;
-				nearestRemoteLightPos = rel;
-				const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
-				nearestRemoteLightColor = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0));
-			}
-		}
-		c.glUniform3fv(uniforms.remoteHandLightPositionRelative, 1, @ptrCast(&nearestRemoteLightPos));
-		c.glUniform3fv(uniforms.remoteHandLightColor, 1, @ptrCast(&nearestRemoteLightColor));
+		const nearestRemoteLight = main.itemdrop.ItemDisplayManager.closestRemoteLightWithEntitiesLocked(playerPos);
+		c.glUniform3fv(uniforms.remoteHandLightPositionRelative, 1, @ptrCast(&nearestRemoteLight.positionRelative));
+		c.glUniform3fv(uniforms.remoteHandLightColor, 1, @ptrCast(&nearestRemoteLight.color));
 
 		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();
 

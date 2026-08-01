@@ -32,9 +32,15 @@ pub const client = struct {
 		nodes: []EntityModel.Node = undefined,
 
 		walkPhase: f32 = 0,
+		leftArmAngle: f32 = 0,
+		rightArmAngle: f32 = 0,
+		leftLegAngle: f32 = 0,
+		rightLegAngle: f32 = 0,
 
 		lastWalkUpdateTime: f32 = 0,
 		hasWalkUpdateTime: bool = false,
+		lastPoseRenderFrame: u64 = 0,
+		hasPoseRenderFrame: bool = false,
 
 		rootYaw: f32 = 0,
 		headYawOffset: f32 = 0,

@@ -12,6 +12,9 @@
 	.absorbedLight = 0x121012,
 	.model = "cubyz:plane",
 	.rotation = "cubyz:carpet",
+	.onUpdate = .{
+		.type = .check_support_blocks,
+	},
 	.texture = "cubyz:ivy",
 	.item = .{
 		.texture = "ivy.png",

@@ -38,6 +38,7 @@ pub const fsr2 = @import("renderer/fsr2.zig");
 const maximumMeshTime: std.Io.Duration = .fromMilliseconds(12);
 pub const zNear = 0.1;
 pub const zFar = 65536.0;
+pub var worldRenderFrame: u64 = 0;
 
 const submergedTerrainRenderDistance: f64 = 72.0;
 
@@ -278,6 +279,7 @@ fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
 }
 
 pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
+	worldRenderFrame +%= 1;
 	const msaaActive = settings.antiAliasingMode == .msaa;
 	if (msaaActive) {
 		MSAA.updateSize(lastWidth, lastHeight);
@@ -431,7 +433,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	waterSurfaceFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
-	const weatherWaterMask = !isSubmerged and world.dayTime.weatherVisibility > 0.001 and playerPos[2] < 6000.0;
+	const weatherVisibilityAtPlayer = world.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
+	const weatherWaterMask = !isSubmerged and weatherVisibilityAtPlayer > 0.001;
 	if (isSubmerged or weatherWaterMask) {
 		chunk_meshing.drawWaterSurfaceMask(&chunkLists, ambientLight, weatherWaterMask);
 	}
@@ -445,6 +448,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
 
 	if (!isSubmerged and playerPos[2] < 6000.0) {
+		worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE13);
 		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 	}
@@ -467,7 +471,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		Bloom.bindReplacementImage();
 	}
 
-	if (settings.godRays and game.world.?.dayTime.weatherVisibility < 0.02) {
+	if (settings.godRays and weatherVisibilityAtPlayer < 0.02) {
 		gpu_performance_measuring.startQuery(.god_rays);
 		GodRays.render(lastWidth, lastHeight, game.camera.viewMatrix);
 		gpu_performance_measuring.stopQuery();
@@ -522,12 +526,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 			fogColor = skyColorVal + (baseFogColor - skyColorVal) * @as(Vec3f, @splat(cloudAltFactor));
 		}
 
-		const weatherVisibility = if (playerZ > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
+		const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
 		if (weatherVisibility > 0.001) {
-			const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
-			fogColor += (baseFogColor - fogColor) * @as(Vec3f, @splat(weatherFogTint));
+			fogColor = game.world.?.dayTime.weatherFogColor(fogColor, weatherVisibility);
 		}
-		fogDensity = @max(fogDensity, weatherVisibility / game.world.?.dayTime.weatherFogRange);
+		fogDensity = game.world.?.dayTime.weatherFogDensity(fogDensity, playerPos[2]);
 
 		c.glUniform3fv(deferredUniforms.@"fog.color", 1, @ptrCast(&fogColor));
 		c.glUniform1f(deferredUniforms.@"fog.density", fogDensity);
@@ -1552,7 +1555,6 @@ pub const ShadowRaymarch = struct {
 
 	fn init() void {
 		indexSSBO = .init();
-		indexSSBO.bind(21);
 	}
 
 	fn deinit() void {
@@ -1934,16 +1936,41 @@ pub const MeshSelection = struct {
 	var posBeforeBlock: Vec3i = undefined;
 	var neighborOfSelection: chunk.Neighbor = undefined;
 	pub var selectedBlockPos: ?Vec3i = null;
-	var lastSelectedBlockPos: Vec3i = undefined;
+	var lastSelectedBlockPos: ?Vec3i = null;
 	var currentBlockProgress: f32 = 0;
 	var currentSwingProgress: f32 = 0;
 	var currentSwingTime: f32 = 0;
+	var activeBreakingPos: ?Vec3i = null;
+	var airPunchStart: ?std.Io.Timestamp = null;
 	var lastMiningInputTime: std.Io.Timestamp = .fromNanoseconds(0);
 
+	fn sendBreakingProgress(pos: Vec3i, progress: f32) void {
+		if (game.world) |world| main.network.protocols.genericUpdate.sendBlockBreaking(world.conn, pos, progress);
+	}
+
+	pub fn stopBreaking() void {
+		if (activeBreakingPos) |pos| {
+			mesh_storage.removeBreakingAnimation(pos);
+			sendBreakingProgress(pos, -1.0);
+			activeBreakingPos = null;
+		}
+		currentBlockProgress = 0;
+	}
+
 	pub fn heldItemSwingProgress() ?f32 {
+		if (airPunchStart) |start| {
+			const elapsed = start.durationTo(main.timestamp()).toNanoseconds();
+			const progress: f32 = @floatCast(@as(f64, @floatFromInt(elapsed))*1e-9/0.32);
+			if (progress < 1.0) return std.math.clamp(progress, 0.0, 1.0);
+			return null;
+		}
 		const elapsedSinceInput = lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds();
 		if (currentSwingTime <= 0 or elapsedSinceInput > 150_000_000) return null;
 		return std.math.clamp(currentSwingProgress/currentSwingTime, 0.0, 1.0);
+	}
+	pub fn startAirPunch() void {
+		if (selectedBlockPos != null) return;
+		airPunchStart = main.timestamp();
 	}
 	var selectionMin: Vec3f = undefined;
 	var selectionMax: Vec3f = undefined;
@@ -2093,6 +2120,7 @@ pub const MeshSelection = struct {
 		}
 		lastMiningInputTime = now;
 		if (selectedBlockPos) |selectedPos| {
+			airPunchStart = null;
 			const stack = inventory.getStack(slot);
 			const isSelectionWand = stack.item == .baseItem and std.mem.eql(u8, stack.item.baseItem.id(), "cubyz:selection_wand");
 			if (isSelectionWand) {
@@ -2101,8 +2129,8 @@ pub const MeshSelection = struct {
 				return;
 			}
 
-			if (@reduce(.Or, lastSelectedBlockPos != selectedPos)) {
-				mesh_storage.removeBreakingAnimation(lastSelectedBlockPos);
+			if (lastSelectedBlockPos == null or @reduce(.Or, lastSelectedBlockPos.? != selectedPos)) {
+				stopBreaking();
 				currentSwingProgress = 0;
 				currentSwingTime = 0;
 				lastSelectedBlockPos = selectedPos;
@@ -2110,7 +2138,10 @@ pub const MeshSelection = struct {
 			}
 			const block = mesh_storage.getBlockFromRenderThread(selectedPos[0], selectedPos[1], selectedPos[2]) orelse return;
 			const holdingTargetedBlock = stack.item == .baseItem and stack.item.baseItem.block() == block.typ;
-			if ((block.hasTag(.fluid) or block.hasTag(.air)) and !holdingTargetedBlock) return;
+			if ((block.hasTag(.fluid) or block.hasTag(.air)) and !holdingTargetedBlock) {
+				stopBreaking();
+				return;
+			}
 
 			const relPos: Vec3f = @floatCast(lastPos - @as(Vec3d, @floatFromInt(selectedPos)));
 
@@ -2143,25 +2174,28 @@ pub const MeshSelection = struct {
 						currentSwingTime = damagePerSwing/damage*swingTime;
 					}
 					if (currentBlockProgress < 0.9999) {
-						mesh_storage.removeBreakingAnimation(lastSelectedBlockPos);
+						mesh_storage.removeBreakingAnimation(selectedPos);
 						if (currentBlockProgress != 0) {
-							mesh_storage.addBreakingAnimation(lastSelectedBlockPos, currentBlockProgress);
+							mesh_storage.addBreakingAnimation(selectedPos, currentBlockProgress);
+							activeBreakingPos = selectedPos;
+							sendBreakingProgress(selectedPos, currentBlockProgress);
 						}
 						main.sync.client.mutex.unlock();
 
 						return;
 					} else {
 						currentSwingProgress = 0;
-						mesh_storage.removeBreakingAnimation(lastSelectedBlockPos);
+						stopBreaking();
 						currentBlockProgress = 0;
 						currentSwingTime = 0;
 					}
 				} else {
 					main.sync.client.mutex.unlock();
+					stopBreaking();
 					return;
 				}
 			} else {
-				mesh_storage.removeBreakingAnimation(lastSelectedBlockPos);
+				stopBreaking();
 			}
 
 			var newBlock = block;
@@ -2171,6 +2205,9 @@ pub const MeshSelection = struct {
 			if (newBlock != block) {
 				updateBlockAndSendUpdate(inventory, slot, selectedPos, block, newBlock);
 			}
+		} else {
+			stopBreaking();
+			lastSelectedBlockPos = null;
 		}
 	}
 

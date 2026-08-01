@@ -157,7 +157,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 			const worldX: f64 = (@as(f64, @floatFromInt(worldCellX)) + 0.5)*cellSize + jitterX;
 			const worldY: f64 = (@as(f64, @floatFromInt(worldCellY)) + 0.5)*cellSize + jitterY;
 
-			const weather = game.world.?.weatherGrid.sampleAt(worldX, worldY);
+			const weather = game.WeatherGrid.sampleSnapshot(weatherSnapshot, worldX, worldY);
 
 			if (weather.kind != 1 and weather.kind != 2 and weather.kind != 3) continue;
 			const isSnow = weather.kind == 2;

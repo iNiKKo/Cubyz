@@ -10,8 +10,11 @@ layout(location = 6) uniform float baseAlpha;
 uniform vec3 fogColor;
 uniform float fogDensity;
 uniform float weatherFogStrength;
+layout(binding = 13) uniform sampler2D sceneDepth;
 
 void main() {
+	vec2 sceneTexel = gl_FragCoord.xy/vec2(textureSize(sceneDepth, 0));
+	if (gl_FragCoord.z > texture(sceneDepth, sceneTexel).r + 1e-6) discard;
 	vec3 color = tint*brightness;
 	if (weatherFogStrength > 0.001) {
 

@@ -347,8 +347,8 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
 	var fogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
 
-	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
-	fogDensity = @max(fogDensity, weatherVisibility/game.world.?.dayTime.weatherFogRange);
+	const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
+	fogDensity = game.world.?.dayTime.weatherFogDensity(fogDensity, playerPos[2]);
 	c.glUniform1f(transparentUniforms.@"fog.density", fogDensity);
 	c.glUniform1f(transparentUniforms.@"fog.fogLower", if (skyIslandAir) -1e5 else game.world.?.dayTime.fog.fogLower);
 	c.glUniform1f(transparentUniforms.@"fog.fogHigher", if (skyIslandAir) 1e5 else game.world.?.dayTime.fog.fogHigher);
@@ -366,12 +366,10 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 fn bindWaterSurfaceShaderAndUniforms(ambient: Vec3f) void {
 	waterSurfacePipeline.bind(null);
 	const playerPos = game.Player.getEyePosBlocking();
-	const weatherVisibility: f32 = if (playerPos[2] > 6000.0) 0.0 else game.world.?.dayTime.weatherVisibility;
+	const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
 	c.glUniform1f(waterSurfaceUniforms.weatherFogStrength, weatherVisibility);
 
-	var weatherFogColor = game.world.?.dayTime.fog.skyColor;
-	const weatherFogTint = std.math.clamp(weatherVisibility * 1.15, 0.0, 0.85);
-	weatherFogColor += (game.world.?.dayTime.fog.fogColor - weatherFogColor) * @as(Vec3f, @splat(weatherFogTint));
+	const weatherFogColor = game.world.?.dayTime.weatherFogColor(game.world.?.dayTime.fog.skyColor, weatherVisibility);
 	c.glUniform3fv(waterSurfaceUniforms.weatherFogColor, 1, @ptrCast(&weatherFogColor));
 	bindCommonUniforms(&waterSurfaceUniforms, ambient);
 	vao.bind();
@@ -446,7 +444,10 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) voi
 
 		bindTransparentShaderAndUniforms(ambient);
 		c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
+		c.glEnable(c.GL_POLYGON_OFFSET_FILL);
+		c.glPolygonOffset(-1.0, -1.0);
 		c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
+		c.glDisable(c.GL_POLYGON_OFFSET_FILL);
 		return;
 	}
 
@@ -1703,6 +1704,8 @@ pub const ChunkMesh = struct {
 	}
 
 	pub fn prepareTransparentRendering(self: *ChunkMesh, playerPosition: Vec3d, chunkLists: *[main.settings.highestSupportedLod + 1]main.ListManaged(u32)) void {
+		self.mutex.lock();
+		defer self.mutex.unlock();
 		if (self.transparentMesh.vertexCount == 0 and self.blockBreakingFaces.items.len == 0) return;
 
 		var needsUpdate: bool = false;

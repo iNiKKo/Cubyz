@@ -610,6 +610,7 @@ pub const genericUpdate = struct {
 		clear = 6,
 		rainIntensity = 7,
 		weatherGrid = 8,
+		blockBreaking = 9,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -693,6 +694,15 @@ pub const genericUpdate = struct {
 				}
 				world.weatherGrid.update(origin, wind, timeMillis, cells);
 			},
+			.blockBreaking => {
+				const entityId = try reader.readEnum(main.entity.Entity);
+				const pos = try reader.readVec(Vec3i);
+				const progress = try reader.readFloat(f32);
+				if (entityId != game.Player.id) {
+					main.renderer.mesh_storage.removeBreakingAnimation(pos);
+					if (progress >= 0.0) main.renderer.mesh_storage.addBreakingAnimation(pos, progress);
+				}
+			},
 			.particles => {
 				const particleIdLen = try reader.readVarInt(u16);
 				const particleId = try reader.readSlice(particleIdLen);
@@ -729,7 +739,15 @@ pub const genericUpdate = struct {
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		switch (try reader.readEnum(UpdateType)) {
-			.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity, .weatherGrid => return error.InvalidSide,
+		.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity, .weatherGrid => return error.InvalidSide,
+		.blockBreaking => {
+			const pos = try reader.readVec(Vec3i);
+			const progress = try reader.readFloat(f32);
+			const source = conn.user.?.id;
+			const users = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(users);
+			for (users) |user| sendBlockBreakingTo(user.conn, source, pos, progress);
+		},
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
 				const pos: ?Vec3i = switch (typ) {
@@ -809,6 +827,25 @@ pub const genericUpdate = struct {
 			writer.writeInt(u8, cell.dust);
 			writer.writeInt(u8, cell.kind);
 		}
+		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendBlockBreaking(conn: *Connection, pos: Vec3i, progress: f32) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + @sizeOf(Vec3i) + @sizeOf(f32));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .blockBreaking);
+		writer.writeVec(Vec3i, pos);
+		writer.writeFloat(f32, progress);
+		conn.send(.lossy, id, writer.data.items);
+	}
+
+	fn sendBlockBreakingTo(conn: *Connection, entityId: main.entity.Entity, pos: Vec3i, progress: f32) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + @sizeOf(main.entity.Entity) + @sizeOf(Vec3i) + @sizeOf(f32));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .blockBreaking);
+		writer.writeEnum(main.entity.Entity, entityId);
+		writer.writeVec(Vec3i, pos);
+		writer.writeFloat(f32, progress);
 		conn.send(.lossy, id, writer.data.items);
 	}
 

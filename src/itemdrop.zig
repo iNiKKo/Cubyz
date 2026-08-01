@@ -526,7 +526,7 @@ pub const ItemDisplayManager = struct {
 	pub var handLightRadius: f32 = 12.0;
 
 	pub var heldToolOffset: Vec3f = .{0.0, 0.25, 0.10};
-	pub var heldToolRotation: Vec3f = .{-110.0, 0.0, 90.0};
+	pub var heldToolRotation: Vec3f = .{-20.0, 0.0, -90.0};
 	pub var heldToolScale: f32 = 1.60;
 	const maxReplicatedPlayers = 1024;
 	pub const HeldLightTransform = Vec4f;
@@ -571,12 +571,56 @@ pub const ItemDisplayManager = struct {
 		defer remoteHeldItemsMutex.unlock();
 		return remoteHeldItems[id].item != .null;
 	}
-	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
-		const item = remoteHeldItem(entityId) orelse return null;
-		defer item.deinit();
+	pub const RemoteHeldAnimationState = struct {
+		isHoldingItem: bool = false,
+		miningSwing: ?f32 = null,
+	};
+	pub const RemoteHeldRenderSnapshot = struct {
+		item: items.Item,
+		transform: HeldLightTransform,
+		toolRotationYZ: Vec2f,
+		toolScale: f32,
+
+		pub fn deinit(self: RemoteHeldRenderSnapshot) void {
+			self.item.deinit();
+		}
+	};
+	pub fn remoteHeldRenderSnapshot(entityId: main.entity.Entity) ?RemoteHeldRenderSnapshot {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers) return null;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		const held = remoteHeldItems[id];
+		if (held.item == .null) return null;
+		return .{
+			.item = held.item.clone(),
+			.transform = held.transform,
+			.toolRotationYZ = held.toolRotationYZ,
+			.toolScale = held.toolScale,
+		};
+	}
+	pub fn remoteHeldAnimationState(entityId: main.entity.Entity) RemoteHeldAnimationState {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers) return .{};
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		const held = remoteHeldItems[id];
+		return .{
+			.isHoldingItem = held.item != .null,
+			.miningSwing = if (held.miningSwing < 0) null else held.miningSwing,
+		};
+	}
+	fn emissiveHeldBlockType(item: items.Item) ?u16 {
 		if (item != .baseItem) return null;
 		const blockType = item.baseItem.block() orelse return null;
 		return if ((blocks.Block{ .typ = blockType, .data = 0 }).light() != 0) blockType else null;
+	}
+	pub fn remoteHeldLight(entityId: main.entity.Entity) ?u16 {
+		const id = @intFromEnum(entityId);
+		if (id >= maxReplicatedPlayers) return null;
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
+		return emissiveHeldBlockType(remoteHeldItems[id].item);
 	}
 	pub fn remoteHeldLightTransform(entityId: main.entity.Entity) HeldLightTransform {
 		const id = @intFromEnum(entityId);
@@ -624,23 +668,31 @@ pub const ItemDisplayManager = struct {
 	}
 	pub const RemoteLight = struct { positionRelative: Vec3f = @splat(0), color: Vec3f = @splat(0) };
 
-	pub fn closestRemoteLight(playerPos: Vec3d) RemoteLight {
+	pub fn closestRemoteLightWithEntitiesLocked(playerPos: Vec3d) RemoteLight {
 		var result: RemoteLight = .{};
 		var bestDistance = std.math.inf(f32);
-		main.client.entity_manager.mutex.lock();
-		defer main.client.entity_manager.mutex.unlock();
+		remoteHeldItemsMutex.lock();
+		defer remoteHeldItemsMutex.unlock();
 		for (main.client.entity_manager.entities.items()) |ent| {
 			if (ent.id == game.Player.id) continue;
-			const blockType = remoteHeldLight(ent.id) orelse continue;
+			const id = @intFromEnum(ent.id);
+			if (id >= maxReplicatedPlayers) continue;
+			const blockType = emissiveHeldBlockType(remoteHeldItems[id].item) orelse continue;
 			const rel: Vec3f = @floatCast(ent.getRenderPosition() - playerPos + Vec3d{0.35, 0.0, 0.1});
 			const distance = vec.lengthSquare(rel);
 			if (distance >= bestDistance) continue;
 			const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
 			bestDistance = distance;
 			result.positionRelative = rel;
-			result.color = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0));
+			result.color = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0)) * @as(Vec3f, @splat(0.55));
 		}
 		return result;
+	}
+
+	pub fn closestRemoteLight(playerPos: Vec3d) RemoteLight {
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		return closestRemoteLightWithEntitiesLocked(playerPos);
 	}
 
 	pub fn update(deltaTime: f64) void {
@@ -680,7 +732,7 @@ pub const ItemDisplayManager = struct {
 						@floatFromInt(light >> 16 & 255),
 						@floatFromInt(light >> 8 & 255),
 						@floatFromInt(light & 255),
-					} / @as(Vec3f, @splat(255.0));
+					} / @as(Vec3f, @splat(255.0)) * @as(Vec3f, @splat(0.55));
 					const pos = Vec3f{0.4, 0.55, -0.32};
 					const invViewRotation = game.camera.viewMatrix.transpose();
 					handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
@@ -1013,11 +1065,12 @@ pub const ItemDropRenderer = struct {
 		bindCommonUniforms(ambientLight);
 		for (main.client.entity_manager.entities.items()) |ent| {
 			if (ent.id == game.Player.id) continue;
-			const item = ItemDisplayManager.remoteHeldItem(ent.id) orelse continue;
-			defer item.deinit();
+			const held = ItemDisplayManager.remoteHeldRenderSnapshot(ent.id) orelse continue;
+			defer held.deinit();
+			const item = held.item;
 			const baseItem = if (item == .baseItem) item.baseItem else null;
 			const blockType = if (baseItem) |candidate| candidate.block() else null;
-			const emittedLight = getItemEmittedLight(item);
+			const emittedLight = getItemEmittedLight(item) * @as(Vec3f, @splat(0.55));
 
 			const useBlockModel = if (baseItem) |candidate| blockType != null and (emittedLight[0] != 0 or emittedLight[1] != 0 or emittedLight[2] != 0 or candidate.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr) else false;
 			const model = if (useBlockModel) getBlockModel(item) else getModel(item);
@@ -1025,7 +1078,7 @@ pub const ItemDropRenderer = struct {
 			bindModelUniforms(model.index, if (useBlockModel) blockType.? else 0);
 			const blockPos: Vec3i = @floor(ent.pos);
 			const light: [6]u8 = main.renderer.mesh_storage.getLight(blockPos[0], blockPos[1], blockPos[2]) orelse @splat(0);
-			bindLightUniform(light, ambientLight, getItemEmittedLight(item));
+			bindLightUniform(light, ambientLight, emittedLight);
 			const position: Vec3f = @floatCast(ent.getRenderPosition() - playerPos);
 			const modelComponent = main.entity.components.@"cubyz:model".client.get(ent.id);
 			const entityModel = if (modelComponent) |component| component.entityModel.get() else null;
@@ -1050,14 +1103,14 @@ pub const ItemDropRenderer = struct {
 				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(@as(f32, std.math.pi / 2.0)));
 			} else {
 
-			const transform = ItemDisplayManager.remoteHeldLightTransform(ent.id);
+			const transform = held.transform;
 			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
 			modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
 			if (item == .proceduralItem) {
-				const toolRotationYZ = ItemDisplayManager.remoteHeldToolRotationYZ(ent.id);
+				const toolRotationYZ = held.toolRotationYZ;
 				modelMatrix = modelMatrix.mul(Mat4f.rotationY(std.math.degreesToRadians(toolRotationYZ[0])));
 				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(std.math.degreesToRadians(toolRotationYZ[1])));
-				modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(ItemDisplayManager.remoteHeldToolScale(ent.id))));
+				modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(held.toolScale)));
 			}
 			}
 

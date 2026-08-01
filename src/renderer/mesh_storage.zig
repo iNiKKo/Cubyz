@@ -869,7 +869,11 @@ pub fn updateLightMap(map: *LightMap.LightMapFragment) void {
 }
 
 pub fn addBreakingAnimation(pos: Vec3i, breakingProgress: f32) void {
-	const animationFrame: usize = @trunc(breakingProgress*@as(f32, @floatFromInt(main.blocks.meshes.blockBreakingTextures.items.len)));
+	if (main.blocks.meshes.blockBreakingTextures.items.len == 0) return;
+	const animationFrame = @min(
+		@as(usize, @intFromFloat(@max(breakingProgress, 0.0)*@as(f32, @floatFromInt(main.blocks.meshes.blockBreakingTextures.items.len)))),
+		main.blocks.meshes.blockBreakingTextures.items.len - 1,
+	);
 	const texture = main.blocks.meshes.blockBreakingTextures.items[animationFrame];
 
 	const block = getBlockFromRenderThread(pos[0], pos[1], pos[2]) orelse return;
@@ -923,6 +927,8 @@ fn removeBreakingAnimationFace(pos: Vec3i, quadIndex: main.models.QuadIndex, nei
 	const worldPos = pos +% if (neighbor) |n| n.relPos() else Vec3i{0, 0, 0};
 	const relPos = worldPos & @as(Vec3i, @splat(main.chunk.chunkMask));
 	const mesh = getMesh(.{.wx = worldPos[0], .wy = worldPos[1], .wz = worldPos[2], .voxelSize = 1}) orelse return;
+	mesh.mutex.lock();
+	defer mesh.mutex.unlock();
 	for (mesh.blockBreakingFaces.items, 0..) |face, i| {
 		if (face.position.x == relPos[0] and face.position.y == relPos[1] and face.position.z == relPos[2] and face.blockAndQuad.quadIndex == quadIndex) {
 			_ = mesh.blockBreakingFaces.swapRemove(i);

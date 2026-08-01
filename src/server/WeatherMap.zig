@@ -34,11 +34,14 @@ fn smoothstep(x: f32) f32 {
 	return t*t*(3.0 - 2.0*t);
 }
 
-pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: i64) WeatherSample {
+pub fn windAt(worldSeed: u64, nowMillis: i64) @Vector(2, f32) {
 	const epoch = @divFloor(nowMillis, windEpochMillis);
 	const epochStart = epoch*windEpochMillis;
 	const transition = smoothstep(@as(f32, @floatFromInt(nowMillis - epochStart))/@as(f32, @floatFromInt(windEpochMillis)));
-	const wind = windForEpoch(worldSeed, epoch)*@as(@Vector(2, f32), @splat(1.0 - transition)) + windForEpoch(worldSeed, epoch + 1)*@as(@Vector(2, f32), @splat(transition));
+	return windForEpoch(worldSeed, epoch)*@as(@Vector(2, f32), @splat(1.0 - transition)) + windForEpoch(worldSeed, epoch + 1)*@as(@Vector(2, f32), @splat(transition));
+}
+
+pub fn sampleWithWind(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: i64, wind: @Vector(2, f32)) WeatherSample {
 	const elapsedSeconds: f32 = @as(f32, @floatFromInt(nowMillis))*0.001;
 	const advectedX = @as(f32, @floatFromInt(wx)) - wind[0]*elapsedSeconds;
 	const advectedY = @as(f32, @floatFromInt(wy)) - wind[1]*elapsedSeconds;
@@ -88,4 +91,8 @@ pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: 
 
 	if (precipitation <= 0.01 and kind != .dust) kind = .none;
 	return .{.cloudCover = cloudCover, .precipitation = precipitation, .dust = dust, .wind = wind, .kind = kind};
+}
+
+pub fn sample(worldSeed: u64, biome: *const Biome, wx: i32, wy: i32, nowMillis: i64) WeatherSample {
+	return sampleWithWind(worldSeed, biome, wx, wy, nowMillis, windAt(worldSeed, nowMillis));
 }

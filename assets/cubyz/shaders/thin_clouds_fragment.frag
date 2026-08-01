@@ -13,6 +13,7 @@ uniform float maxAlpha;
 uniform vec3 fogColor;
 uniform float fogDensity;
 uniform float weatherFogStrength;
+layout(binding = 13) uniform sampler2D sceneDepth;
 
 const float noiseScale = 220.0;
 const float detailNoiseScale = noiseScale*0.4;
@@ -40,6 +41,8 @@ const float horizonFadeStart = 2500.0;
 const float horizonFadeEnd = 4000.0;
 
 void main() {
+	vec2 sceneTexel = gl_FragCoord.xy/vec2(textureSize(sceneDepth, 0));
+	if (gl_FragCoord.z > texture(sceneDepth, sceneTexel).r + 1e-6) discard;
 	vec2 worldPos = localPos + noiseOrigin;
 	float base = valueNoise(worldPos/noiseScale);
 	float detail = valueNoise(worldPos/detailNoiseScale);

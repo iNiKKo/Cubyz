@@ -541,6 +541,7 @@ pub const GLFWCallbacks = struct {
 	}
 
 	pub fn framebufferSize(_: ?*c.GLFWwindow, newWidth: c_int, newHeight: c_int) callconv(.c) void {
+		if (newWidth <= 0 or newHeight <= 0) return;
 		std.log.info("Framebuffer: {}, {}", .{newWidth, newHeight});
 		width = @intCast(newWidth);
 		height = @intCast(newHeight);
@@ -698,6 +699,13 @@ pub fn getMousePosition() Vec2f {
 
 pub fn getWindowSize() Vec2f {
 	return Vec2f{@floatFromInt(width), @floatFromInt(height)};
+}
+
+pub fn updateFramebufferSize() void {
+	var framebufferWidth: c_int = 0;
+	var framebufferHeight: c_int = 0;
+	c.glfwGetFramebufferSize(window, &framebufferWidth, &framebufferHeight);
+	GLFWCallbacks.framebufferSize(window, framebufferWidth, framebufferHeight);
 }
 
 pub fn reloadSettings() void {

@@ -135,7 +135,7 @@ fn resolutionScaleCallback(newValue: u16) void {
 	if (newValue < resScales.len) {
 		settings.resolutionScale = resScales[newValue];
 		settings.save();
-		main.Window.GLFWCallbacks.framebufferSize(null, main.Window.width, main.Window.height);
+		main.Window.updateFramebufferSize();
 	}
 }
 
