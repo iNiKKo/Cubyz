@@ -612,7 +612,7 @@ fn drawLayer(vaoToDraw: *graphics.VertexArray, layerIndexCount: u32, tint: Vec3f
 	c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
 	c.glDepthMask(c.GL_FALSE);
 
-	c.glDepthFunc(if (writeDepth) c.GL_EQUAL else c.GL_LEQUAL);
+	c.glDepthFunc(c.GL_LEQUAL);
 	c.glDrawElements(c.GL_TRIANGLES, @intCast(layerIndexCount), c.GL_UNSIGNED_INT, null);
 }
 
@@ -678,5 +678,7 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 	}
 
 	c.glDisable(c.GL_POLYGON_OFFSET_FILL);
+	c.glColorMask(c.GL_TRUE, c.GL_TRUE, c.GL_TRUE, c.GL_TRUE);
+	c.glDepthMask(c.GL_TRUE);
 	c.glDepthFunc(c.GL_LESS);
 }

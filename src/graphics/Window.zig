@@ -545,9 +545,13 @@ pub const GLFWCallbacks = struct {
 		std.log.info("Framebuffer: {}, {}", .{newWidth, newHeight});
 		width = @intCast(newWidth);
 		height = @intCast(newHeight);
-		main.renderer.updateViewport(width, height);
-		main.gui.updateGuiScale();
-		main.gui.updateWindowPositions();
+		if (main.renderer.initialized) {
+			main.renderer.updateViewport(width, height);
+			main.gui.updateGuiScale();
+			main.gui.updateWindowPositions();
+		} else {
+			c.glViewport(0, 0, newWidth, newHeight);
+		}
 	}
 
 	const deltasLen: u2 = 3;

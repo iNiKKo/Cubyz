@@ -13,8 +13,9 @@ uniform float weatherFogStrength;
 layout(binding = 13) uniform sampler2D sceneDepth;
 
 void main() {
-	vec2 sceneTexel = gl_FragCoord.xy/vec2(textureSize(sceneDepth, 0));
-	if (gl_FragCoord.z > texture(sceneDepth, sceneTexel).r + 1e-6) discard;
+	ivec2 sceneSize = textureSize(sceneDepth, 0);
+	ivec2 scenePixel = clamp(ivec2(gl_FragCoord.xy), ivec2(0), sceneSize - ivec2(1));
+	if (gl_FragCoord.z > texelFetch(sceneDepth, scenePixel, 0).r + 1e-5) discard;
 	vec3 color = tint*brightness;
 	if (weatherFogStrength > 0.001) {
 

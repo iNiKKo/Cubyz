@@ -431,8 +431,6 @@ pub fn clientMain() void {
 		heap.GarbageCollection.syncPoint();
 		const isHidden = c.glfwGetWindowAttrib(Window.window, c.GLFW_ICONIFIED) == c.GLFW_TRUE;
 		if (!isHidden) {
-			c.glfwSwapBuffers(Window.window);
-
 			gui.windowlist.gpu_performance_measuring.startQuery(.screenbuffer_clear);
 			c.glDepthFunc(c.GL_LESS);
 			c.glDepthMask(c.GL_TRUE);
@@ -483,6 +481,7 @@ pub fn clientMain() void {
 			gui.windowlist.gpu_performance_measuring.startQuery(.gui);
 			gui.updateAndRenderGui();
 			gui.windowlist.gpu_performance_measuring.stopQuery();
+			c.glfwSwapBuffers(Window.window);
 		}
 
 		if (shouldExitToMenu.load(.monotonic)) {

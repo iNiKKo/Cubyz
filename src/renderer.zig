@@ -87,6 +87,7 @@ var startTimestamp: std.Io.Timestamp = undefined;
 
 pub const reflectionCubeMapSize = 64;
 var reflectionCubeMap: graphics.CubeMapTexture = undefined;
+pub var initialized: bool = false;
 
 pub fn init() void {
 	startTimestamp = main.timestamp();
@@ -139,9 +140,12 @@ pub fn init() void {
 	reflectionCubeMap = .init();
 	reflectionCubeMap.generate(reflectionCubeMapSize, reflectionCubeMapSize);
 	initReflectionCubeMap();
+	updateViewport(Window.width, Window.height);
+	initialized = true;
 }
 
 pub fn deinit() void {
+	initialized = false;
 	deferredRenderPassPipeline.deinit();
 	fakeReflectionPipeline.deinit();
 	worldFrameBuffer.deinit();
@@ -185,6 +189,7 @@ fn initReflectionCubeMap() void {
 		graphics.draw.rectVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 	}
+	framebuffer.unbind();
 }
 
 var worldFrameBuffer: graphics.FrameBuffer = undefined;
@@ -432,9 +437,12 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		gpu_performance_measuring.stopQuery();
 	}
 
+	const framebufferSrgb = c.glIsEnabled(c.GL_FRAMEBUFFER_SRGB) == c.GL_TRUE;
+	if (framebufferSrgb) c.glDisable(c.GL_FRAMEBUFFER_SRGB);
 	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
 	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, waterSurfaceFrameBuffer.frameBuffer);
 	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+	if (framebufferSrgb) c.glEnable(c.GL_FRAMEBUFFER_SRGB);
 	waterSurfaceFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
@@ -445,9 +453,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	}
 	worldFrameBuffer.bind();
 
+	if (framebufferSrgb) c.glDisable(c.GL_FRAMEBUFFER_SRGB);
 	c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, worldFrameBuffer.frameBuffer);
 	c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, cloudFrameBuffer.frameBuffer);
 	c.glBlitFramebuffer(0, 0, lastWidth, lastHeight, 0, 0, lastWidth, lastHeight, c.GL_DEPTH_BUFFER_BIT, c.GL_NEAREST);
+	if (framebufferSrgb) c.glEnable(c.GL_FRAMEBUFFER_SRGB);
 	cloudFrameBuffer.bind();
 	c.glClearColor(0, 0, 0, 0);
 	c.glClear(c.GL_COLOR_BUFFER_BIT);
