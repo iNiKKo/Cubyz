@@ -120,7 +120,6 @@ pub var commandBuffer: graphics.LargeBuffer(IndirectData) = undefined;
 pub var chunkIDBuffer: graphics.LargeBuffer(u32) = undefined;
 pub var quadsDrawn: usize = 0;
 pub var transparentQuadsDrawn: usize = 0;
-var lastOcclusionRefreshMilliseconds: i64 = 0;
 pub const maxQuadsInIndexBuffer = 3 << (3*chunk.chunkShift);
 
 pub fn init() void {
@@ -382,13 +381,10 @@ pub fn bindBuffers(lod: usize) void {
 }
 
 pub fn drawChunksIndirect(chunkIds: *const [main.settings.highestSupportedLod + 1]main.ListManaged(u32), ambient: Vec3f, transparent: bool) void {
-	const nowMilliseconds = main.timestamp().toMilliseconds();
-	const refreshOcclusion = !transparent and nowMilliseconds - lastOcclusionRefreshMilliseconds >= 16;
-	if (refreshOcclusion) lastOcclusionRefreshMilliseconds = nowMilliseconds;
 	for (0..chunkIds.len) |i| {
 		const lod = if (transparent) main.settings.highestSupportedLod - i else i;
 		bindBuffers(lod);
-		drawChunksOfLod(chunkIds[lod].items, ambient, transparent, refreshOcclusion);
+		drawChunksOfLod(chunkIds[lod].items, ambient, transparent);
 	}
 }
 
@@ -425,7 +421,7 @@ fn drawWaterSurfaceMaskOfLod(chunkIDs: []const u32, ambient: Vec3f, weatherMask:
 	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
 }
 
-fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool, refreshOcclusion: bool) void {
+fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool) void {
 	if (chunkIDs.len == 0) return;
 	const drawCallsEstimate: u31 = @intCast(if (transparent) chunkIDs.len else chunkIDs.len*8);
 	var chunkIDAllocation: main.graphics.SubAllocation = .{.start = 0, .len = 0};
@@ -462,7 +458,6 @@ fn drawChunksOfLod(chunkIDs: []const u32, ambient: Vec3f, transparent: bool, ref
 	bindShaderAndUniforms(ambient);
 	c.glBindBuffer(c.GL_DRAW_INDIRECT_BUFFER, commandBuffer.ssbo.bufferID);
 	c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start*@sizeOf(IndirectData)), drawCallsEstimate, 0);
-	if (!refreshOcclusion) return;
 
 	occlusionTestPipeline.bind(null);
 	vao.bind();
