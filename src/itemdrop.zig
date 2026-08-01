@@ -503,6 +503,7 @@ pub const ItemDisplayManager = struct {
 	pub var showItem: bool = true;
 	var cameraFollow: Vec3f = @splat(0);
 	var cameraFollowVel: Vec3f = @splat(0);
+	var firstPersonSwing: f32 = 0;
 	const damping: Vec3f = @splat(130);
 
 	pub var handLightPositionRelative: Vec3f = @splat(0);
@@ -707,6 +708,8 @@ pub const ItemDisplayManager = struct {
 		cameraFollowVel = n1/(n2*n2);
 
 		cameraFollow += cameraFollowVel*@as(Vec3f, @splat(dt));
+		const swingTarget = if (main.renderer.MeshSelection.firstPersonHeldItemSwingProgress()) |progress| @sin(progress*std.math.pi) else 0;
+		firstPersonSwing += (swingTarget - firstPersonSwing)*@min(1, dt*14);
 
 		updateHandLight();
 	}
@@ -1216,6 +1219,12 @@ pub const ItemDropRenderer = struct {
 			modelMatrix = modelMatrix.mul(Mat4f.rotationY(-rot[1]));
 			modelMatrix = modelMatrix.mul(Mat4f.rotationX(-rot[0]));
 			modelMatrix = modelMatrix.mul(Mat4f.translation(@floatCast(pos)));
+			if (ItemDisplayManager.firstPersonSwing > 0.0001) {
+				const swing = ItemDisplayManager.firstPersonSwing;
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ 0.03*swing, 0.12*swing, -0.10*swing }));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationX(-swing*0.65));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(swing*0.22));
+			}
 			if (!isBlock) {
 				if (item == .proceduralItem) {
 					modelMatrix = modelMatrix.mul(Mat4f.rotationZ(-std.math.pi*0.47));

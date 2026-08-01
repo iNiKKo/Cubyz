@@ -653,6 +653,7 @@ pub const ConnectionManager = struct {
 
 	fn onReceive(self: *ConnectionManager, data: []const u8, source: Address) void {
 		std.debug.assert(self.threadId == std.Thread.getCurrentId());
+		if (data.len == 0) return;
 		self.mutex.lock();
 
 		for (self.connections.items) |conn| {

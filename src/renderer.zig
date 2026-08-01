@@ -1955,6 +1955,7 @@ pub const MeshSelection = struct {
 	var activeBreakingPos: ?Vec3i = null;
 	var airPunchStart: ?std.Io.Timestamp = null;
 	var lastMiningInputTime: std.Io.Timestamp = .fromNanoseconds(0);
+	var firstPersonSwingStart: ?std.Io.Timestamp = null;
 
 	fn sendBreakingProgress(pos: Vec3i, progress: f32) void {
 		if (game.world) |world| main.network.protocols.genericUpdate.sendBlockBreaking(world.conn, pos, progress);
@@ -1979,6 +1980,14 @@ pub const MeshSelection = struct {
 		const elapsedSinceInput = lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds();
 		if (currentSwingTime <= 0 or elapsedSinceInput > 150_000_000) return null;
 		return std.math.clamp(currentSwingProgress/currentSwingTime, 0.0, 1.0);
+	}
+	pub fn firstPersonHeldItemSwingProgress() ?f32 {
+		if (airPunchStart != null) return heldItemSwingProgress();
+		const start = firstPersonSwingStart orelse return null;
+		if (lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds() > 150_000_000) return null;
+		const elapsed: f32 = @floatCast(@as(f64, @floatFromInt(start.durationTo(main.timestamp()).toNanoseconds()))*1e-9);
+		const phase = elapsed - @floor(elapsed/0.32)*0.32;
+		return phase/0.32;
 	}
 	pub fn startAirPunch() void {
 		if (selectedBlockPos != null) return;
@@ -2129,6 +2138,7 @@ pub const MeshSelection = struct {
 		if (lastMiningInputTime.durationTo(now).toNanoseconds() > 150_000_000) {
 			currentSwingProgress = 0;
 			currentSwingTime = 0;
+			firstPersonSwingStart = null;
 		}
 		lastMiningInputTime = now;
 		if (selectedBlockPos) |selectedPos| {
@@ -2166,6 +2176,7 @@ pub const MeshSelection = struct {
 				}
 				damage -= block.blockResistance();
 				if (damage > 0) {
+					if (firstPersonSwingStart == null) firstPersonSwingStart = now;
 					const swingTime = if (isProceduralItem and stack.item.proceduralItem.isEffectiveOn(block)) 1.0/stack.item.proceduralItem.getProperty(.swingSpeed) else 0.5;
 					if (currentSwingTime > swingTime) {
 						currentSwingProgress = 0;
