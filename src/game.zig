@@ -189,6 +189,11 @@ pub const Player = struct {
 	}
 
 	pub fn placeBlock(mods: main.Window.Key.Modifiers) void {
+		const heldItem = inventory.getItem(selectedSlot);
+		if (heldItem == .baseItem and heldItem.baseItem.foodValue() > 0) {
+			inventory.eat(selectedSlot);
+			return;
+		}
 		if (main.renderer.MeshSelection.selectedBlockPos) |blockPos| blk: {
 			const mesh = main.renderer.mesh_storage.getMesh(.initFromWorldPos(blockPos, 1)) orelse break :blk;
 			const block = mesh.chunk.getBlock(blockPos[0] - mesh.pos.wx, blockPos[1] - mesh.pos.wy, blockPos[2] - mesh.pos.wz);
@@ -206,6 +211,7 @@ pub const Player = struct {
 		Player.super.vel = .{0, 0, 0};
 
 		Player.super.health = Player.super.maxHealth;
+		Player.super.hunger = Player.super.maxHunger;
 		Player.super.energy = Player.super.maxEnergy;
 
 		Player.eye = .{};
@@ -368,6 +374,33 @@ pub const WeatherGrid = struct {
 	}
 };
 
+pub const WeatherLightning = struct {
+	pub const Snapshot = struct {
+		position: Vec3d = .{0, 0, 0},
+		intensity: f32 = 0,
+		time: std.Io.Timestamp = .fromNanoseconds(0),
+	};
+
+	mutex: main.utils.Mutex = .{},
+	position: Vec3d = .{0, 0, 0},
+	intensity: f32 = 0,
+	time: std.Io.Timestamp = .fromNanoseconds(0),
+
+	pub fn trigger(self: *WeatherLightning, position: Vec3d, intensity: f32) void {
+		self.mutex.lock();
+		defer self.mutex.unlock();
+		self.position = position;
+		self.intensity = intensity;
+		self.time = main.timestamp();
+	}
+
+	pub fn snapshot(self: *WeatherLightning) Snapshot {
+		self.mutex.lock();
+		defer self.mutex.unlock();
+		return .{ .position = self.position, .intensity = self.intensity, .time = self.time };
+	}
+};
+
 pub const weatherCloudBaseHeight: f64 = 448.0;
 
 pub fn weatherExposureAtAltitude(z: f64) f32 {
@@ -407,6 +440,7 @@ pub const World = struct {
 
 	rainIntensityTarget: Atomic(f32) = .init(0),
 	weatherGrid: WeatherGrid = .{},
+	weatherLightning: WeatherLightning = .{},
 
 	shouldRestart: std.atomic.Value(bool) = .init(false),
 	shouldReload: bool = false,
@@ -556,6 +590,7 @@ pub const World = struct {
 
 		weatherHazeColor: Vec3f = .{0.58, 0.65, 0.74},
 		weatherSkyHazeColor: Vec3f = .{0.58, 0.65, 0.74},
+		lightningFlash: f32 = 0,
 		ambientLight: f32 = 0,
 		dayTime: i64 = 0,
 
@@ -703,6 +738,20 @@ pub const World = struct {
 			const clearSkyColor = self.fog.skyColor;
 
 			const playerPos = Player.getPosBlocking();
+			const lightning = world.?.weatherLightning.snapshot();
+			const lightningElapsed = @as(f32, @floatFromInt(lightning.time.durationTo(main.timestamp()).toNanoseconds()))*1e-9;
+			const lightningPulse: f32 = if (lightningElapsed < 0.055)
+				1.0
+			else if (lightningElapsed < 0.13)
+				0.32
+			else if (lightningElapsed < 0.21)
+				0.0
+			else if (lightningElapsed < 0.28)
+				0.55
+			else
+				0.0;
+			const lightningExposure = weatherExposureAtPosition(playerPos);
+			self.lightningFlash += (lightning.intensity*lightningPulse*lightningExposure - self.lightningFlash)*@min(1.0, @as(f32, @floatCast(deltaTime))*24.0);
 			world.?.weatherGrid.advanceDisplay(main.timestamp());
 			const localWeather = world.?.weatherGrid.sampleAt(playerPos[0], playerPos[1]);
 

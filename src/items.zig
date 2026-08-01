@@ -294,6 +294,9 @@ pub const BaseItemIndex = enum(u16) {
 	pub fn block(self: BaseItemIndex) ?u16 {
 		return itemList[@intFromEnum(self)].block;
 	}
+	pub fn foodValue(self: BaseItemIndex) f32 {
+		return itemList[@intFromEnum(self)].foodValue;
+	}
 	pub fn hasTag(self: BaseItemIndex, tag: Tag) bool {
 		return itemList[@intFromEnum(self)].hasTag(tag);
 	}

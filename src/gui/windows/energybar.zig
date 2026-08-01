@@ -47,15 +47,15 @@ pub fn render() void {
 
 	var y: f32 = 0;
 	var x: f32 = 0;
-	var energy: f32 = 0;
-	while (energy < main.game.Player.super.maxEnergy) : (energy += 1) {
+	var hunger: f32 = 0;
+	while (hunger < main.game.Player.super.maxHunger) : (hunger += 1) {
 		if (x >= window.contentSize[0]) {
 			x = 0;
 			y += 20;
 		}
-		if (energy + 1 <= main.game.Player.super.energy) {
+		if (hunger + 1 <= main.game.Player.super.hunger) {
 			energyTexture.bindTo(0);
-		} else if (energy + 0.5 <= main.game.Player.super.energy) {
+		} else if (hunger + 0.5 <= main.game.Player.super.hunger) {
 			halfEnergyTexture.bindTo(0);
 		} else {
 			noEnergyTexture.bindTo(0);

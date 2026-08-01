@@ -241,6 +241,7 @@ pub const Command = struct {
 		updateBlock = 9,
 		addHealth = 10,
 		chatCommand = 12,
+		eat = 18,
 	};
 	pub const Payload = union(PayloadType) {
 		open: Open,
@@ -261,6 +262,7 @@ pub const Command = struct {
 		updateBlock: UpdateBlock,
 		addHealth: AddHealth,
 		chatCommand: ChatCommand,
+		eat: Eat,
 	};
 
 	const BaseOperationType = enum(u8) {
@@ -1724,6 +1726,40 @@ pub const Command = struct {
 			};
 			if (user.?.id != result.target) return error.Invalid;
 			return result;
+		}
+	};
+
+	const Eat = struct {
+		source: InventoryAndSlot,
+
+		fn run(self: Eat, ctx: Context) error{serverFailure}!void {
+			const item = self.source.ref().item;
+			if (item != .baseItem) return;
+			const food = item.baseItem.foodValue();
+			if (food <= 0) return;
+			if (ctx.side == .client and main.game.Player.super.hunger >= main.game.Player.super.maxHunger and main.game.Player.super.energy >= main.game.Player.super.maxEnergy) return;
+			if (ctx.side == .server) {
+				const user = ctx.user orelse return error.serverFailure;
+				if (user.inventory == null or self.source.inv.id != user.inventory.?) return error.serverFailure;
+				if (user.gamemode.raw != .creative and user.player().hunger >= user.player().maxHunger and user.player().energy >= user.player().maxEnergy) return;
+			}
+			if (ctx.gamemode != .creative) {
+				ctx.execute(.{.delete = .{.source = self.source, .amount = 1}});
+			}
+			if (ctx.side == .server) {
+				const player = ctx.user.?.player();
+				player.hunger = std.math.clamp(player.hunger + food, 0, player.maxHunger);
+				player.energy = std.math.clamp(player.energy + food*1.25, 0, player.maxEnergy);
+				main.network.protocols.genericUpdate.sendNeeds(ctx.user.?.conn, player.health, player.hunger, player.energy);
+			}
+		}
+
+		fn serialize(self: Eat, writer: *BinaryWriter) void {
+			self.source.write(writer);
+		}
+
+		fn deserialize(reader: *BinaryReader, side: Side, user: ?*main.server.User) !Eat {
+			return .{.source = try InventoryAndSlot.read(reader, side, user)};
 		}
 	};
 

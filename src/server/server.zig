@@ -140,6 +140,12 @@ pub const User = struct {
 	lastSentBiomeId: u32 = 0xffffffff,
 	lastSentRainIntensity: f32 = -1,
 	lastSentWeatherGridMillis: i64 = 0,
+	lastLightningCheckMillis: i64 = 0,
+	hungerExhaustion: f32 = 0,
+	healingTime: f32 = 0,
+	lastSentHunger: f32 = -1,
+	lastSentSaturation: f32 = -1,
+	lastSentHealth: f32 = -1,
 
 	newKeyString: ?[]const u8 = null,
 	key: network.authentication.PublicKey = undefined,
@@ -671,6 +677,37 @@ fn getInitialEntityList(allocator: main.heap.NeverFailingAllocator) []const u8 {
 	return initialList;
 }
 
+fn updateSurvivalNeeds(user: *User) void {
+	const player = user.player();
+	if (user.gamemode.raw == .survival) {
+		const horizontalSpeed = @sqrt(player.vel[0]*player.vel[0] + player.vel[1]*player.vel[1]);
+		const hungerInterval: f32 = if (horizontalSpeed >= 6.0 and @abs(player.vel[2]) >= 0.5) 30.0 else if (horizontalSpeed >= 6.0) 60.0 else 180.0;
+		user.hungerExhaustion += 1.0/(hungerInterval*@as(f32, @floatFromInt(updatesPerSec)));
+		while (user.hungerExhaustion >= 1.0) {
+			user.hungerExhaustion -= 1.0;
+			player.hunger = @max(0, player.hunger - 1);
+		}
+
+		if (player.health < player.maxHealth and player.energy >= player.maxEnergy and player.hunger >= 1.5) {
+			user.healingTime += 1.0/@as(f32, @floatFromInt(updatesPerSec));
+			if (user.healingTime >= 1.5) {
+				user.healingTime = 0;
+				player.health = @min(player.maxHealth, player.health + 1.5);
+				player.hunger = @max(0, player.hunger - 1.5);
+			}
+		} else {
+			user.healingTime = 0;
+		}
+	}
+
+	if (player.hunger != user.lastSentHunger or player.energy != user.lastSentSaturation or player.health != user.lastSentHealth) {
+		user.lastSentHunger = player.hunger;
+		user.lastSentSaturation = player.energy;
+		user.lastSentHealth = player.health;
+		main.network.protocols.genericUpdate.sendNeeds(user.conn, player.health, player.hunger, player.energy);
+	}
+}
+
 fn update() void {
 	world.?.update();
 	main.entity.server.update();
@@ -684,6 +721,7 @@ fn update() void {
 	defer main.stackAllocator.free(userList);
 	for (userList) |user| {
 		user.update();
+		updateSurvivalNeeds(user);
 	}
 
 	const itemData = world.?.itemDropManager.getPositionAndVelocityData(main.stackAllocator);
@@ -716,6 +754,28 @@ fn update() void {
 		const biome = world.?.getBiome(pos[0], pos[1], pos[2]);
 		const nowMillis = main.timestamp().toMilliseconds();
 		const weather = WeatherMap.sample(world.?.settings.seed, biome, pos[0], pos[1], nowMillis);
+		if (nowMillis - user.lastLightningCheckMillis >= 4000) {
+			user.lastLightningCheckMillis = nowMillis;
+			if (weather.kind == .rain and weather.cloudCover >= 0.80 and weather.precipitation >= 0.65) {
+				var lightningSeed = main.random.initSeed2D(world.?.settings.seed ^ @as(u64, @bitCast(@divFloor(nowMillis, 4000))), .{pos[0] >> 6, pos[1] >> 6});
+				const intensity = std.math.clamp((weather.precipitation - 0.65)*2.0, 0.25, 1.0);
+				if (main.random.nextFloat(&lightningSeed) < 0.08 + intensity*0.16) {
+					const strikePosition = Vec3d{
+						@as(f64, @floatFromInt(pos[0])) + @as(f64, main.random.nextFloatSigned(&lightningSeed))*160.0,
+						@as(f64, @floatFromInt(pos[1])) + @as(f64, main.random.nextFloatSigned(&lightningSeed))*160.0,
+						main.game.weatherCloudBaseHeight,
+					};
+					for (userList) |other| {
+						const otherPosition = other.player().pos;
+						const deltaX = otherPosition[0] - strikePosition[0];
+						const deltaY = otherPosition[1] - strikePosition[1];
+						if (deltaX*deltaX + deltaY*deltaY <= 512.0*512.0) {
+							main.network.protocols.genericUpdate.sendLightning(other.conn, strikePosition, intensity);
+						}
+					}
+				}
+			}
+		}
 
 		const rainIntensity = if (weather.kind == .rain) weather.precipitation else 0.0;
 		if (@abs(rainIntensity - user.lastSentRainIntensity) >= 0.02) {

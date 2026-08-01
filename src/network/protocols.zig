@@ -611,6 +611,8 @@ pub const genericUpdate = struct {
 		rainIntensity = 7,
 		weatherGrid = 8,
 		blockBreaking = 9,
+		lightning = 10,
+		needs = 11,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -703,6 +705,21 @@ pub const genericUpdate = struct {
 					if (progress >= 0.0) main.renderer.mesh_storage.addBreakingAnimation(pos, progress);
 				}
 			},
+		.lightning => {
+			const position = try reader.readVec(Vec3d);
+				const intensity = try reader.readFloat(f32);
+				const world = conn.manager.world.?;
+				world.weatherLightning.trigger(position, intensity);
+				const distance = @sqrt(vec.lengthSquare(position - game.Player.getEyePosBlocking()));
+				if (distance <= 1000.0) {
+					main.audio.playThunder(@floatCast(std.math.clamp(distance/343.0, 0.15, 6.0)), @floatCast(std.math.clamp(0.38 + intensity/(0.6 + distance/512.0), 0.0, 1.0)));
+			}
+		},
+		.needs => {
+			main.game.Player.super.health = try reader.readFloat(f32);
+			main.game.Player.super.hunger = try reader.readFloat(f32);
+			main.game.Player.super.energy = try reader.readFloat(f32);
+		},
 			.particles => {
 				const particleIdLen = try reader.readVarInt(u16);
 				const particleId = try reader.readSlice(particleIdLen);
@@ -739,7 +756,7 @@ pub const genericUpdate = struct {
 
 	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		switch (try reader.readEnum(UpdateType)) {
-		.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity, .weatherGrid => return error.InvalidSide,
+		.gamemode, .teleport, .time, .biome, .particles, .clear, .rainIntensity, .weatherGrid, .lightning, .needs => return error.InvalidSide,
 		.blockBreaking => {
 			const pos = try reader.readVec(Vec3i);
 			const progress = try reader.readFloat(f32);
@@ -838,6 +855,25 @@ pub const genericUpdate = struct {
 		writer.writeVec(Vec3i, pos);
 		writer.writeFloat(f32, progress);
 		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendLightning(conn: *Connection, position: Vec3d, intensity: f32) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, @sizeOf(Vec3d) + @sizeOf(f32));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .lightning);
+		writer.writeVec(Vec3d, position);
+		writer.writeFloat(f32, intensity);
+		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendNeeds(conn: *Connection, health: f32, hunger: f32, saturation: f32) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 13);
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .needs);
+		writer.writeFloat(f32, health);
+		writer.writeFloat(f32, hunger);
+		writer.writeFloat(f32, saturation);
+		conn.send(.secure, id, writer.data.items);
 	}
 
 	fn sendBlockBreakingTo(conn: *Connection, entityId: main.entity.Entity, pos: Vec3i, progress: f32) void {

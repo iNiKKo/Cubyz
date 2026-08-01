@@ -32,6 +32,7 @@ pub const mesh_storage = @import("renderer/mesh_storage.zig");
 pub const clouds = @import("renderer/clouds.zig");
 pub const thin_clouds = @import("renderer/thin_clouds.zig");
 pub const rain = @import("renderer/rain.zig");
+pub const lightning = @import("renderer/lightning.zig");
 pub const fsr = @import("renderer/fsr.zig");
 pub const fsr2 = @import("renderer/fsr2.zig");
 
@@ -130,6 +131,7 @@ pub fn init() void {
 	clouds.init();
 	thin_clouds.init();
 	rain.init();
+	lightning.init();
 	fsr.init();
 	fsr2.init();
 	chunk_meshing.init();
@@ -158,6 +160,7 @@ pub fn deinit() void {
 	clouds.deinit();
 	thin_clouds.deinit();
 	rain.deinit();
+	lightning.deinit();
 	fsr.deinit();
 	fsr2.deinit();
 	mesh_storage.deinit();
@@ -241,9 +244,12 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	if (settings.shadows) {
 		ambient = @min(ambient*@as(Vec3f, @splat(1.25)), @as(Vec3f, @splat(1.0)));
 	}
+	const lightningFlash = game.world.?.dayTime.lightningFlash;
+	ambient = @min(ambient + @as(Vec3f, @splat(lightningFlash*0.9)), @as(Vec3f, @splat(1.0)));
+	const skyColor = game.world.?.dayTime.fog.skyColor + (Vec3f{0.82, 0.88, 1.0} - game.world.?.dayTime.fog.skyColor)*@as(Vec3f, @splat(lightningFlash*0.7));
 
 	itemdrop.ItemDisplayManager.update(deltaTime);
-	renderWorld(game.world.?, ambient, game.world.?.dayTime.fog.skyColor, playerPosition);
+	renderWorld(game.world.?, ambient, skyColor, playerPosition);
 	const startTime = main.timestamp();
 	mesh_storage.updateMeshes(startTime.addDuration(maximumMeshTime));
 }
@@ -450,6 +456,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE13);
 		clouds.draw(ambientLight, skyColor, playerPos);
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
+		lightning.draw(playerPos);
 	}
 	worldFrameBuffer.bind();
 	if (!isSubmerged) {
@@ -470,7 +477,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		Bloom.bindReplacementImage();
 	}
 
-	if (settings.godRays and weatherVisibilityAtPlayer < 0.02) {
+	if (settings.godRays and weatherVisibilityAtPlayer <= 0.001) {
 		gpu_performance_measuring.startQuery(.god_rays);
 		GodRays.render(lastWidth, lastHeight, game.camera.viewMatrix);
 		gpu_performance_measuring.stopQuery();
@@ -1498,9 +1505,11 @@ pub const Skybox = struct {
 
 			const sunCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, sunDir);
 			const moonCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, moonDir);
+			const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
+			const celestialWeatherAtten: f32 = if (weatherVisibility > 0.001) 0.0 else 1.0;
 
-			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten, sunCloudAtten);
-			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten, moonCloudAtten);
+			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten * celestialWeatherAtten, sunCloudAtten * celestialWeatherAtten);
+			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten * celestialWeatherAtten, moonCloudAtten * celestialWeatherAtten);
 		}
 	}
 };

@@ -543,6 +543,11 @@ pub const ClientInventory = struct {
 		main.renderer.MeshSelection.placeBlock(self, slot);
 	}
 
+	pub fn eat(self: ClientInventory, slot: u32) void {
+		std.debug.assert(self.type == .serverShared);
+		main.sync.client.executeCommand(.{.eat = .{.source = .{.inv = self.super, .slot = slot}}});
+	}
+
 	pub fn breakBlock(self: ClientInventory, slot: u32, deltaTime: f64) void {
 		std.debug.assert(self.type == .serverShared);
 		main.renderer.MeshSelection.breakBlock(self, slot, deltaTime);

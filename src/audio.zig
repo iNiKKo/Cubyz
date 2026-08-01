@@ -270,6 +270,14 @@ const currentMusic = struct {
 	}
 };
 
+const thunder = struct {
+	var delaySamples: u64 = 0;
+	var samplesPlayed: u64 = 0;
+	var strength: f32 = 0;
+	var seed: u64 = 0;
+	var lowFrequencyNoise: f32 = 0;
+};
+
 var activeMusicId: []const u8 = &.{};
 const animationLengthInSeconds = 5.0;
 
@@ -282,6 +290,44 @@ pub fn setMusic(music: []const u8) void {
 	if (std.mem.eql(u8, music, preferredMusic)) return;
 	main.globalAllocator.free(preferredMusic);
 	preferredMusic = main.globalAllocator.dupe(u8, music);
+}
+
+pub fn playThunder(delaySeconds: f32, strength: f32) void {
+	mutex.lock();
+	defer mutex.unlock();
+	if (thunder.strength > 0.0) return;
+	thunder.delaySamples = @intFromFloat(@max(0.0, delaySeconds)*sampleRate);
+	thunder.samplesPlayed = 0;
+	thunder.strength = std.math.clamp(strength, 0.0, 1.0);
+	thunder.seed = @intCast(main.timestamp().toMilliseconds());
+	thunder.lowFrequencyNoise = 0;
+}
+
+fn mixThunder(buffer: []f32) void {
+	if (thunder.strength <= 0.0) return;
+	const durationSeconds: f32 = 3.5;
+	var i: usize = 0;
+	while (i < buffer.len) : (i += 2) {
+		if (thunder.delaySamples != 0) {
+			thunder.delaySamples -= 1;
+			continue;
+		}
+		const t = @as(f32, @floatFromInt(thunder.samplesPlayed))/sampleRate;
+		if (t >= durationSeconds) {
+			thunder.strength = 0;
+			return;
+		}
+		thunder.seed = thunder.seed *% 6364136223846793005 +% 1442695040888963407;
+		const randomBits: u16 = @truncate(thunder.seed >> 32);
+		const random: f32 = @as(f32, @floatFromInt(@as(i16, @bitCast(randomBits))))/32768.0;
+		thunder.lowFrequencyNoise += (random - thunder.lowFrequencyNoise)*0.012;
+		const onset = std.math.clamp(t*18.0, 0.0, 1.0);
+		const envelope = onset*@exp(-t*0.78);
+		const rumble = (thunder.lowFrequencyNoise*0.92 + random*0.08)*envelope*thunder.strength*1.2*main.settings.soundVolume;
+		buffer[i] += rumble;
+		buffer[i + 1] += rumble;
+		thunder.samplesPlayed += 1;
+	}
 }
 
 fn mixMusic(buffer: []f32) void {
@@ -342,4 +388,5 @@ fn miniaudioCallback(
 	const buffer = @as([*]f32, @ptrCast(@alignCast(output)))[0..valuesPerBuffer];
 	@memset(buffer, 0);
 	mixMusic(buffer);
+	mixThunder(buffer);
 }
