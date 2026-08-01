@@ -27,17 +27,23 @@ void main() {
 	if ((!weatherMask && worldPos.z <= playerWorldZ + 0.05) || (weatherMask && worldPos.z >= playerWorldZ - 0.05)) discard;
 
 	vec2 playerWorldXY = vec2(float(playerPositionInteger.x), float(playerPositionInteger.y)) + playerPositionFraction.xy;
-	float horizontalDistance = length(worldPos.xy - playerWorldXY);
 	if (weatherMask) {
-		float weatherHaze = weatherFogStrength*smoothstep(8.0, 76.0, horizontalDistance);
+		float weatherFogDensity = max(1e-5, weatherFogStrength/96.0);
+		float weatherFogStart = mix(0.60, 0.22, weatherFogStrength)/weatherFogDensity;
+		float surfaceDistance = length(vec3(worldPos.xy - playerWorldXY, worldPos.z - playerWorldZ));
+		float weatherFogAmount = max(0.0, surfaceDistance - weatherFogStart)*weatherFogDensity*mix(8.0, 14.0, weatherFogStrength);
+		weatherFogAmount = mix(weatherFogAmount, weatherFogAmount*weatherFogAmount, weatherFogStrength);
+		float weatherHaze = 1.0 - exp(-weatherFogAmount);
 		if (weatherHaze <= 0.001) discard;
 		vec3 pattern = texture(textureSampler, vec3(worldPos.xy*0.18, animatedTexture[textureIndex])).rgb;
 
-		vec3 deepWeatherWater = weatherFogColor;
-		float weatherBlend = 1.0 - exp(-8.0*weatherHaze);
-		vec3 colour = mix(pattern*0.20 + vec3(0.008, 0.045, 0.070), deepWeatherWater, weatherBlend);
+		vec3 deepWeatherWater = vec3(0.012, 0.055, 0.085);
+		float airborneFogBlend = smoothstep(0.05, 0.25, playerWorldZ - worldPos.z);
+		vec3 weatherWaterTarget = mix(deepWeatherWater, weatherFogColor, airborneFogBlend);
+		float weatherBlend = weatherHaze;
+		vec3 colour = mix(pattern*0.20 + vec3(0.008, 0.045, 0.070), weatherWaterTarget, weatherBlend);
 
-		float alpha = 1.0 - exp(-25.0*weatherHaze);
+		float alpha = weatherHaze;
 		fragColor = vec4(colour*alpha, alpha);
 		return;
 	}

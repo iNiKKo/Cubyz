@@ -1310,6 +1310,9 @@ pub const Skybox = struct {
 		cloudAttenuation: c_int,
 	} = undefined;
 	var celestialVao: graphics.VertexArray = undefined;
+	var sunCloudAttenuation: f32 = 1.0;
+	var moonCloudAttenuation: f32 = 1.0;
+	var celestialWeatherAttenuation: f32 = 1.0;
 
 	fn getStarPos(seed: *u64) Vec3f {
 		const x: f32 = @floatCast(main.random.nextFloatGauss(seed));
@@ -1511,13 +1514,17 @@ pub const Skybox = struct {
 			const sunBasis = celestialBillboardBasis(sunDir);
 			const moonBasis = celestialBillboardBasis(moonDir);
 
-			const sunCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, sunDir);
-			const moonCloudAtten = clouds.getCloudAttenuationForDirection(playerPos, moonDir);
+			const smoothing = 1.0 - @exp(-@as(f32, @floatCast(main.lastDeltaTime.load(.monotonic))) * 9.0);
+			const sunCloudTarget = clouds.getCloudAttenuationForDirection(playerPos, sunDir);
+			const moonCloudTarget = clouds.getCloudAttenuationForDirection(playerPos, moonDir);
+			sunCloudAttenuation += (sunCloudTarget - sunCloudAttenuation)*smoothing;
+			moonCloudAttenuation += (moonCloudTarget - moonCloudAttenuation)*smoothing;
 			const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
-			const celestialWeatherAtten: f32 = if (weatherVisibility > 0.001) 0.0 else 1.0;
+			const celestialWeatherTarget: f32 = if (weatherVisibility > 0.001) 0.0 else 1.0;
+			celestialWeatherAttenuation += (celestialWeatherTarget - celestialWeatherAttenuation)*smoothing;
 
-			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAtten * celestialWeatherAtten, sunCloudAtten * celestialWeatherAtten);
-			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAtten * celestialWeatherAtten, moonCloudAtten * celestialWeatherAtten);
+			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAttenuation * celestialWeatherAttenuation, sunCloudAttenuation * celestialWeatherAttenuation);
+			drawCelestial(moonDir*@as(Vec3f, @splat(celestialDist)), moonBasis.right, moonBasis.up, 14.0, Vec3f{0.85, 0.9, 1.0}, horizonFade(moonDir)*0.6 * moonCloudAttenuation * celestialWeatherAttenuation, moonCloudAttenuation * celestialWeatherAttenuation);
 		}
 	}
 };

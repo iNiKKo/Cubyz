@@ -242,6 +242,14 @@ void main() {
 	float weatherWaterReflectionFade = aboveWaterSurface ? smoothstep(0.02, 0.25, weatherFogStrength) : 0.0;
 
 	float weatherWaterHaze = aboveWaterSurface ? weatherFogStrength*smoothstep(18.0, 120.0, waterDist) : 0.0;
+	float weatherFogAmount = 0.0;
+	if (weatherFogStrength > 0.001) {
+		float weatherFogDensity = max(1e-5, weatherFogStrength/96.0);
+		float weatherFogStart = mix(0.60, 0.22, weatherFogStrength)/weatherFogDensity;
+		weatherFogAmount = max(0.0, waterDist - weatherFogStart)*weatherFogDensity*mix(8.0, 14.0, weatherFogStrength);
+		weatherFogAmount = mix(weatherFogAmount, weatherFogAmount*weatherFogAmount, weatherFogStrength);
+		airFogDistance = -weatherFogAmount;
+	}
 
 	float rippleRangeFade = smoothstep(40.0, 10.0, waterDist);
 
@@ -286,11 +294,6 @@ void main() {
 	}
 
 	vec3 transparentFogColor = aboveWaterSurface ? vec3(0.012, 0.055, 0.085) : fog.color;
-	if (weatherWaterHaze > 0.0) {
-
-		airFogDistance = -waterDist*fog.density*mix(5.0, 11.0, weatherFogStrength);
-	}
-
 	if (belowWaterSurface) {
 		float surfaceDepth = worldPos.z - playerWorldZ;
 		float surfaceProximity = exp(-surfaceDepth * 0.08);

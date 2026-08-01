@@ -340,14 +340,17 @@ pub fn bindShaderAndUniforms(ambient: Vec3f) void {
 pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	transparentPipeline.bind(null);
 
-	c.glUniform3fv(transparentUniforms.@"fog.color", 1, @ptrCast(&game.world.?.dayTime.fog.fogColor));
-
 	const playerPos = game.Player.getEyePosBlocking();
 	const skyIslandAir = playerPos[2] > 2000.0;
 	const skyIslandMist = std.math.clamp(@as(f32, @floatCast((playerPos[2] - 8000.0)/2000.0)), 0.0, 1.0);
 	var fogDensity = std.math.lerp(game.world.?.dayTime.fog.density, 1.0/750.0, skyIslandMist);
 
 	const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
+	const transparentFogColor = if (weatherVisibility > 0.001)
+		game.world.?.dayTime.weatherFogColor(game.world.?.dayTime.fog.skyColor, weatherVisibility)
+	else
+		game.world.?.dayTime.fog.fogColor;
+	c.glUniform3fv(transparentUniforms.@"fog.color", 1, @ptrCast(&transparentFogColor));
 	fogDensity = game.world.?.dayTime.weatherFogDensity(fogDensity, playerPos[2]);
 	c.glUniform1f(transparentUniforms.@"fog.density", fogDensity);
 	c.glUniform1f(transparentUniforms.@"fog.fogLower", if (skyIslandAir) -1e5 else game.world.?.dayTime.fog.fogLower);
