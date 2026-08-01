@@ -2485,6 +2485,7 @@ pub fn generateBlockTexture(blockType: u16) Texture {
 			c.glBlendEquation(c.GL_FUNC_ADD);
 			c.glBlendFunc(c.GL_ONE, c.GL_SRC1_COLOR);
 			main.renderer.chunk_meshing.bindTransparentShaderAndUniforms(.{1, 1, 1});
+			c.glUniform1i(main.renderer.chunk_meshing.transparentUniforms.itemPreview, c.GL_TRUE);
 		} else {
 			main.renderer.chunk_meshing.bindShaderAndUniforms(.{1, 1, 1});
 		}

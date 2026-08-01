@@ -34,6 +34,28 @@ uniform bool reflectionsEnabled;
 uniform int waterTextureIndex;
 uniform int lavaTextureIndex;
 uniform bool playerInWater;
+uniform bool itemPreview;
+uniform int glassTextureIndex0;
+uniform int glassTextureIndex1;
+uniform int glassTextureIndex2;
+uniform int glassTextureIndex3;
+uniform int glassTextureIndex4;
+uniform int glassTextureIndex5;
+uniform int glassTextureIndex6;
+uniform int glassTextureIndex7;
+uniform int glassTextureIndex8;
+uniform int glassTextureIndex9;
+uniform int glassTextureIndex10;
+uniform int glassTextureIndex11;
+uniform int glassTextureIndex12;
+uniform int glassTextureIndex13;
+uniform int glassTextureIndex14;
+uniform int glassTextureIndex15;
+uniform int glassTextureIndex16;
+uniform int glassTextureIndex17;
+uniform int glassTextureIndex18;
+uniform int glassTextureIndex19;
+uniform int glassTextureIndex20;
 
 uniform float weatherFogStrength;
 
@@ -211,11 +233,23 @@ void main() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	bool isWater = textureIndex == waterTextureIndex;
 	bool isLava = textureIndex == lavaTextureIndex;
+	bool isGlass = textureIndex == glassTextureIndex0 || textureIndex == glassTextureIndex1 || textureIndex == glassTextureIndex2 || textureIndex == glassTextureIndex3 || textureIndex == glassTextureIndex4 || textureIndex == glassTextureIndex5 || textureIndex == glassTextureIndex6 || textureIndex == glassTextureIndex7 || textureIndex == glassTextureIndex8 || textureIndex == glassTextureIndex9 || textureIndex == glassTextureIndex10 || textureIndex == glassTextureIndex11 || textureIndex == glassTextureIndex12 || textureIndex == glassTextureIndex13 || textureIndex == glassTextureIndex14 || textureIndex == glassTextureIndex15 || textureIndex == glassTextureIndex16 || textureIndex == glassTextureIndex17 || textureIndex == glassTextureIndex18 || textureIndex == glassTextureIndex19 || textureIndex == glassTextureIndex20;
 	if (isBackFace == 0 && !gl_FrontFacing) discard;
 	if (isBackFace != 0 && gl_FrontFacing) discard;
 	if (isLava && isBackFace != 0 && normal.z <= 0.9) discard;
 
 	vec3 textureCoords = vec3(uv, animatedTextureIndex);
+	if (itemPreview) {
+		vec4 previewTexture = texture(textureSampler, textureCoords);
+		vec4 previewMaterial = texture(reflectivityAndAbsorptionSampler, textureCoords);
+		float previewLight = 0.58 + 0.42 * max(normal.z, 0.0);
+		vec3 previewColor = (previewTexture.a < 0.01 ? previewMaterial.rgb : previewTexture.rgb) * previewLight;
+		previewColor += vec3(previewMaterial.a) * 0.12;
+		float previewAlpha = max(previewTexture.a, 0.82);
+		fragColor = vec4(previewColor * previewAlpha, previewAlpha);
+		blendColor = vec4(vec3(1.0 - previewAlpha), 1.0);
+		return;
+	}
 	float normalVariation = lightVariation(normal);
 	float densityAdjustment = sqrt(dot(mvVertexPos, mvVertexPos))/abs(mvVertexPos.y);
 	float dist = zFromDepth(texelFetch(depthTexture, ivec2(gl_FragCoord.xy), 0).r);
@@ -338,6 +372,14 @@ void main() {
 		return;
 	} else if (isLava) {
 		discard;
+	} else if (isGlass) {
+		vec3 absorption = texture(reflectivityAndAbsorptionSampler, textureCoords).rgb;
+		blendColor.rgb *= absorption;
+		textureColor.rgb += texture(emissionSampler, textureCoords).rgb;
+		applyFrontfaceFog(airFogDistance, transparentFogColor);
+		fragColor.rgb *= blendColor.rgb;
+		fragColor.rgb += textureColor.rgb;
+		applyBackfaceFog(airFogDistance, transparentFogColor);
 	} else {
 
 		fragColor.rgb = textureColor.rgb;

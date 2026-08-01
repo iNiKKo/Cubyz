@@ -49,6 +49,7 @@ void main() {
 	normal = quads[quadIndex].normal;
 
 	position += vec3(quads[quadIndex].corners[vertexID][0], quads[quadIndex].corners[vertexID][1], quads[quadIndex].corners[vertexID][2]);
+	position += normal * 0.001;
 	position += vec3(chunkPos - playerPositionInteger);
 	position -= playerPositionFraction;
 

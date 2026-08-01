@@ -64,6 +64,28 @@ const UniformStruct = struct {
 	waterTextureIndex: c_int,
 	lavaTextureIndex: c_int,
 	playerInWater: c_int,
+	itemPreview: c_int,
+	glassTextureIndex0: c_int,
+	glassTextureIndex1: c_int,
+	glassTextureIndex2: c_int,
+	glassTextureIndex3: c_int,
+	glassTextureIndex4: c_int,
+	glassTextureIndex5: c_int,
+	glassTextureIndex6: c_int,
+	glassTextureIndex7: c_int,
+	glassTextureIndex8: c_int,
+	glassTextureIndex9: c_int,
+	glassTextureIndex10: c_int,
+	glassTextureIndex11: c_int,
+	glassTextureIndex12: c_int,
+	glassTextureIndex13: c_int,
+	glassTextureIndex14: c_int,
+	glassTextureIndex15: c_int,
+	glassTextureIndex16: c_int,
+	glassTextureIndex17: c_int,
+	glassTextureIndex18: c_int,
+	glassTextureIndex19: c_int,
+	glassTextureIndex20: c_int,
 
 	snowTextureIndex: c_int,
 	reflectionsEnabled: c_int,
@@ -281,6 +303,18 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1i(locations.waterTextureIndex, blocks.meshes.textureIndex(waterBlock, 0));
 	const lavaBlock: Block = .{.typ = blocks.getTypeById("cubyz:lava"), .data = 0};
 	c.glUniform1i(locations.lavaTextureIndex, blocks.meshes.textureIndex(lavaBlock, 0));
+	c.glUniform1i(locations.itemPreview, c.GL_FALSE);
+	const glassBlockIds = [_][]const u8{
+		"cubyz:glass/grey", "cubyz:glass/blue", "cubyz:glass/magenta", "cubyz:glass/purple", "cubyz:glass/orange",
+		"cubyz:glass/dark_grey", "cubyz:glass/viridian", "cubyz:glass/red", "cubyz:glass/uranium", "cubyz:glass/white",
+		"cubyz:glass/brown", "cubyz:glass/pink", "cubyz:glass/black", "cubyz:glass/yellow", "cubyz:glass/crimson",
+		"cubyz:glass/lime", "cubyz:glass/indigo", "cubyz:glass/violet", "cubyz:glass/green", "cubyz:glass/aqua",
+		"cubyz:glass/cyan",
+	};
+	inline for (glassBlockIds, 0..) |id, i| {
+		const glassBlock: Block = .{.typ = blocks.getTypeById(id), .data = 0};
+		c.glUniform1i(@field(locations.*, std.fmt.comptimePrint("glassTextureIndex{}", .{i})), blocks.meshes.textureIndex(glassBlock, 0));
+	}
 	const snowBlock: Block = .{.typ = blocks.getTypeById("cubyz:snow"), .data = 0};
 	c.glUniform1i(locations.snowTextureIndex, blocks.meshes.textureIndex(snowBlock, 0));
 	c.glUniform1i(locations.foliageSway, @intFromBool(main.settings.foliageSway));
