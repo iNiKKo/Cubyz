@@ -105,6 +105,18 @@ pub const User = struct {
 	const maxSimulationDistance = 8;
 	const simulationSize = 2*maxSimulationDistance;
 	const simulationMask = simulationSize - 1;
+	const playerCommandPermissions = .{
+		"/command/avatar",
+		"/command/help",
+		"/command/afk",
+		"/command/back",
+		"/command/home",
+		"/command/players",
+		"/command/playtime",
+		"/command/spawn",
+		"/command/tpa",
+		"/command/tpaccept",
+	};
 	conn: *Connection = undefined,
 	innerPlayer: Entity = .{},
 	timeDifference: utils.TimeDifference = .{},
@@ -123,6 +135,8 @@ pub const User = struct {
 	heldToolRotationYZ: main.vec.Vec2f = .{ 0.0, 0.0 },
 	heldToolScale: f32 = 1.0,
 	heldMiningSwing: f32 = -1.0,
+	tpaRequestFrom: ?PlayerIndex = null,
+	isAfk: bool = false,
 
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
@@ -318,9 +332,8 @@ pub const User = struct {
 		}
 		if (main.entity.components.@"cubyz:permissions".server.get(self.id) == null) {
 			main.entity.components.@"cubyz:permissions".server.loadEmpty(self.id);
-			main.entity.components.@"cubyz:permissions".server.addPermission(self.id, .white, "/command/avatar");
-			main.entity.components.@"cubyz:permissions".server.addPermission(self.id, .white, "/command/help");
 		}
+		inline for (playerCommandPermissions) |permissionPath| main.entity.components.@"cubyz:permissions".server.addPermission(self.id, .white, permissionPath);
 		if (self.isLocal) {
 			main.entity.components.@"cubyz:permissions".server.addPermission(self.id, .white, "/");
 		}
@@ -564,9 +577,23 @@ pub const User = struct {
 	pub fn sendRawMessage(self: *User, msg: []const u8) void {
 		main.network.protocols.chat.send(self.conn, msg);
 	}
+	pub fn teleport(self: *User, position: Vec3d, saveBackPosition: bool) void {
+		if (saveBackPosition) self.player().backPosition = self.player().pos;
+		self.player().pos = position;
+		self.player().vel = @splat(0);
+		self.interpolation.init(@ptrCast(&self.player().pos), @ptrCast(&self.player().vel));
+		main.network.protocols.genericUpdate.sendTPCoordinates(self.conn, position);
+	}
 
-	pub fn getSpawnPos(user: *User) Vec3d {
+	pub fn getRespawnPos(user: *User) Vec3d {
+		if (user.player().respawnHome) |index| {
+			if (user.player().homePositions[index]) |position| return position;
+		}
 		return user.spawnPos orelse @floatFromInt(main.server.world.?.spawn);
+	}
+	pub fn getSpawnPos(user: *User) Vec3d {
+		user.player().backPosition = user.player().pos;
+		return user.getRespawnPos();
 	}
 
 	pub fn format(user: User, writer: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -977,7 +1004,11 @@ pub fn connectInternal(user: *User) void {
 }
 
 pub fn messageFrom(msg: []const u8, source: *User) void {
-	sendMessage("[{s}§#ffffff] {s}", .{source.name, msg});
+	if (source.player().prefix) |prefix| {
+		sendMessage("[{s}§#ffffff] {s}§#ffffff > {s}", .{prefix, source.name, msg});
+	} else {
+		sendMessage("[{s}§#ffffff] {s}", .{source.name, msg});
+	}
 }
 
 fn sendRawMessage(msg: []const u8) void {

@@ -26,6 +26,22 @@ pub const Source = union(enum) {
 			.server => true,
 		};
 	}
+
+	pub fn requireUser(self: Source) ?*User {
+		return switch (self) {
+			.user => |user| user,
+			.server => {
+				self.sendMessage("Command cannot be run without a user", .{});
+				return null;
+			},
+		};
+	}
+
+	pub fn requirePermission(self: Source, permissionPath: []const u8) bool {
+		if (self.hasPermission(permissionPath)) return true;
+		self.sendMessage("#ff0000You do not have permission to use this command.", .{});
+		return false;
+	}
 };
 
 pub const Command = struct {
@@ -167,6 +183,36 @@ pub const PlayerIndex = struct {
 		}};
 	}
 };
+
+pub const RestText = struct {
+	text: []const u8,
+	pub const takeRemaining = true;
+
+	pub fn parse(_: NeverFailingAllocator, _: []const u8, arg: []const u8, _: *ListManaged(u8)) error{ParseError}!RestText {
+		return .{.text = arg};
+	}
+};
+
+pub fn findUser(users: []*User, query: []const u8) ?*User {
+	if (query.len > 1 and query[0] == '@') {
+		const index = std.fmt.parseInt(usize, query[1..], 10) catch return null;
+		for (users) |user| if (user.playerIndex == index) return user;
+		return null;
+	}
+	for (users) |user| if (std.ascii.eqlIgnoreCase(user.name, query)) return user;
+	var match: ?*User = null;
+	for (users) |user| if (std.ascii.indexOfIgnoreCase(user.name, query) != null) {
+		if (match != null) return null;
+		match = user;
+	};
+	return match;
+}
+
+pub fn findOnlineUser(query: []const u8) ?*User {
+	const users = main.server.getUserList(main.stackAllocator);
+	defer main.stackAllocator.free(users);
+	return findUser(users, query);
+}
 
 pub const BiomeId = struct {
 	biome: *const main.server.terrain.biomes.Biome,

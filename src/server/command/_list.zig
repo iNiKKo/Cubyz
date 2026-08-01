@@ -13,6 +13,14 @@ pub const time = @import("time.zig");
 pub const tp = @import("tp.zig");
 
 pub const avatar = @import("entity/avatar.zig");
+pub const afk = @import("afk.zig");
+pub const back = @import("back.zig");
+pub const home = @import("home.zig");
+pub const players = @import("players.zig");
+pub const playtime = @import("playtime.zig");
+pub const prefix = @import("prefix.zig");
+pub const tpa = @import("tpa.zig");
+pub const tpaccept = @import("tpaccept.zig");
 
 pub const perm = @import("permission/perm.zig");
 

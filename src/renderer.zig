@@ -458,14 +458,13 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		thin_clouds.draw(ambientLight, skyColor, playerPos);
 		lightning.draw(playerPos);
 	}
+	c.glDepthRange(0, 0.001);
+	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
+	c.glDepthRange(0.001, 1);
 	worldFrameBuffer.bind();
 	if (!isSubmerged) {
 		rain.draw();
 	}
-
-	c.glDepthRange(0, 0.001);
-	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
-	c.glDepthRange(0.001, 1);
 
 	chunk_meshing.endRender();
 

@@ -63,8 +63,15 @@ pub fn Parser(comptime T: type, comptime options: Options) type {
 
 			var nextArgument: ?[]const u8 = tokens.next();
 
-			inline for (s.fields) |field| {
-				const value = resolveArgument(field.type, arena, field.name[0..], nextArgument, &tempErrorMessage);
+			inline for (s.fields, 0..) |field, i| {
+				var argument = nextArgument;
+				if (comptime i + 1 == s.fields.len and takesRemainingArgument(field.type)) {
+					if (nextArgument) |firstArgument| {
+						const offset = @intFromPtr(firstArgument.ptr) - @intFromPtr(args.ptr);
+						argument = std.mem.trim(u8, args[offset..], " ");
+					}
+				}
+				const value = resolveArgument(field.type, arena, field.name[0..], argument, &tempErrorMessage);
 
 				if (value == error.ParseError) {
 					if (@typeInfo(field.type) == .optional) {
@@ -77,7 +84,11 @@ pub fn Parser(comptime T: type, comptime options: Options) type {
 				} else {
 					@field(result, field.name) = value catch unreachable;
 					tempErrorMessage.clearRetainingCapacity();
-					nextArgument = tokens.next();
+					if (comptime i + 1 == s.fields.len and takesRemainingArgument(field.type)) {
+						nextArgument = null;
+					} else {
+						nextArgument = tokens.next();
+					}
 				}
 			}
 
@@ -87,6 +98,13 @@ pub fn Parser(comptime T: type, comptime options: Options) type {
 			}
 
 			return result;
+		}
+
+		fn takesRemainingArgument(comptime Field: type) bool {
+			return switch (@typeInfo(Field)) {
+				.@"struct", .@"union", .@"enum", .@"opaque" => @hasDecl(Field, "takeRemaining"),
+				else => false,
+			};
 		}
 
 		fn resolveArgument(comptime Field: type, arena: NeverFailingAllocator, name: []const u8, argument: ?[]const u8, errorMessage: *ListManaged(u8)) error{ParseError}!Field {
