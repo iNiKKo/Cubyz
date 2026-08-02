@@ -121,6 +121,8 @@ pub fn render() void {
 			y += 8;
 			draw.print("Wind: ({d:.2}, {d:.2}) snapshot={} grid origin=({}, {})", .{snapshot.wind[0], snapshot.wind[1], snapshot.revision, snapshot.origin_cell[0], snapshot.origin_cell[1]}, 0, y, 8);
 			y += 8;
+			draw.print("Weather feed: source={}ms packet={}ms", .{snapshot.sourceStepMillis, snapshot.packetIntervalMillis}, 0, y, 8);
+			y += 8;
 			draw.print("Storm mesh indices: {}", .{main.renderer.clouds.stormIndexCount}, 0, y, 8);
 			y += 8;
 		}

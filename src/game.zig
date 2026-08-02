@@ -292,6 +292,8 @@ pub const WeatherGrid = struct {
 		cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
 		revision: u64 = 0,
 		time_millis: i64 = 0,
+		sourceStepMillis: i64 = 0,
+		packetIntervalMillis: i64 = 0,
 		displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
 	};
 
@@ -301,6 +303,9 @@ pub const WeatherGrid = struct {
 	cells: [cell_count]Cell = [_]Cell{.{}} ** cell_count,
 	revision: u64 = 0,
 	time_millis: i64 = 0,
+	sourceStepMillis: i64 = 0,
+	packetIntervalMillis: i64 = 0,
+	lastPacketReceived: ?std.Io.Timestamp = null,
 
 	displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
 	displayOriginCell: Vec2i = .{std.math.minInt(i32), std.math.minInt(i32)},
@@ -311,6 +316,14 @@ pub const WeatherGrid = struct {
 	pub fn update(self: *WeatherGrid, origin_cell: Vec2i, wind: Vec2f, time_millis: i64, cells: [cell_count]Cell) void {
 		self.mutex.lock();
 		defer self.mutex.unlock();
+		const now = main.timestamp();
+		if (self.time_millis != 0 and time_millis >= self.time_millis) {
+			self.sourceStepMillis = time_millis - self.time_millis;
+		}
+		if (self.lastPacketReceived) |last| {
+			self.packetIntervalMillis = last.durationTo(now).toMilliseconds();
+		}
+		self.lastPacketReceived = now;
 		self.origin_cell = origin_cell;
 		self.wind = wind;
 		self.cells = cells;
@@ -367,7 +380,7 @@ pub const WeatherGrid = struct {
 	pub fn snapshot(self: *WeatherGrid) Snapshot {
 		self.mutex.lock();
 		defer self.mutex.unlock();
-		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.displayRevision, .time_millis = self.time_millis, .displayCells = self.displayCells};
+		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.displayRevision, .time_millis = self.time_millis, .sourceStepMillis = self.sourceStepMillis, .packetIntervalMillis = self.packetIntervalMillis, .displayCells = self.displayCells};
 	}
 
 	pub fn sampleAt(self: *WeatherGrid, wx: f64, wy: f64) Sample {
