@@ -388,7 +388,7 @@ pub const User = struct {
 				while (z != newBoxEnd[2]) : (z +%= chunk.chunkSize) {
 					const inZDistance = z -% lastBoxStart[2] >= 0 and z -% lastBoxEnd[2] < 0;
 					if (!inXDistance or !inYDistance or !inZDistance) {
-						self.loadedChunks[simArrIndex(x)][simArrIndex(y)][simArrIndex(z)] = world_zig.ChunkManager.getOrGenerateSimulationChunkAndIncreaseRefCount(.{.wx = x, .wy = y, .wz = z, .voxelSize = 1});
+						self.loadedChunks[simArrIndex(x)][simArrIndex(y)][simArrIndex(z)] = world_zig.ChunkManager.getOrGenerateSimulationChunkAndIncreaseRefCount(.{.wx = x, .wy = y, .wz = z, .voxelSize = 1}, self.player().pos);
 					}
 				}
 			}
@@ -499,7 +499,9 @@ pub const User = struct {
 	}
 
 	fn isNetworkQueueFull(self: *User) bool {
-		return self.conn.secureChannel.super.sendBuffer.buffer.len > 900000;
+		const estimatedQueueBytes: usize = @intFromFloat(self.conn.bandwidthEstimateInBytesPerRtt * 4.0);
+		const queueLimit = std.math.clamp(estimatedQueueBytes, 16*1024, 900000);
+		return self.conn.secureChannel.super.sendBuffer.buffer.len > queueLimit;
 	}
 
 	fn scheduleJobQueue(self: *User) void {

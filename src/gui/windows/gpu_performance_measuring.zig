@@ -121,33 +121,4 @@ pub fn render() void {
 
 	submitted[curBuffer] = @splat(false);
 	draw.print("Total: {} µs", .{@divTrunc(sum, 1000)}, 0, 0, 8);
-	const lightManager = main.itemdrop.ItemDisplayManager;
-	draw.print("Dropped lights: {} sources -> {} clusters -> {}/{} GPU", .{
-		lightManager.droppedLightSourceCount,
-		lightManager.droppedLightClusterCount,
-		lightManager.activeDropLightCount,
-		lightManager.maxDropLights,
-	}, 0, y, 8);
-	y += 8;
-	printWaterDebug(y);
-}
-
-const fluid_spread = @import("../../callbacks/block/server/fluid_spread.zig");
-
-fn printWaterDebug(y: f32) void {
-	const pos = main.renderer.MeshSelection.selectedBlockPos orelse {
-		draw.print("Water debug: no block targeted", .{}, 0, y, 8);
-		return;
-	};
-	const block = main.renderer.mesh_storage.getBlockFromRenderThread(pos[0], pos[1], pos[2]) orelse {
-		draw.print("Water debug: chunk not loaded", .{}, 0, y, 8);
-		return;
-	};
-	const waterType = main.blocks.parseBlock("cubyz:water").typ;
-	if (block.typ == waterType) {
-		const levelLabel: []const u8 = if (block.data == fluid_spread.sourceLevel) "permanent source" else if (block.data == 0) "0 (pending evaporation)" else "flowing";
-		draw.print("Water debug: level={} ({s}) at {},{},{}", .{block.data, levelLabel, pos[0], pos[1], pos[2]}, 0, y, 8);
-	} else {
-		draw.print("Water debug: targeting {s} (not water)", .{block.id()}, 0, y, 8);
-	}
 }

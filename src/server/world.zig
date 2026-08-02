@@ -148,7 +148,7 @@ pub const ChunkManager = struct {
 		return null;
 	}
 
-	pub fn getOrGenerateSimulationChunkAndIncreaseRefCount(pos: chunk.ChunkPosition) *SimulationChunk {
+	pub fn getOrGenerateSimulationChunkAndIncreaseRefCount(pos: chunk.ChunkPosition, priorityPosition: Vec3d) *SimulationChunk {
 		std.debug.assert(pos.voxelSize == 1);
 		mutex.lock();
 		if (simulationChunkHashMap.get(pos)) |ch| {
@@ -161,7 +161,7 @@ pub const ChunkManager = struct {
 		ch.increaseRefCount();
 		simulationChunkHashMap.put(pos, ch) catch unreachable;
 		mutex.unlock();
-		ChunkLoadTask.scheduleAndDecreaseRefCount(pos, .{.simulationChunk = ch});
+		ChunkLoadTask.scheduleAndDecreaseRefCount(pos, .{.simulationChunk = .{ .chunk = ch, .priorityPosition = priorityPosition } });
 		return ch;
 	}
 
@@ -176,7 +176,7 @@ pub const ChunkManager = struct {
 
 	const Source = union(enum) {
 		player: server.PlayerIndex,
-		simulationChunk: *SimulationChunk,
+		simulationChunk: struct { chunk: *SimulationChunk, priorityPosition: Vec3d },
 	};
 
 	const ChunkLoadTask = struct {
@@ -217,7 +217,7 @@ pub const ChunkManager = struct {
 					const user = server.getUserByIndex(player) orelse return 0;
 					return self.pos.getPriority(user.player().pos);
 				},
-				else => return std.math.floatMax(f32),
+				.simulationChunk => |simulationChunk| return self.pos.getPriority(simulationChunk.priorityPosition),
 			}
 		}
 
@@ -231,7 +231,7 @@ pub const ChunkManager = struct {
 					targetRenderDistance *= self.pos.voxelSize;
 					return minDistSquare <= targetRenderDistance*targetRenderDistance;
 				},
-				.simulationChunk => |ch| if (ch.refCount.load(.monotonic) == 2) return false,
+				.simulationChunk => |simulationChunk| if (simulationChunk.chunk.refCount.load(.monotonic) == 2) return false,
 			}
 			return true;
 		}
@@ -244,7 +244,7 @@ pub const ChunkManager = struct {
 		pub fn clean(self: *ChunkLoadTask) void {
 			switch (self.source) {
 				.player => {},
-				.simulationChunk => |ch| ch.decreaseRefCount(),
+				.simulationChunk => |simulationChunk| simulationChunk.chunk.decreaseRefCount(),
 			}
 			main.globalAllocator.destroy(self);
 		}
@@ -350,7 +350,7 @@ pub const ChunkManager = struct {
 				ch.decreaseRefCount();
 			},
 			.simulationChunk => |simulationChunk| {
-				simulationChunk.setChunkAndDecreaseRefCount(ch);
+				simulationChunk.chunk.setChunkAndDecreaseRefCount(ch);
 			},
 		}
 	}

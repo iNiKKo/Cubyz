@@ -1452,7 +1452,7 @@ pub const Connection = struct {
 	restartCounter: u32 = 0,
 
 	hasRttEstimate: bool = false,
-	rttEstimate: f32 = 1000*ms,
+	rttEstimate: f32 = 100*ms,
 	rttUncertainty: f32 = 0.0,
 	lastRttSampleTime: i64,
 	nextPacketTimestamp: i64,
@@ -1460,7 +1460,7 @@ pub const Connection = struct {
 	queuedConfirmations: main.utils.CircularBufferQueue(ConfirmationData),
 	mtuEstimate: u16 = minMtu,
 
-	bandwidthEstimateInBytesPerRtt: f32 = minMtu,
+	bandwidthEstimateInBytesPerRtt: f32 = 10*minMtu,
 	slowStart: bool = true,
 	relativeSendTime: i64 = 0,
 	relativeIdleTime: i64 = 0,

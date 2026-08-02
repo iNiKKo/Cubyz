@@ -460,7 +460,7 @@ pub const ClientItemDropManager = struct {
 		mutex.lock();
 		defer mutex.unlock();
 		for (&instance.?.interpolation.lastVel) |*lastVel| {
-			@as(*align(8) [ItemDropManager.maxCapacity]Vec3d, @ptrCast(lastVel))[i] = Vec3d{0, 0, 0};
+			@as(*align(8) [ItemDropManager.maxCapacity]Vec3d, @ptrCast(lastVel))[i] = drop.vel;
 		}
 		for (&instance.?.interpolation.lastPos) |*lastPos| {
 			@as(*align(8) [ItemDropManager.maxCapacity]Vec3d, @ptrCast(lastPos))[i] = drop.pos;
@@ -483,20 +483,20 @@ pub const ClientItemDropManager = struct {
 	}
 };
 
+fn blockEmittedLight(blockType: u16) ?Vec3f {
+	const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
+	if (light == 0) return null;
+	return Vec3f{
+		@floatFromInt(light >> 16 & 255),
+		@floatFromInt(light >> 8 & 255),
+		@floatFromInt(light & 255),
+	} / @as(Vec3f, @splat(255.0));
+}
+
 pub fn getItemEmittedLight(item: main.items.Item) Vec3f {
-	if (item == .baseItem) {
-		if (item.baseItem.block()) |blockType| {
-			const l = (blocks.Block{.typ = blockType, .data = 0}).light();
-			if (l != 0) {
-				return Vec3f{
-					@floatFromInt(l >> 16 & 255),
-					@floatFromInt(l >> 8 & 255),
-					@floatFromInt(l & 255),
-				} / @as(Vec3f, @splat(255.0));
-			}
-		}
-	}
-	return @splat(0);
+	if (item != .baseItem) return @splat(0);
+	const blockType = item.baseItem.block() orelse return @splat(0);
+	return blockEmittedLight(blockType) orelse @splat(0);
 }
 
 pub const ItemDisplayManager = struct {
@@ -511,18 +511,15 @@ pub const ItemDisplayManager = struct {
 
 	pub const maxDropLights = 8;
 	const maxDropLightClusters = 32;
+	const dropLightRange: f32 = 48.0;
 	const dropLightClusterRadius: f32 = 4.0;
 	pub var dropLightPositionsRelative: [maxDropLights]Vec3f = @splat(@splat(0));
 	pub var dropLightColors: [maxDropLights]Vec3f = @splat(@splat(0));
 
-	pub var droppedLightSourceCount: u32 = 0;
-	pub var droppedLightClusterCount: u32 = 0;
-	pub var activeDropLightCount: u32 = 0;
 	const DropLightCluster = struct {
 		position: Vec3f,
 		color: Vec3f,
 		weight: f32,
-		sources: u16,
 	};
 	pub var handLightRadius: f32 = 12.0;
 
@@ -679,13 +676,13 @@ pub const ItemDisplayManager = struct {
 			const id = @intFromEnum(ent.id);
 			if (id >= maxReplicatedPlayers) continue;
 			const blockType = emissiveHeldBlockType(remoteHeldItems[id].item) orelse continue;
+			const color = blockEmittedLight(blockType) orelse continue;
 			const rel: Vec3f = @floatCast(ent.getRenderPosition() - playerPos + Vec3d{0.35, 0.0, 0.1});
 			const distance = vec.lengthSquare(rel);
 			if (distance >= bestDistance) continue;
-			const light = (blocks.Block{ .typ = blockType, .data = 0 }).light();
 			bestDistance = distance;
 			result.positionRelative = rel;
-			result.color = Vec3f{ @floatFromInt(light >> 16 & 255), @floatFromInt(light >> 8 & 255), @floatFromInt(light & 255) } / @as(Vec3f, @splat(255.0)) * @as(Vec3f, @splat(0.55));
+			result.color = color * @as(Vec3f, @splat(0.55));
 		}
 		return result;
 	}
@@ -716,11 +713,6 @@ pub const ItemDisplayManager = struct {
 
 	fn updateHandLight() void {
 		handLightColor = @splat(0);
-		dropLightPositionsRelative = @splat(@splat(0));
-		dropLightColors = @splat(@splat(0));
-		droppedLightSourceCount = 0;
-		droppedLightClusterCount = 0;
-		activeDropLightCount = 0;
 
 		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
 
@@ -729,13 +721,8 @@ pub const ItemDisplayManager = struct {
 			const baseItem = item.baseItem;
 			heldItemIdentity = .{ .base = baseItem };
 			if (baseItem.block()) |blockType| {
-				const light = (blocks.Block{.typ = blockType, .data = 0}).light();
-				if (light != 0) {
-					handLightColor = Vec3f{
-						@floatFromInt(light >> 16 & 255),
-						@floatFromInt(light >> 8 & 255),
-						@floatFromInt(light & 255),
-					} / @as(Vec3f, @splat(255.0)) * @as(Vec3f, @splat(0.55));
+				if (blockEmittedLight(blockType)) |light| {
+					handLightColor = light * @as(Vec3f, @splat(0.55));
 					const pos = Vec3f{0.4, 0.55, -0.32};
 					const invViewRotation = game.camera.viewMatrix.transpose();
 					handLightPositionRelative = vec.xyz(invViewRotation.mulVec(Vec4f{pos[0], pos[1], pos[2], 1}));
@@ -767,81 +754,76 @@ pub const ItemDisplayManager = struct {
 			sentInitialHeldLight = false;
 		}
 
+		updateDroppedLights();
+	}
+
+	fn updateDroppedLights() void {
+		dropLightPositionsRelative = @splat(@splat(0));
+		dropLightColors = @splat(@splat(0));
+
 		var clusters: [maxDropLightClusters]DropLightCluster = undefined;
 		var clusterCount: usize = 0;
-		var dropStrengths: [maxDropLights]f32 = @splat(0);
-
 		if (game.world) |world| {
 			const itemDrops = &world.itemDrops.super;
 			const playerPos = game.Player.getPosBlocking();
 			for (0..itemDrops.size) |i| {
-				const dropStack = itemDrops.list.items(.itemStack)[i];
-				if (dropStack.item == .baseItem) {
-					const baseItem = dropStack.item.baseItem;
-					if (baseItem.block()) |blockType| {
-						const light = (blocks.Block{.typ = blockType, .data = 0}).light();
-						if (light != 0) {
-							const dPos = itemDrops.list.items(.pos)[i];
-							const relPos = Vec3f{
-								@floatCast(dPos[0] - playerPos[0]),
-								@floatCast(dPos[1] - playerPos[1]),
-								@floatCast(dPos[2] - playerPos[2]),
-							};
-							const distToPlayer = vec.length(relPos);
-							if (distToPlayer < 48.0) {
-								droppedLightSourceCount += 1;
-								const col = Vec3f{
-									@floatFromInt(light >> 16 & 255),
-									@floatFromInt(light >> 8 & 255),
-									@floatFromInt(light & 255),
-								} / @as(Vec3f, @splat(255.0));
-								const str = @max(@max(col[0], col[1]), col[2]) / (1.0 + distToPlayer * 0.05);
-
-								var match: ?usize = null;
-								var bestClusterDistance = dropLightClusterRadius * dropLightClusterRadius;
-								for (clusters[0..clusterCount], 0..) |cluster, clusterIndex| {
-									const clusterDistance = vec.lengthSquare(relPos - cluster.position);
-									if (clusterDistance <= bestClusterDistance) {
-										bestClusterDistance = clusterDistance;
-										match = clusterIndex;
-									}
-								}
-								if (match) |clusterIndex| {
-									const oldWeight = clusters[clusterIndex].weight;
-									const newWeight = oldWeight + str;
-									clusters[clusterIndex].position = (clusters[clusterIndex].position * @as(Vec3f, @splat(oldWeight)) + relPos * @as(Vec3f, @splat(str))) / @as(Vec3f, @splat(newWeight));
-									clusters[clusterIndex].color += col;
-									clusters[clusterIndex].weight = newWeight;
-									clusters[clusterIndex].sources +|= 1;
-								} else if (clusterCount < maxDropLightClusters) {
-									clusters[clusterCount] = .{ .position = relPos, .color = col, .weight = str, .sources = 1 };
-									clusterCount += 1;
-								}
-							}
-						}
-					}
-				}
+				const item = itemDrops.list.items(.itemStack)[i].item;
+				if (item != .baseItem) continue;
+				const blockType = item.baseItem.block() orelse continue;
+				const color = blockEmittedLight(blockType) orelse continue;
+				const position = itemDrops.list.items(.pos)[i];
+				const relativePosition = Vec3f{
+					@floatCast(position[0] - playerPos[0]),
+					@floatCast(position[1] - playerPos[1]),
+					@floatCast(position[2] - playerPos[2]),
+				};
+				const distance = vec.length(relativePosition);
+				if (distance >= dropLightRange) continue;
+				const strength = @max(@max(color[0], color[1]), color[2]) / (1.0 + distance * 0.05);
+				mergeDropLightCluster(&clusters, &clusterCount, relativePosition, color, strength);
 			}
 		}
-		droppedLightClusterCount = @intCast(clusterCount);
 
-		for (clusters[0..clusterCount]) |cluster| {
-			for (0..maxDropLights) |slot| {
-				if (cluster.weight <= dropStrengths[slot]) continue;
-				var move: usize = maxDropLights - 1;
-				while (move > slot) : (move -= 1) {
-					dropStrengths[move] = dropStrengths[move - 1];
-					dropLightPositionsRelative[move] = dropLightPositionsRelative[move - 1];
-					dropLightColors[move] = dropLightColors[move - 1];
-				}
-				dropStrengths[slot] = cluster.weight;
-				dropLightPositionsRelative[slot] = cluster.position;
-				dropLightColors[slot] = cluster.color;
-				break;
+		var strengths: [maxDropLights]f32 = @splat(0);
+		for (clusters[0..clusterCount]) |cluster| insertDropLight(cluster, &strengths);
+	}
+
+	fn mergeDropLightCluster(clusters: *[maxDropLightClusters]DropLightCluster, clusterCount: *usize, position: Vec3f, color: Vec3f, strength: f32) void {
+		var match: ?usize = null;
+		var bestDistance = dropLightClusterRadius * dropLightClusterRadius;
+		const count = clusterCount.*;
+		for (clusters[0..count], 0..) |cluster, index| {
+			const distance = vec.lengthSquare(position - cluster.position);
+			if (distance <= bestDistance) {
+				bestDistance = distance;
+				match = index;
 			}
 		}
-		for (dropStrengths) |strength| {
-			if (strength > 0) activeDropLightCount += 1;
+		if (match) |index| {
+			const oldWeight = clusters[index].weight;
+			const newWeight = oldWeight + strength;
+			clusters[index].position = (clusters[index].position * @as(Vec3f, @splat(oldWeight)) + position * @as(Vec3f, @splat(strength))) / @as(Vec3f, @splat(newWeight));
+			clusters[index].color += color;
+			clusters[index].weight = newWeight;
+		} else if (clusterCount.* < maxDropLightClusters) {
+			clusters[clusterCount.*] = .{ .position = position, .color = color, .weight = strength };
+			clusterCount.* += 1;
+		}
+	}
+
+	fn insertDropLight(cluster: DropLightCluster, strengths: *[maxDropLights]f32) void {
+		for (0..maxDropLights) |slot| {
+			if (cluster.weight <= strengths[slot]) continue;
+			var move: usize = maxDropLights - 1;
+			while (move > slot) : (move -= 1) {
+				strengths[move] = strengths[move - 1];
+				dropLightPositionsRelative[move] = dropLightPositionsRelative[move - 1];
+				dropLightColors[move] = dropLightColors[move - 1];
+			}
+			strengths[slot] = cluster.weight;
+			dropLightPositionsRelative[slot] = cluster.position;
+			dropLightColors[slot] = cluster.color;
+			break;
 		}
 	}
 };
