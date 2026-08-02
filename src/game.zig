@@ -380,7 +380,7 @@ pub const WeatherGrid = struct {
 	pub fn snapshot(self: *WeatherGrid) Snapshot {
 		self.mutex.lock();
 		defer self.mutex.unlock();
-		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.displayRevision, .time_millis = self.time_millis, .sourceStepMillis = self.sourceStepMillis, .packetIntervalMillis = self.packetIntervalMillis, .displayCells = self.displayCells};
+		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis, .sourceStepMillis = self.sourceStepMillis, .packetIntervalMillis = self.packetIntervalMillis, .displayCells = self.displayCells};
 	}
 
 	pub fn sampleAt(self: *WeatherGrid, wx: f64, wy: f64) Sample {
