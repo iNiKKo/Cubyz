@@ -17,7 +17,7 @@ const planeHeight: f32 = 640.0;
 
 const stormPlaneHeight: f32 = 680.0;
 
-const windVelocity = Vec2f{3.0, 1.4};
+const fallbackWindVelocity = Vec2f{3.0, 1.4};
 
 const Vertex = extern struct {
 	pos: [2]f32,
@@ -78,16 +78,17 @@ pub fn draw(ambientLight: Vec3f, skyColor: Vec3f, playerPos: Vec3d) void {
 
 	pipeline.bind(null);
 
+	const weatherSnapshot = if (game.world) |world| world.weatherGrid.snapshot() else game.WeatherGrid.Snapshot{};
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const elapsedSeconds: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
-	const windOffset = windVelocity*@as(Vec2f, @splat(elapsedSeconds));
+	const cloudWind = if (vec.dot(weatherSnapshot.wind, weatherSnapshot.wind) > 0.01) weatherSnapshot.wind else fallbackWindVelocity;
+	const windOffset = cloudWind*@as(Vec2f, @splat(elapsedSeconds));
 	const playerXY = Vec2f{@floatCast(playerPos[0]), @floatCast(playerPos[1])};
 	const noiseOrigin = playerXY + windOffset;
 
 	const neutralWhite = Vec3f{0.98, 0.98, 1.0};
 
 	const cloudLight = @min(Vec3f{0.86, 0.89, 0.93}, ambientLight*@as(Vec3f, @splat(0.55)) + Vec3f{0.30, 0.33, 0.38});
-	const weatherSnapshot = if (game.world) |world| world.weatherGrid.snapshot() else game.WeatherGrid.Snapshot{};
 	const localWeather = game.WeatherGrid.sampleSnapshot(weatherSnapshot, playerPos[0], playerPos[1]);
 	const weatherFogStrength: f32 = if (game.world) |world| world.dayTime.weatherVisibilityAtAltitude(playerPos[2]) else 0.0;
 	const weatherCloudDarkening: f32 = if (localWeather.kind == 1) std.math.lerp(1.0, 0.58, weatherFogStrength) else 1.0;
