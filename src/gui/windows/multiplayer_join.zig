@@ -79,6 +79,11 @@ fn baseServerCompatibilityCallback(value: bool) void {
 	settings.save();
 }
 
+fn legacy030ServerCompatibilityCallback(value: bool) void {
+	settings.legacy030ServerCompatibility = value;
+	settings.save();
+}
+
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 300, 16);
 	list.add(Label.init(.{0, 0}, width, "Please send your IP to the host of the game and enter the host's IP below.", .center));
@@ -90,6 +95,7 @@ pub fn onOpen() void {
 	ipAddressEntry.obfuscated = main.settings.streamerMode;
 	list.add(ipAddressEntry);
 	list.add(CheckBox.init(.{0, 0}, width, "Base Server Compatibility", settings.baseServerCompatibility, &baseServerCompatibilityCallback));
+	list.add(CheckBox.init(.{0, 0}, width, "0.3.0 Server Compatibility", settings.legacy030ServerCompatibility, &legacy030ServerCompatibilityCallback));
 	list.add(Button.initText(.{0, 0}, 100, "Join", .{.onAction = .init(join)}));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();

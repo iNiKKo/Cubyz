@@ -732,7 +732,7 @@ pub const ItemDisplayManager = struct {
 			heldItemIdentity = .{ .procedural = item.proceduralItem };
 		}
 		if (game.world) |world| {
-			if (main.settings.baseServerCompatibility) {
+			if (main.settings.isBaseServerCompatible()) {
 				sentInitialHeldLight = false;
 			} else {
 				const isTool = item == .proceduralItem;
