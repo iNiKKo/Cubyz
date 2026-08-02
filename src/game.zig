@@ -305,6 +305,8 @@ pub const WeatherGrid = struct {
 	displayCells: [cell_count]Sample = [_]Sample{.{}} ** cell_count,
 	displayOriginCell: Vec2i = .{std.math.minInt(i32), std.math.minInt(i32)},
 	lastDisplayUpdate: ?std.Io.Timestamp = null,
+	displayRevision: u64 = 0,
+	lastDisplayRevision: ?std.Io.Timestamp = null,
 
 	pub fn update(self: *WeatherGrid, origin_cell: Vec2i, wind: Vec2f, time_millis: i64, cells: [cell_count]Cell) void {
 		self.mutex.lock();
@@ -331,6 +333,8 @@ pub const WeatherGrid = struct {
 				};
 			}
 			self.lastDisplayUpdate = now;
+			self.lastDisplayRevision = now;
+			self.displayRevision +%= 1;
 			return;
 		}
 		const last = self.lastDisplayUpdate orelse now;
@@ -338,6 +342,7 @@ pub const WeatherGrid = struct {
 		const dt: f32 = @max(0.0, @as(f32, @floatFromInt(last.durationTo(now).toNanoseconds()))*1e-9);
 
 		const t = 1 - @exp(-2.5*@min(dt, 1.5));
+		var transitioning = false;
 		for (&self.displayCells, self.cells) |*display, cell| {
 			const target: Sample = .{
 				.cloud_cover = @as(f32, @floatFromInt(cell.cloud_cover))/255.0,
@@ -345,18 +350,24 @@ pub const WeatherGrid = struct {
 				.dust = @as(f32, @floatFromInt(cell.dust))/255.0,
 				.kind = cell.kind,
 			};
+			transitioning = transitioning or @abs(target.cloud_cover - display.cloud_cover) > 0.002 or @abs(target.precipitation - display.precipitation) > 0.002 or @abs(target.dust - display.dust) > 0.002;
 			display.cloud_cover += (target.cloud_cover - display.cloud_cover)*t;
 			display.precipitation += (target.precipitation - display.precipitation)*t;
 			display.dust += (target.dust - display.dust)*t;
 
 			display.kind = target.kind;
 		}
+		const last_revision = self.lastDisplayRevision orelse now;
+		if (transitioning and last_revision.durationTo(now).toMilliseconds() >= 100) {
+			self.lastDisplayRevision = now;
+			self.displayRevision +%= 1;
+		}
 	}
 
 	pub fn snapshot(self: *WeatherGrid) Snapshot {
 		self.mutex.lock();
 		defer self.mutex.unlock();
-		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.revision, .time_millis = self.time_millis, .displayCells = self.displayCells};
+		return .{.origin_cell = self.origin_cell, .wind = self.wind, .cells = self.cells, .revision = self.displayRevision, .time_millis = self.time_millis, .displayCells = self.displayCells};
 	}
 
 	pub fn sampleAt(self: *WeatherGrid, wx: f64, wy: f64) Sample {

@@ -234,7 +234,7 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 	const farTopZ: f64 = @min(anchorZ + fallRangeAbovePlayer, game.weatherCloudBaseHeight - 1.0);
 	const farGroundZ: f64 = anchorZ - 4.0;
 	const farRange: f32 = @max(@as(f32, @floatCast(farTopZ - farGroundZ)), 1.0);
-	for (weatherSnapshot.cells, 0..) |weatherCell, weatherIndex| {
+	for (weatherSnapshot.displayCells, 0..) |weatherCell, weatherIndex| {
 		if (weatherCell.kind != 1 and weatherCell.kind != 2 and weatherCell.kind != 3) continue;
 		const wxCell = weatherSnapshot.origin_cell[0] + @as(i32, @intCast(weatherIndex % game.WeatherGrid.dimension));
 		const wyCell = weatherSnapshot.origin_cell[1] + @as(i32, @intCast(weatherIndex / game.WeatherGrid.dimension));
@@ -242,9 +242,8 @@ pub fn update(playerPos: Vec3d, viewMatrix: Mat4f, ambientLight: Vec3f) void {
 		const isDust = weatherCell.kind == 3;
 
 		if (isDust) continue;
-		const weatherStrength = if (isDust) weatherCell.dust else weatherCell.precipitation;
-		if (weatherStrength == 0) continue;
-		const intensity = @as(f32, @floatFromInt(weatherStrength))/255.0;
+		const intensity = if (isDust) weatherCell.dust else weatherCell.precipitation;
+		if (intensity <= 0.01) continue;
 		const farCount: usize = @intFromFloat(6.0 + intensity*18.0);
 		for (0..farCount) |i| {
 			const hx: i64 = @as(i64, wxCell)*31 + @as(i64, @intCast(i));

@@ -170,6 +170,7 @@ pub const User = struct {
 	handInventory: ?InventoryId = null,
 
 	connected: Atomic(bool) = .init(true),
+	connectQueued: Atomic(bool) = .init(false),
 	state: State = .awaitingKeyVerification,
 
 	mutex: main.utils.Mutex = .{},
@@ -743,7 +744,7 @@ fn update() void {
 	stdin_handler.update();
 
 	while (userConnectList.popFront()) |user| {
-		connectInternal(user);
+		if (user.connected.load(.monotonic)) connectInternal(user);
 	}
 
 	const userList = getUserList(main.stackAllocator);
@@ -946,6 +947,7 @@ pub fn removePlayer(user: *User) void {
 }
 
 pub fn connect(user: *User) void {
+	if (user.connectQueued.swap(true, .acq_rel)) return;
 	userConnectList.pushBack(user);
 }
 
