@@ -29,6 +29,9 @@ pub fn run(_: *@This(), params: main.callbacks.ServerBlockCallback.Params) main.
 
 	const support = world.getBlock(wx, wy, wz - 1) orelse return .ignored;
 	if (support.replaceable()) {
+		if (world.getBlock(wx, wy, wz + 1)) |upper| {
+			_ = world.cmpxchgBlock(wx, wy, wz + 1, upper, upper);
+		}
 		_ = world.cmpxchgBlock(wx, wy, wz, params.block, .air);
 		return .handled;
 	}
@@ -37,6 +40,7 @@ pub fn run(_: *@This(), params: main.callbacks.ServerBlockCallback.Params) main.
 	const expectedUpper = Block{.typ = params.block.typ, .data = baseData | upperHalf};
 	if (upper.typ == params.block.typ) {
 		if (upper.data & 3 != baseData & 3) {
+			_ = world.cmpxchgBlock(wx, wy, wz + 1, upper, upper);
 			_ = world.cmpxchgBlock(wx, wy, wz, params.block, .air);
 			return .handled;
 		}
@@ -44,6 +48,7 @@ pub fn run(_: *@This(), params: main.callbacks.ServerBlockCallback.Params) main.
 		return .handled;
 	}
 	if (!upper.replaceable()) {
+		_ = world.cmpxchgBlock(wx, wy, wz + 1, upper, upper);
 		_ = world.cmpxchgBlock(wx, wy, wz, params.block, .air);
 		return .handled;
 	}

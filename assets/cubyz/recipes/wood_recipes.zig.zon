@@ -20,6 +20,34 @@
 		.output = "2 cubyz:fence/{type}",
 	},
 	.{
+		.inputs = .{"3 cubyz:planks/oak"},
+		.output = "3 cubyz:ladder/oak",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/pine"},
+		.output = "3 cubyz:ladder/pine",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/birch"},
+		.output = "3 cubyz:ladder/birch",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/mahogany"},
+		.output = "3 cubyz:ladder/mahogany",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/willow"},
+		.output = "3 cubyz:ladder/willow",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/palm"},
+		.output = "3 cubyz:ladder/palm",
+	},
+	.{
+		.inputs = .{"3 cubyz:planks/baobab"},
+		.output = "3 cubyz:ladder/baobab",
+	},
+	.{
 		.inputs = .{"cubyz:planks/{type}"},
 		.output = "cubyz:sign/{type}",
 	},

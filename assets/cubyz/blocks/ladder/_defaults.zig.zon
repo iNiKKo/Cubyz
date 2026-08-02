@@ -1,0 +1,15 @@
+.{
+	.tags = .{.choppable, .wood},
+	.blockHealth = 2,
+	.drops = .{
+		.{.items = .{.auto}},
+	},
+	.viewThrough = true,
+	.alwaysViewThrough = true,
+	.collide = false,
+	.absorbedLight = 0x101010,
+	.rotation = "cubyz:ladder",
+	.onUpdate = .{.type = .check_support_blocks},
+	.model = "cubyz:ladder",
+	.lodReplacement = "cubyz:air",
+}

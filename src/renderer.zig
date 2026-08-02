@@ -2087,6 +2087,8 @@ pub const MeshSelection = struct {
 
 	fn canPlaceDoor(pos: Vec3i, block: main.blocks.Block) bool {
 		if (block.mode() != main.rotation.getByID("cubyz:door")) return true;
+		const support = mesh_storage.getBlockFromRenderThread(pos[0], pos[1], pos[2] - 1) orelse return false;
+		if (support.replaceable() or main.blocks.meshes.model(support).model().neighborFacingQuads[main.chunk.Neighbor.dirUp.toInt()].len == 0) return false;
 		const upper = mesh_storage.getBlockFromRenderThread(pos[0], pos[1], pos[2] + 1) orelse return false;
 		return upper.replaceable() and canPlaceBlock(pos + Vec3i{0, 0, 1}, block);
 	}

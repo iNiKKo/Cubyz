@@ -862,6 +862,42 @@ pub fn getBlockWithSide(comptime side: main.sync.Side, x: i32, y: i32, z: i32) ?
 	}
 }
 
+fn touchingLadder() bool {
+	const min = Player.super.pos + Player.outerBoundingBox.min;
+	const max = Player.super.pos + Player.outerBoundingBox.max;
+	const minX: i32 = @intFromFloat(@floor(min[0]));
+	const minY: i32 = @intFromFloat(@floor(min[1]));
+	const minZ: i32 = @intFromFloat(@floor(min[2]));
+	const maxX: i32 = @intFromFloat(@floor(max[0]));
+	const maxY: i32 = @intFromFloat(@floor(max[1]));
+	const maxZ: i32 = @intFromFloat(@floor(max[2]));
+	const ladderMode = main.rotation.getByID("cubyz:ladder");
+
+	var x = minX;
+	while (x <= maxX) : (x += 1) {
+		var y = minY;
+		while (y <= maxY) : (y += 1) {
+			var z = minZ;
+			while (z <= maxZ) : (z += 1) {
+				if (getBlockWithSide(.client, x, y, z)) |block| {
+					if (block.mode() == ladderMode) {
+						const plane = switch (block.data) {
+							0 => @as(f64, @floatFromInt(x)) + 0.0625,
+							1 => @as(f64, @floatFromInt(x)) + 0.9375,
+							2 => @as(f64, @floatFromInt(y)) + 0.0625,
+							3 => @as(f64, @floatFromInt(y)) + 0.9375,
+							else => continue,
+						};
+						const distance = if (block.data < 2) @abs(Player.super.pos[0] - plane) else @abs(Player.super.pos[1] - plane);
+						if (distance < 0.38) return true;
+					}
+				}
+			}
+		}
+	}
+	return false;
+}
+
 pub fn update(deltaTime: f64) void {
 	if (world.?.shouldRestart.load(.acquire)) {
 		restart();
@@ -1021,9 +1057,18 @@ pub fn update(deltaTime: f64) void {
 		Player.eye.desiredPos = (Vec3d{0, 0, 1.3 - Player.crouchingBoundingBoxExtent[2]} - Vec3d{0, 0, 1.7 - Player.standingBoundingBoxExtent[2]})*@as(Vec3f, @splat(smoothPerc)) + Vec3d{0, 0, 1.7 - Player.standingBoundingBoxExtent[2]};
 	}
 
-	const gravity: f64 = if (Player.isFlying.load(.monotonic)) 0.0 else physics.baseGravity;
+	const climbingLadder = !Player.isFlying.load(.monotonic) and touchingLadder();
+	const gravity: f64 = if (Player.isFlying.load(.monotonic) or climbingLadder) 0.0 else physics.baseGravity;
 	const jumpHeight: f64 = if (jumping) Player.jumpHeight else 0.0;
 	var motion = physics.calculateMotion(.client, deltaTime, Player.friction, Player.volumeProperties, physics.playerDensity, Player.super.pos, &Player.super.vel, acc, gravity, jumpHeight);
+	if (climbingLadder) {
+		const climbVelocity: f64 = if (KeyBoard.key("jump").pressed or KeyBoard.key("forward").value > 0.0) 4.5 else if (KeyBoard.key("fall").pressed or KeyBoard.key("backward").value > 0.0) -3.0 else -1.25;
+		Player.super.vel[2] = climbVelocity;
+		motion[2] = climbVelocity*deltaTime;
+		motion[0] *= 0.45;
+		motion[1] *= 0.45;
+		Player.jumpCoyote = 0;
+	}
 
 	{
 		Player.mutex.lock();
