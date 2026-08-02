@@ -469,6 +469,10 @@ pub const ClientItemDropManager = struct {
 
 	pub fn remove(self: *ClientItemDropManager, i: u16) void {
 		self.super.emptyMutex.lock();
+		if (self.super.isEmpty.isSet(i)) {
+			self.super.emptyMutex.unlock();
+			return;
+		}
 		self.super.isEmpty.set(i);
 		self.super.emptyMutex.unlock();
 		self.super.changeQueue.pushBack(.{.remove = i});
@@ -732,7 +736,7 @@ pub const ItemDisplayManager = struct {
 			heldItemIdentity = .{ .procedural = item.proceduralItem };
 		}
 		if (game.world) |world| {
-			if (main.settings.isBaseServerCompatible()) {
+			if (world.conn.isBaseServerCompatible()) {
 				sentInitialHeldLight = false;
 			} else {
 				const isTool = item == .proceduralItem;

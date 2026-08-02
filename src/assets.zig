@@ -550,7 +550,11 @@ pub const Palette = struct {
 pub var worldAssetFolder: []const u8 = undefined;
 var refCount: std.atomic.Value(u8) = .init(0);
 
-pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPalette: *Palette, proceduralItemPalette: *Palette, biomePalette: *Palette, entityModelPalette: *Palette, entityComponentPalette: *Palette) !void {
+pub const WorldAssetLoadOptions = struct {
+	useCommonMigrations: bool = false,
+};
+
+pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPalette: *Palette, proceduralItemPalette: *Palette, biomePalette: *Palette, entityModelPalette: *Palette, entityComponentPalette: *Palette, options: WorldAssetLoadOptions) !void {
 	const prevVal = refCount.fetchAdd(1, .monotonic);
 	if (prevVal != 0) return;
 
@@ -563,6 +567,13 @@ pub fn loadWorldAssets(assetFolder: []const u8, blockPalette: *Palette, itemPale
 
 	var worldAssets = common.clone(worldArena);
 	worldAssets.read(worldArena, main.files.cubyzDir(), assetFolder);
+	if (options.useCommonMigrations) {
+		worldAssets.blockMigrations = common.blockMigrations.clone(worldArena.allocator) catch unreachable;
+		worldAssets.itemMigrations = common.itemMigrations.clone(worldArena.allocator) catch unreachable;
+		worldAssets.biomeMigrations = common.biomeMigrations.clone(worldArena.allocator) catch unreachable;
+		worldAssets.entityModelMigrations = common.entityModelMigrations.clone(worldArena.allocator) catch unreachable;
+		worldAssets.entityComponentMigrations = common.entityComponentMigrations.clone(worldArena.allocator) catch unreachable;
+	}
 
 	errdefer unloadAssets();
 

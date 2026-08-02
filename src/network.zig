@@ -1467,6 +1467,7 @@ pub const Connection = struct {
 
 	connectionState: Atomic(ConnectionState),
 	handShakeState: Atomic(HandShakeState) = .init(.start),
+	legacy030Server: bool = false,
 	handShakeWaiting: main.utils.Condition = .{},
 	lastConnectionTime: ?i64,
 
@@ -1531,6 +1532,10 @@ pub const Connection = struct {
 		self.slowChannel.deinit();
 		self.queuedConfirmations.deinit();
 		main.globalAllocator.destroy(self);
+	}
+
+	pub fn isBaseServerCompatible(self: *const Connection) bool {
+		return settings.baseServerCompatibility or self.legacy030Server;
 	}
 
 	fn pause(self: *Connection) void {

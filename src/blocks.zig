@@ -375,7 +375,7 @@ fn parseBlockData(fullBlockId: []const u8, data: []const u8, comptime config: Pa
 }
 
 pub fn parseBlock(data: []const u8) Block {
-	return parseBlockWithOptions(data, .{});
+	return parseBlockWithOptions(data, .{.applyMigrations = true});
 }
 
 pub fn parseBlockWithOptions(data: []const u8, comptime config: ParseBlockConfig) Block {

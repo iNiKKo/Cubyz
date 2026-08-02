@@ -1105,7 +1105,8 @@ pub const Item = union(ItemType) {
 	null: void,
 
 	pub fn init(zon: ZonElement) !Item {
-		if (BaseItemIndex.fromId(zon.get([]const u8, "item") orelse "null")) |baseItem| {
+		const itemId = main.migrations.applySingle(.item, zon.get([]const u8, "item") orelse "null");
+		if (BaseItemIndex.fromId(itemId)) |baseItem| {
 			return Item{.baseItem = baseItem};
 		} else {
 			const proceduralItemZon = zon.getChild("tool");

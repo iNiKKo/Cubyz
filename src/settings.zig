@@ -88,12 +88,6 @@ pub var lastUsedIPAddress: []const u8 = "";
 
 pub var baseServerCompatibility: bool = false;
 
-pub var legacy030ServerCompatibility: bool = false;
-
-pub fn isBaseServerCompatible() bool {
-	return baseServerCompatibility or legacy030ServerCompatibility;
-}
-
 pub var storedAccount: main.network.authentication.PasswordEncodedAccountCode = .empty;
 
 pub var guiScale: ?f32 = null;

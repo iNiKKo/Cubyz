@@ -96,7 +96,10 @@ pub const handShake = struct {
 
 	fn clientReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
 		const rawState = try reader.readInt(u8);
-		const newState: Connection.HandShakeState = if (settings.legacy030ServerCompatibility) switch (rawState) {
+		if (rawState == 4 and conn.handShakeState.load(.monotonic) != .reload) {
+			conn.legacy030Server = true;
+		}
+		const newState: Connection.HandShakeState = if (conn.legacy030Server) switch (rawState) {
 			4 => .assets,
 			5 => .serverData,
 			else => std.enums.fromInt(Connection.HandShakeState, rawState) orelse return error.InvalidEnumTag,
@@ -853,7 +856,7 @@ pub const genericUpdate = struct {
 	}
 
 	pub fn sendBlockBreaking(conn: *Connection, pos: Vec3i, progress: f32) void {
-		if (settings.isBaseServerCompatible()) return;
+		if (conn.isBaseServerCompatible()) return;
 		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + @sizeOf(Vec3i) + @sizeOf(f32));
 		defer writer.deinit();
 		writer.writeEnum(UpdateType, .blockBreaking);
@@ -1266,7 +1269,7 @@ pub const heldLight = struct {
 		broadcast(user.id, item, transform, toolRotationYZ, toolScale, miningSwing);
 	}
 	pub fn send(conn: *Connection, item: main.items.Item, transform: main.itemdrop.ItemDisplayManager.HeldLightTransform, toolRotationYZ: main.vec.Vec2f, toolScale: f32, miningSwing: f32) void {
-		if (settings.isBaseServerCompatible()) return;
+		if (conn.isBaseServerCompatible()) return;
 		var writer = utils.BinaryWriter.init(main.stackAllocator);
 		defer writer.deinit();
 		var itemStack = main.items.ItemStack{ .item = item, .amount = if (item == .null) 0 else 1 };
