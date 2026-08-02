@@ -28,14 +28,17 @@ height: f64,
 pos: Vec3d = undefined,
 rot: Vec3f = undefined,
 
-id: main.entity.Entity,
-name: []const u8,
+	id: main.entity.Entity,
+	name: []const u8,
+	hasServerPosition: bool = false,
 
 pub fn init(self: *@This(), zon: ZonElement, allocator: NeverFailingAllocator) !void {
 	self.* = @This(){
 		.id = @enumFromInt(zon.get(u32, "id") orelse std.math.maxInt(u32)),
 		.width = zon.get(f64, "width") orelse 1,
 		.height = zon.get(f64, "height") orelse 1,
+		.pos = .{0, 0, 0},
+		.rot = .{0, 0, 0},
 		.name = allocator.dupe(u8, zon.get([]const u8, "name") orelse ""),
 	};
 	self._interpolationPos = [_]f64{
@@ -63,8 +66,18 @@ pub fn getRenderPosition(self: *const @This()) Vec3d {
 	return Vec3d{self.pos[0], self.pos[1], self.pos[2]};
 }
 
-pub fn updatePosition(self: *@This(), pos: *const [6]f64, vel: *const [6]f64, time: i16) void {
-	self.interpolatedValues.updatePosition(pos, vel, time);
+	pub fn updatePosition(self: *@This(), pos: *const [6]f64, vel: *const [6]f64, time: i16) void {
+		const delta = Vec3d{pos[0], pos[1], pos[2]} - self.pos;
+		if (!self.hasServerPosition or vec.lengthSquare(delta) > 64.0) {
+			self.hasServerPosition = true;
+			self._interpolationPos = pos.*;
+			self._interpolationVel = vel.*;
+			self.interpolatedValues.init(&self._interpolationPos, &self._interpolationVel);
+			self.pos = .{pos[0], pos[1], pos[2]};
+			self.rot = .{@floatCast(pos[3]), @floatCast(pos[4]), @floatCast(pos[5])};
+			return;
+		}
+		self.interpolatedValues.updatePosition(pos, vel, time);
 }
 
 pub fn update(self: *@This(), time: i16, lastTime: i16) void {

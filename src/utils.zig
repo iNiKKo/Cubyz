@@ -1463,6 +1463,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type {
 		lastPos: [frames][elements]f64,
 		lastVel: [frames][elements]f64,
 		lastTimes: [frames]i16,
+		validFrames: [frames]bool,
 		frontIndex: u32,
 		currentPoint: ?u31,
 		outPos: *[elements]f64,
@@ -1473,6 +1474,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type {
 			self.outVel = initialVelocity;
 			@memset(&self.lastPos, self.outPos.*);
 			@memset(&self.lastVel, self.outVel.*);
+			@memset(&self.validFrames, false);
 			self.frontIndex = 0;
 			self.currentPoint = null;
 		}
@@ -1482,6 +1484,7 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type {
 			@memcpy(&self.lastPos[self.frontIndex], pos);
 			@memcpy(&self.lastVel[self.frontIndex], vel);
 			self.lastTimes[self.frontIndex] = time;
+			self.validFrames[self.frontIndex] = true;
 		}
 
 		fn evaluateSplineAt(_t: f64, tScale: f64, p0: f64, _m0: f64, p1: f64, _m1: f64) [2]f64 {
@@ -1522,7 +1525,8 @@ pub fn GenericInterpolation(comptime elements: comptime_int) type {
 
 				var smallestTime: i16 = std.math.maxInt(i16);
 				var smallestIndex: ?u31 = null;
-				for (self.lastTimes, 0..) |lastTimeI, i| {
+				for (self.lastTimes, self.validFrames, 0..) |lastTimeI, valid, i| {
+					if (!valid) continue;
 
 					if (lastTimeI -% time >= 50 and lastTimeI -% time < smallestTime) {
 						smallestTime = lastTimeI -% time;

@@ -847,7 +847,6 @@ pub fn pressBreak(_: main.Window.Key.Modifiers) void {
 
 pub fn releaseBreak(_: main.Window.Key.Modifiers) void {
 	nextBlockBreakTime = null;
-	main.renderer.MeshSelection.stopBreaking();
 }
 
 pub fn pressAcquireSelectedBlock(_: main.Window.Key.Modifiers) void {
@@ -1142,6 +1141,7 @@ pub fn update(deltaTime: f64) void {
 			Player.breakBlock(deltaTime);
 		}
 	}
+	main.renderer.MeshSelection.updateBreakingProgress(deltaTime);
 
 	world.?.update(deltaTime);
 	particles.ParticleSystem.update(@floatCast(deltaTime));

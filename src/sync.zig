@@ -785,6 +785,8 @@ pub const Command = struct {
 
 					if (info.target.?.player().health <= 0) {
 						info.target.?.player().health = info.target.?.player().maxHealth;
+						info.target.?.player().hunger = info.target.?.player().maxHunger;
+						info.target.?.player().energy = info.target.?.player().maxEnergy;
 						info.cause.sendMessage(info.target.?.name);
 
 						self.syncOperations.append(allocator, .{.kill = .{

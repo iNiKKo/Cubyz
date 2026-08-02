@@ -1970,9 +1970,13 @@ pub const MeshSelection = struct {
 	var activeBreakingPos: ?Vec3i = null;
 	var airPunchStart: ?std.Io.Timestamp = null;
 	var lastMiningInputTime: std.Io.Timestamp = .fromNanoseconds(0);
+	var lastBreakingProgressSent: std.Io.Timestamp = .fromNanoseconds(0);
 	var firstPersonSwingStart: ?std.Io.Timestamp = null;
 
 	fn sendBreakingProgress(pos: Vec3i, progress: f32) void {
+		const now = main.timestamp();
+		if (progress >= 0 and lastBreakingProgressSent.durationTo(now).toNanoseconds() < 50_000_000) return;
+		lastBreakingProgressSent = now;
 		if (game.world) |world| main.network.protocols.genericUpdate.sendBlockBreaking(world.conn, pos, progress);
 	}
 
@@ -1983,6 +1987,19 @@ pub const MeshSelection = struct {
 			activeBreakingPos = null;
 		}
 		currentBlockProgress = 0;
+	}
+
+	pub fn updateBreakingProgress(deltaTime: f64) void {
+		const pos = activeBreakingPos orelse return;
+		if (lastMiningInputTime.durationTo(main.timestamp()).toNanoseconds() <= 300_000_000) return;
+		currentBlockProgress = @max(0, currentBlockProgress - @as(f32, @floatCast(deltaTime))*0.10);
+		if (currentBlockProgress <= 0) {
+			stopBreaking();
+			return;
+		}
+		mesh_storage.removeBreakingAnimation(pos);
+		mesh_storage.addBreakingAnimation(pos, currentBlockProgress);
+		sendBreakingProgress(pos, currentBlockProgress);
 	}
 
 	pub fn heldItemSwingProgress() ?f32 {

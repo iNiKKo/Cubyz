@@ -566,6 +566,10 @@ pub const User = struct {
 		const position: [3]f64 = try reader.readVec(Vec3d);
 		const velocity: [3]f64 = try reader.readVec(Vec3d);
 		const rotation: [3]f32 = try reader.readVec(Vec3f);
+		if (self.isAfk and (vec.lengthSquare(position - self.player().pos) > 0.01*0.01 or velocity[0]*velocity[0] + velocity[1]*velocity[1] + velocity[2]*velocity[2] > 0.05*0.05)) {
+			self.isAfk = false;
+			main.server.sendMessage("{s}§#00ff00 is no longer AFK", .{self.name});
+		}
 		self.player().rot = rotation;
 		const time = try reader.readInt(i16);
 		self.timeDifference.addDataPoint(time);
