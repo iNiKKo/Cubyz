@@ -9,6 +9,7 @@ const ServerChunk = chunk.ServerChunk;
 const files = main.files;
 const utils = main.utils;
 const ItemDropManager = main.itemdrop.ItemDropManager;
+const MobManager = main.server.MobManager;
 const ItemStack = main.items.ItemStack;
 const ZonElement = main.ZonElement;
 const vec = main.vec;
@@ -425,6 +426,7 @@ pub const worldDataVersion: u32 = 5;
 
 pub const ServerWorld = struct {
 	itemDropManager: ItemDropManager = undefined,
+	mobManager: MobManager = undefined,
 	blockPalette: *main.assets.Palette = undefined,
 	itemPalette: *main.assets.Palette = undefined,
 	proceduralItemPalette: *main.assets.Palette = undefined,
@@ -486,6 +488,8 @@ pub const ServerWorld = struct {
 		};
 		self.itemDropManager.init(main.globalAllocator, self);
 		errdefer self.itemDropManager.deinit();
+		self.mobManager.init(main.globalAllocator, self);
+		errdefer self.mobManager.deinit();
 
 		const arena = main.stackAllocator.createArena();
 		defer main.stackAllocator.destroyArena(arena);
@@ -554,6 +558,9 @@ pub const ServerWorld = struct {
 		self.saveItemdrops() catch |err| {
 			std.log.err("Error while saving item data: {s}", .{@errorName(err)});
 		};
+		self.saveMobs() catch |err| {
+			std.log.err("Error while saving mob data: {s}", .{@errorName(err)});
+		};
 		while (self.chunkUpdateQueue.popFront()) |updateRequest| {
 			updateRequest.ch.save(self);
 			updateRequest.ch.decreaseRefCount();
@@ -566,6 +573,7 @@ pub const ServerWorld = struct {
 		self.regionUpdateQueue.deinit();
 		self.chunkManager.deinit();
 		self.itemDropManager.deinit();
+		self.mobManager.deinit();
 		self.blockPalette.deinit();
 		self.itemPalette.deinit();
 		self.proceduralItemPalette.deinit();
@@ -955,6 +963,22 @@ pub const ServerWorld = struct {
 				std.log.debug("Data: {any}", .{itemDropData});
 			};
 		}
+		loadMobs: {
+			const mobsPath = main.stackAllocator.print("saves/{s}/mobs.bin", .{self.path});
+			defer main.stackAllocator.free(mobsPath);
+			const mobData: []const u8 = files.cubyzDir().read(main.stackAllocator, mobsPath) catch |err| {
+				if (err != error.FileNotFound) {
+					std.log.err("Got error while loading {s}: {s}", .{mobsPath, @errorName(err)});
+				}
+				break :loadMobs;
+			};
+			defer main.stackAllocator.free(mobData);
+			var reader = main.utils.BinaryReader.init(mobData);
+			self.mobManager.loadFromBytes(&reader) catch |err| {
+				std.log.err("Failed to load mob data: {s}", .{@errorName(err)});
+				std.log.debug("Data: {any}", .{mobData});
+			};
+		}
 	}
 
 	pub fn loadPlayer(self: *ServerWorld, user: *User) !void {
@@ -1091,6 +1115,15 @@ pub const ServerWorld = struct {
 		try files.cubyzDir().write(itemsPath, itemDropData.data.items);
 	}
 
+	fn saveMobs(self: *ServerWorld) !void {
+		var mobData = main.utils.BinaryWriter.init(main.stackAllocator);
+		defer mobData.deinit();
+		self.mobManager.storeToBytes(&mobData);
+		const mobsPath = main.stackAllocator.print("saves/{s}/mobs.bin", .{self.path});
+		defer main.stackAllocator.free(mobsPath);
+		try files.cubyzDir().write(mobsPath, mobData.data.items);
+	}
+
 	fn isValidSpawnLocation(_: *ServerWorld, wx: i32, wy: i32) bool {
 		const map = terrain.SurfaceMap.getOrGenerateFragment(wx, wy, 1);
 		return map.getBiome(wx, wy).isValidPlayerSpawn;
@@ -1147,6 +1180,7 @@ pub const ServerWorld = struct {
 		self.tick();
 
 		self.itemDropManager.update(deltaTime);
+		self.mobManager.update(deltaTime);
 		{
 			const userList = server.getUserList(main.stackAllocator);
 			defer main.stackAllocator.free(userList);

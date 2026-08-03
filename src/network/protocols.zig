@@ -1298,3 +1298,34 @@ pub const heldLight = struct {
 		conn.send(.secure, id, writer.data.items);
 	}
 };
+
+pub const crouchState = struct {
+	pub const id: u8 = 17;
+
+	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
+		const crouching = (try reader.readInt(u8)) != 0;
+		conn.user.?.crouching = crouching;
+	}
+	pub fn send(conn: *Connection, crouching: bool) void {
+		var writer = utils.BinaryWriter.init(main.stackAllocator);
+		defer writer.deinit();
+		writer.writeInt(u8, @intFromBool(crouching));
+		conn.send(.secure, id, writer.data.items);
+	}
+};
+
+/// Syncs which base item the player currently has selected, independent of the
+/// heldLight system (which is skipped entirely under baseServerCompatibility).
+/// Gameplay code (e.g. mob AI checking "is the player holding an apple") should
+/// use this rather than heldLight, since it isn't gated by that setting.
+pub const selectedItemId = struct {
+	pub const id: u8 = 18;
+
+	fn serverReceive(conn: *Connection, reader: *utils.BinaryReader) !void {
+		const itemId = reader.remaining;
+		conn.user.?.setSelectedItemId(itemId);
+	}
+	pub fn send(conn: *Connection, itemId: []const u8) void {
+		conn.send(.secure, id, itemId);
+	}
+};

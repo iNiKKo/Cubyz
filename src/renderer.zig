@@ -351,6 +351,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
 	const direction = crosshairDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight);
 	MeshSelection.select(playerPos, direction, game.Player.inventory.getItem(game.Player.selectedSlot));
+	MeshSelection.selectEntity(playerPos, direction);
 
 	chunk_meshing.beginRender();
 
@@ -1963,6 +1964,7 @@ pub const MeshSelection = struct {
 	var posBeforeBlock: Vec3i = undefined;
 	var neighborOfSelection: chunk.Neighbor = undefined;
 	pub var selectedBlockPos: ?Vec3i = null;
+	pub var selectedEntity: ?main.entity.Entity = null;
 	var lastSelectedBlockPos: ?Vec3i = null;
 	var currentBlockProgress: f32 = 0;
 	var currentSwingProgress: f32 = 0;
@@ -2093,6 +2095,35 @@ pub const MeshSelection = struct {
 			}
 		}
 
+	}
+
+	/// Finds the nearest non-player entity whose position lies close to the aim ray,
+	/// within maxReach, using a simple ray-vs-sphere test sized from the entity's model.
+	pub fn selectEntity(pos: Vec3d, _dir: Vec3f) void {
+		selectedEntity = null;
+		const dir: Vec3d = @floatCast(_dir);
+		const maxReach: f64 = 5.0;
+
+		var bestT: f64 = std.math.inf(f64);
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		for (main.client.entity_manager.entities.items()) |ent| {
+			if (ent.id == game.Player.id) continue;
+			var radius: f64 = 0.5;
+			if (main.entity.components.@"cubyz:model".client.get(ent.id)) |component| {
+				radius = @floatCast(component.entityModel.get().height*0.5);
+			}
+
+			const toEntity = ent.getRenderPosition() - pos;
+			const t = std.math.clamp(vec.dot(toEntity, dir), 0, maxReach);
+			if (t >= bestT) continue;
+			const closestPoint = pos + dir*@as(Vec3d, @splat(t));
+			const perpDistSqr = vec.lengthSquare(ent.getRenderPosition() - closestPoint);
+			if (perpDistSqr > radius*radius) continue;
+
+			bestT = t;
+			selectedEntity = ent.id;
+		}
 	}
 
 	fn canPlaceBlock(pos: Vec3i, block: main.blocks.Block) bool {

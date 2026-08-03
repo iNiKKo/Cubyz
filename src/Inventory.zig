@@ -548,6 +548,16 @@ pub const ClientInventory = struct {
 		main.sync.client.executeCommand(.{.eat = .{.source = .{.inv = self.super, .slot = slot}}});
 	}
 
+	pub fn feedMob(self: ClientInventory, slot: u32, target: main.entity.Entity) void {
+		std.debug.assert(self.type == .serverShared);
+		main.sync.client.executeCommand(.{.feedMob = .{.source = .{.inv = self.super, .slot = slot}, .target = target}});
+	}
+
+	pub fn attackEntity(self: ClientInventory, slot: u32, target: main.entity.Entity) void {
+		std.debug.assert(self.type == .serverShared);
+		main.sync.client.executeCommand(.{.attackEntity = .{.source = .{.inv = self.super, .slot = slot}, .target = target}});
+	}
+
 	pub fn breakBlock(self: ClientInventory, slot: u32, deltaTime: f64) void {
 		std.debug.assert(self.type == .serverShared);
 		main.renderer.MeshSelection.breakBlock(self, slot, deltaTime);

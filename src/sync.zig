@@ -242,6 +242,8 @@ pub const Command = struct {
 		addHealth = 10,
 		chatCommand = 12,
 		eat = 18,
+		feedMob = 19,
+		attackEntity = 20,
 	};
 	pub const Payload = union(PayloadType) {
 		open: Open,
@@ -263,6 +265,8 @@ pub const Command = struct {
 		addHealth: AddHealth,
 		chatCommand: ChatCommand,
 		eat: Eat,
+		feedMob: FeedMob,
+		attackEntity: AttackEntity,
 	};
 
 	const BaseOperationType = enum(u8) {
@@ -1762,6 +1766,90 @@ pub const Command = struct {
 
 		fn deserialize(reader: *BinaryReader, side: Side, user: ?*main.server.User) !Eat {
 			return .{.source = try InventoryAndSlot.read(reader, side, user)};
+		}
+	};
+
+	const FeedMob = struct {
+		source: InventoryAndSlot,
+		target: main.entity.Entity,
+
+		fn run(self: FeedMob, ctx: Context) error{serverFailure}!void {
+			const item = self.source.ref().item;
+			if (item != .baseItem) return;
+			if (!std.mem.eql(u8, item.baseItem.id(), "cubyz:apple")) return;
+
+			if (ctx.side == .server) {
+				const user = ctx.user orelse return error.serverFailure;
+				if (user.inventory == null or self.source.inv.id != user.inventory.?) return error.serverFailure;
+				if (!main.server.world.?.mobManager.feed(self.target, user.playerIndex, user.player().pos)) return error.serverFailure;
+			}
+			if (ctx.gamemode != .creative) {
+				ctx.execute(.{.delete = .{.source = self.source, .amount = 1}});
+			}
+		}
+
+		fn serialize(self: FeedMob, writer: *BinaryWriter) void {
+			self.source.write(writer);
+			writer.writeVarInt(u32, @intFromEnum(self.target));
+		}
+
+		fn deserialize(reader: *BinaryReader, side: Side, user: ?*main.server.User) !FeedMob {
+			return .{
+				.source = try InventoryAndSlot.read(reader, side, user),
+				.target = @enumFromInt(try reader.readVarInt(u32)),
+			};
+		}
+	};
+
+	const attackRange = 5.0;
+	const attackRangeSqr = attackRange*attackRange;
+	const bareHandDamage = 1.0;
+
+	const AttackEntity = struct {
+		source: InventoryAndSlot,
+		target: main.entity.Entity,
+
+		fn damageFromItem(item: main.items.Item) f32 {
+			return switch (item) {
+				.proceduralItem => |proceduralItem| proceduralItem.getProperty(.damage),
+				.baseItem, .null => bareHandDamage,
+			};
+		}
+
+		fn run(self: AttackEntity, ctx: Context) error{serverFailure}!void {
+			if (ctx.side != .server) return;
+			const user = ctx.user orelse return error.serverFailure;
+			if (user.inventory == null or self.source.inv.id != user.inventory.?) return error.serverFailure;
+			const damage = damageFromItem(self.source.ref().item);
+			if (damage <= 0) return;
+
+			const world = main.server.world.?;
+
+			// Attacking another player.
+			const users = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(users);
+			for (users) |other| {
+				if (other.id != self.target) continue;
+				if (other == user) return;
+				if (vec.lengthSquare(other.player().pos - user.player().pos) > attackRangeSqr) return;
+				main.sync.addHealth(-damage, .pvp, .server, self.target);
+				return;
+			}
+
+			// Otherwise try a mob.
+			if (!world.mobManager.damage(self.target, damage)) return;
+		}
+
+		fn serialize(self: AttackEntity, writer: *BinaryWriter) void {
+			self.source.write(writer);
+			writer.writeVarInt(u32, @intFromEnum(self.target));
+		}
+
+		fn deserialize(reader: *BinaryReader, side: Side, user: ?*main.server.User) !AttackEntity {
+			return .{
+				.source = try InventoryAndSlot.read(reader, side, user),
+				.target = @enumFromInt(try reader.readVarInt(u32)),
+			};
 		}
 	};
 

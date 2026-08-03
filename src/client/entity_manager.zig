@@ -64,6 +64,14 @@ pub fn addEntity(zon: ZonElement) !void {
 	defer mutex.unlock();
 
 	const id = zon.get(u32, "id") orelse return error.entityIdMissing;
+
+	if (id < idMapping.items.len) {
+		if (idMapping.items[id]) |existingIndex| {
+			entities.items()[existingIndex].updateName(zon, main.globalAllocator);
+			return;
+		}
+	}
+
 	const index = entities.len;
 	var ent = entities.addOne();
 

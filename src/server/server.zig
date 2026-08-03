@@ -26,6 +26,8 @@ pub const world_zig = @import("world.zig");
 pub const ServerWorld = world_zig.ServerWorld;
 pub const terrain = @import("terrain/terrain.zig");
 pub const Entity = @import("Entity.zig");
+pub const Mob = @import("Mob.zig");
+pub const MobManager = @import("MobManager.zig");
 pub const SimulationChunk = @import("SimulationChunk.zig");
 pub const stdin_handler = @import("stdin_handler.zig");
 pub const storage = @import("storage.zig");
@@ -137,6 +139,8 @@ pub const User = struct {
 	heldMiningSwing: f32 = -1.0,
 	tpaRequestFrom: ?PlayerIndex = null,
 	isAfk: bool = false,
+	crouching: bool = false,
+	selectedItemId: []const u8 = "",
 
 	loadedChunks: [simulationSize][simulationSize][simulationSize]*SimulationChunk = undefined,
 	lastRenderDistance: u16 = 0,
@@ -209,6 +213,7 @@ pub const User = struct {
 	fn privateDeinit(self: *User) void {
 		self.conn.deinit();
 		main.globalAllocator.free(self.name);
+		main.globalAllocator.free(self.selectedItemId);
 		if (self.newKeyString) |str| main.globalAllocator.free(str);
 		main.globalAllocator.destroy(self);
 	}
@@ -314,10 +319,13 @@ pub const User = struct {
 		}
 	}
 
-	var freeId: u32 = 0;
+	pub fn setSelectedItemId(self: *User, itemId: []const u8) void {
+		main.globalAllocator.free(self.selectedItemId);
+		self.selectedItemId = main.globalAllocator.dupe(u8, itemId);
+	}
+
 	pub fn initPlayer(self: *User) void {
-		self.id = @enumFromInt(freeId);
-		freeId += 1;
+		self.id = main.entity.allocateEntityId();
 
 		world.?.loadPlayer(self) catch {
 			std.log.err("Error while loading player data of {s}. Discarding data.", .{self.name});
@@ -773,6 +781,10 @@ fn update() void {
 			.rot = user.player().rot,
 		});
 	}
+	const mobData = world.?.mobManager.getPositionAndVelocityData(main.stackAllocator);
+	defer main.stackAllocator.free(mobData);
+	entityData.appendSlice(mobData);
+
 	for (userList) |user| {
 		main.network.protocols.entityPosition.send(user.conn, user.player().pos, entityData.items, itemData);
 	}
@@ -997,6 +1009,7 @@ pub fn connectInternal(user: *User) void {
 			const entityZon = other.player().save(main.stackAllocator, .playerNearby);
 			zonArray.array.append(entityZon);
 		}
+		world.?.mobManager.appendInitialList(main.stackAllocator, zonArray);
 		const data = zonArray.toStringEfficient(main.stackAllocator, &.{});
 		defer main.stackAllocator.free(data);
 		if (user.connected.load(.monotonic)) main.network.protocols.entity.send(user.conn, data);

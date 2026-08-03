@@ -55,6 +55,7 @@ pub const DamageType = enum(u8) {
 	fall = 2,
 	heat = 3,
 	spiky = 4,
+	pvp = 5,
 
 	pub fn sendMessage(self: DamageType, name: []const u8) void {
 		switch (self) {
@@ -63,6 +64,7 @@ pub const DamageType = enum(u8) {
 			.fall => main.server.sendMessage("{s}§#ffffff died of fall damage", .{name}),
 			.heat => main.server.sendMessage("{s}§#ffffff burned to death", .{name}),
 			.spiky => main.server.sendMessage("{s}§#ffffff experienced death by 1000 needles", .{name}),
+			.pvp => main.server.sendMessage("{s}§#ffffff was slain", .{name}),
 		}
 	}
 };
@@ -104,6 +106,9 @@ pub const Player = struct {
 	pub var jumpCoyote: f64 = 0;
 	pub const jumpCooldownConstant = 0.3;
 	pub const jumpCoyoteTimeConstant = 0.100;
+
+	pub var attackCooldown: f64 = 0;
+	pub const attackCooldownConstant = 0.5;
 
 	pub const standingBoundingBoxExtent: Vec3d = .{0.3, 0.3, 0.9};
 	pub const crouchingBoundingBoxExtent: Vec3d = .{0.3, 0.3, 0.725};
@@ -190,6 +195,10 @@ pub const Player = struct {
 
 	pub fn placeBlock(mods: main.Window.Key.Modifiers) void {
 		const heldItem = inventory.getItem(selectedSlot);
+		if (heldItem == .baseItem and main.renderer.MeshSelection.selectedEntity != null) {
+			inventory.feedMob(selectedSlot, main.renderer.MeshSelection.selectedEntity.?);
+			return;
+		}
 		if (heldItem == .baseItem and heldItem.baseItem.foodValue() > 0) {
 			inventory.eat(selectedSlot);
 			return;
@@ -227,6 +236,14 @@ pub const Player = struct {
 	}
 
 	pub fn breakBlock(deltaTime: f64) void {
+		if (main.renderer.MeshSelection.selectedEntity) |target| {
+			if (attackCooldown <= 0) {
+				attackCooldown = attackCooldownConstant;
+				inventory.attackEntity(selectedSlot, target);
+				main.renderer.MeshSelection.startAirPunch();
+			}
+			return;
+		}
 		inventory.breakBlock(selectedSlot, deltaTime);
 	}
 
@@ -827,6 +844,9 @@ pub var projectionMatrix: Mat4f = Mat4f.identity();
 
 var nextBlockPlaceTime: ?std.Io.Timestamp = null;
 var nextBlockBreakTime: ?std.Io.Timestamp = null;
+var lastSentCrouching: ?bool = null;
+var lastSentSelectedItemIdBuf: [64]u8 = undefined;
+var lastSentSelectedItemIdLen: ?usize = null;
 
 pub fn pressPlace(mods: main.Window.Key.Modifiers) void {
 	const time = main.timestamp();
@@ -940,6 +960,7 @@ pub fn update(deltaTime: f64) void {
 
 	var jumping = false;
 	Player.jumpCooldown -= deltaTime;
+	Player.attackCooldown -= deltaTime;
 
 	const fricMul = speedMultiplier*Player.friction.mobile;
 
@@ -1047,6 +1068,29 @@ pub fn update(deltaTime: f64) void {
 	}
 
 	Player.crouching = main.Window.grabbed and KeyBoard.key("crouch").pressed and !Player.isFlying.load(.monotonic);
+	if (world) |w| {
+		if (w.conn.isBaseServerCompatible()) {
+			lastSentCrouching = null;
+			lastSentSelectedItemIdLen = null;
+		} else {
+			if (lastSentCrouching != Player.crouching) {
+				lastSentCrouching = Player.crouching;
+				main.network.protocols.crouchState.send(w.conn, Player.crouching);
+			}
+
+			const selectedItem = Player.inventory.getItem(Player.selectedSlot);
+			const selectedItemId = if (selectedItem == .baseItem) selectedItem.id() orelse "" else "";
+			const changed = lastSentSelectedItemIdLen == null or !std.mem.eql(u8, lastSentSelectedItemIdBuf[0..lastSentSelectedItemIdLen.?], selectedItemId);
+			if (changed and selectedItemId.len <= lastSentSelectedItemIdBuf.len) {
+				@memcpy(lastSentSelectedItemIdBuf[0..selectedItemId.len], selectedItemId);
+				lastSentSelectedItemIdLen = selectedItemId.len;
+				main.network.protocols.selectedItemId.send(w.conn, selectedItemId);
+			}
+		}
+	} else {
+		lastSentCrouching = null;
+		lastSentSelectedItemIdLen = null;
+	}
 
 	if (physics.collision.collides(.client, .x, 0, Player.super.pos + Player.standingBoundingBoxExtent - Player.crouchingBoundingBoxExtent, .{
 		.min = -Player.standingBoundingBoxExtent,

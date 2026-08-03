@@ -28,6 +28,22 @@ pub const Entity = enum(u32) {
 	noValue = std.math.maxInt(u32),
 	_,
 };
+
+var nextFreeId: std.atomic.Value(u32) = .init(0);
+pub fn allocateEntityId() Entity {
+	return @enumFromInt(nextFreeId.fetchAdd(1, .monotonic));
+}
+
+/// Ensures future allocateEntityId() calls won't reuse an id below `usedId`,
+/// e.g. after restoring entities with previously-saved ids from disk.
+pub fn reserveEntityId(usedId: Entity) void {
+	const next = @intFromEnum(usedId) +% 1;
+	var current = nextFreeId.load(.monotonic);
+	while (current < next) {
+		current = nextFreeId.cmpxchgWeak(current, next, .monotonic, .monotonic) orelse return;
+	}
+}
+
 pub const EntityComponentId = u32;
 const EntityComponentVTable = struct {
 	serverLoad: *const fn (entity: Entity, reader: *main.utils.BinaryReader, version: u32) EntityComponentLoadError!void,
@@ -62,10 +78,15 @@ pub fn initComponents() void {
 pub fn deinitComponents() void {
 	componentList = undefined;
 }
+/// Unrecognized component ids are skipped rather than treated as fatal: the caller
+/// (loadComponentsFromBase64) already reads each component as a self-contained
+/// length-prefixed slice, so skipping one doesn't desync the rest of the stream.
+/// This matters for cross-version compatibility (e.g. a legacy-protocol client
+/// receiving a component type it doesn't know about, such as mob-only components).
 pub fn loadComponent(comptime side: main.sync.Side, componentId: EntityComponentId, entity: Entity, componentData: []const u8, componentVersion: u32) EntityComponentLoadError!void {
 	if (componentId >= componentList.len) {
-		std.log.err("unknown Component Id {} ", .{componentId});
-		return error.UnknownComponentId;
+		std.log.debug("Skipping unknown entity component id {}", .{componentId});
+		return;
 	}
 	var componentReader = main.utils.BinaryReader.init(componentData);
 	if (componentList[componentId]) |vtable| {
@@ -78,8 +99,7 @@ pub fn loadComponent(comptime side: main.sync.Side, componentId: EntityComponent
 			},
 		}
 	} else {
-		std.log.err("unknown Component Id {} ", .{componentId});
-		return error.UnknownComponentId;
+		std.log.debug("Skipping unknown entity component id {}", .{componentId});
 	}
 }
 pub fn unloadComponent(comptime side: main.sync.Side, componentId: EntityComponentId, entity: Entity) EntityComponentLoadError!void {

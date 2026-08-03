@@ -62,6 +62,13 @@ pub fn deinit(self: @This(), allocator: NeverFailingAllocator) void {
 	allocator.free(self.name);
 }
 
+pub fn updateName(self: *@This(), zon: ZonElement, allocator: NeverFailingAllocator) void {
+	if (zon.getChildOrNull("name")) |name| {
+		allocator.free(self.name);
+		self.name = allocator.dupe(u8, name.as([]const u8) orelse "");
+	}
+}
+
 pub fn getRenderPosition(self: *const @This()) Vec3d {
 	return Vec3d{self.pos[0], self.pos[1], self.pos[2]};
 }
