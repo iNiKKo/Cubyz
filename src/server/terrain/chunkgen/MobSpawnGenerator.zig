@@ -62,5 +62,5 @@ pub fn generate(worldSeed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap
 	const modelIndex = main.entityModel.getById("cubyz:moffalo") orelse main.entityModel.default();
 	const halfHeight: f64 = @floatCast(modelIndex.get().height*0.5);
 	const pos = Vec3d{@floatFromInt(wx), @floatFromInt(wy), @as(f64, @floatFromInt(worldSurfaceZ + 1)) + halfHeight};
-	main.server.world.?.mobManager.spawn(pos, .moffalo);
+	main.server.world.?.mobManager.spawn(pos, .moffalo, chunk.super.pos);
 }

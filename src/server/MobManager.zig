@@ -48,6 +48,13 @@ indices: [maxCapacity]u16 = undefined,
 emptyMutex: main.utils.Mutex = .{},
 isEmpty: std.bit_set.ArrayBitSet(usize, maxCapacity) = .initFull(),
 
+/// Chunk positions (wx,wy,wz of the chunk that generated a spawn) already used to spawn
+/// a mob this session. Guards against re-running the mob-spawn generator producing a
+/// duplicate if a chunk is regenerated (e.g. evicted from cache) before it's ever saved
+/// to disk — spawn() is otherwise called from arbitrary chunk-generation worker threads,
+/// so this set is protected by emptyMutex alongside the slot-allocation bitset.
+spawnedChunks: std.AutoHashMapUnmanaged(main.chunk.ChunkPosition, void) = .{},
+
 changeQueue: main.utils.ConcurrentQueue(union(enum) {add: struct {u16, Mob}, remove: u16}) = undefined,
 
 world: *ServerWorld,
@@ -67,6 +74,7 @@ pub fn deinit(self: *@This()) void {
 	self.processChanges();
 	self.changeQueue.deinit();
 	self.list.deinit(self.allocator.allocator);
+	self.spawnedChunks.deinit(self.allocator.allocator);
 }
 
 fn hitBoxFor(mobType: Mob.MobType) physics.collision.Box {
@@ -80,8 +88,18 @@ fn hitBoxFor(mobType: Mob.MobType) physics.collision.Box {
 /// Safe to call from any thread (e.g. chunk generation workers). The actual
 /// list mutation is deferred to processChanges(), which only ever runs on
 /// the thread that owns the ServerWorld tick (see update()).
-pub fn spawn(self: *@This(), pos: Vec3d, mobType: Mob.MobType) void {
+///
+/// `spawningChunk` identifies the chunk whose generation triggered this spawn; if that
+/// chunk was already used to spawn a mob this session (e.g. it got regenerated after
+/// being evicted from cache but before ever being saved to disk, so the generator ran
+/// again), the spawn is silently skipped to avoid duplicating the same mob.
+pub fn spawn(self: *@This(), pos: Vec3d, mobType: Mob.MobType, spawningChunk: main.chunk.ChunkPosition) void {
 	self.emptyMutex.lock();
+	const alreadySpawned = self.spawnedChunks.fetchPut(self.allocator.allocator, spawningChunk, {}) catch unreachable;
+	if (alreadySpawned != null) {
+		self.emptyMutex.unlock();
+		return;
+	}
 	const i: u16 = @intCast(self.isEmpty.findFirstSet() orelse {
 		self.emptyMutex.unlock();
 		std.log.err("Mob capacity limit reached. Failed to spawn {s}", .{mobType.modelId()});
@@ -91,12 +109,15 @@ pub fn spawn(self: *@This(), pos: Vec3d, mobType: Mob.MobType) void {
 	self.emptyMutex.unlock();
 
 	const id = main.entity.allocateEntityId();
+	// Seed from the entity id (globally unique) rather than position: two mobs spawned at
+	// the same or nearby rounded position (initSeed3D truncates to whole blocks) would
+	// otherwise get identical/correlated RNG state and move in perfect lockstep forever.
 	var mob = Mob{
 		.id = id,
 		.mobType = mobType,
 		.pos = pos,
 		.health = mobType.maxHealth(),
-		.randState = random.initSeed3D(0, @intFromFloat(pos)),
+		.randState = random.initSeed2D(self.world.settings.seed, .{@bitCast(@intFromEnum(id)), 0}),
 	};
 	pickWanderDirection(&mob);
 
