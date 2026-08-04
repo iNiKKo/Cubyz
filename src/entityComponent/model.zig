@@ -41,6 +41,8 @@ pub const client = struct {
 		hasWalkUpdateTime: bool = false,
 		lastPoseRenderFrame: u64 = 0,
 		hasPoseRenderFrame: bool = false,
+		lastHideHead: bool = false,
+		lastCameraPitch: f32 = 0,
 
 		rootYaw: f32 = 0,
 		headYawOffset: f32 = 0,

@@ -88,6 +88,14 @@ pub var lastUsedIPAddress: []const u8 = "";
 
 pub var showMobNameTags: bool = true;
 
+pub var firstPersonBody: bool = false;
+
+pub var handVelocitySwayScale: f32 = 1.0;
+
+pub var handRestAngleDown: f32 = -0.85;
+pub var handRestAngleForward: f32 = -0.52;
+pub var handRestAngleUp: f32 = -0.20;
+
 pub var storedAccount: main.network.authentication.PasswordEncodedAccountCode = .empty;
 
 pub var guiScale: ?f32 = null;

@@ -112,11 +112,11 @@ pub const client = struct {
 	}
 	pub fn clear() void {}
 
-	fn nodeHasAncestor(entModel: *const main.entityModel.EntityModel, nodeId: u16, ancestorId: u16) bool {
+	fn nodeHasAncestor(entModel: *const main.entityModel.EntityModel, nodeId: usize, ancestorId: usize) bool {
 		var current = entModel.nodeParents[nodeId];
 		while (current) |parent| {
-			if (parent == ancestorId) return true;
-			current = entModel.nodeParents[parent];
+			if (@as(usize, parent) == ancestorId) return true;
+			current = entModel.nodeParents[@as(usize, parent)];
 		}
 		return false;
 	}
@@ -168,10 +168,48 @@ pub const client = struct {
 		return current + std.math.sign(diff)*maxDelta;
 	}
 
-	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f, horizontalSpeed: f32, verticalVelocity: f32, isHoldingItem: bool, miningSwing: ?f32) void {
+	/// Computes the eye-anchored root transform used to draw the local player's own first-person body,
+	/// so anything parented to it (the body mesh, the held item) stays visually locked together.
+	pub fn firstPersonBodyRootMatrix(component: *main.entity.components.@"cubyz:model".client.Component, playerPos: Vec3d) Mat4f {
+		const entModel = component.entityModel.get();
+		const playerEyePos = game.Player.getEyePosBlocking();
+		const eyePos: Vec3f = .{
+			@floatCast(playerEyePos[0] - playerPos[0]),
+			@floatCast(playerEyePos[1] - playerPos[1]),
+			@floatCast(playerEyePos[2] - playerPos[2]),
+		};
+		const headId = entModel.nodeIndexMap.get("Head");
+		const headOffset: Vec3f = if (headId) |id| vec.xyz(component.matrices[id].transpose().mulVec(.{0, 0, 0, 1})) else .{0, 0, entModel.height/2};
+		const modelPosition: Vec3f = eyePos - headOffset;
+		const lookDownPitch: f32 = @max(0.0, game.camera.rotation[0]);
+		const baseBack: f32 = 0.05;
+		const lookDownShift: f32 = baseBack + lookDownPitch * 0.16;
+		const cameraUpShift: f32 = 0.03;
+		const yawDir: Vec3f = Vec3f{@sin(game.camera.rotation[2]), @cos(game.camera.rotation[2]), 0};
+		const modelOffset: Vec3f = modelPosition - yawDir * Vec3f{lookDownShift, lookDownShift, lookDownShift} + Vec3f{0, 0, cameraUpShift};
+
+		return Mat4f.identity()
+			.mul(Mat4f.translation(modelOffset))
+			.mul(Mat4f.rotationZ(-component.rootYaw));
+	}
+
+	/// Interpolates a hand-pose value across the down/forward/up calibration stages based on camera pitch in [-pi/2, pi/2].
+	pub fn interpolateHandPose(pitch: f32, down: f32, forward: f32, up: f32) f32 {
+		if (pitch <= 0.0) {
+			const t = std.math.clamp(pitch/(-std.math.pi/2.0), 0.0, 1.0);
+			return forward + (down - forward)*t;
+		} else {
+			const t = std.math.clamp(pitch/(std.math.pi/2.0), 0.0, 1.0);
+			return forward + (up - forward)*t;
+		}
+	}
+
+	fn updateNodeMatrices(component: *main.entity.components.@"cubyz:model".client.Component, rotation: Vec3f, horizontalSpeed: f32, verticalVelocity: f32, isHoldingItem: bool, miningSwing: ?f32, hideHead: bool) void {
 		const renderFrame = renderer.worldRenderFrame;
-		if (component.hasPoseRenderFrame and component.lastPoseRenderFrame == renderFrame) return;
+		if (component.hasPoseRenderFrame and component.lastPoseRenderFrame == renderFrame and component.lastHideHead == hideHead) return;
 		component.lastPoseRenderFrame = renderFrame;
+		component.lastHideHead = hideHead;
+		component.lastCameraPitch = rotation[0];
 		component.hasPoseRenderFrame = true;
 		const entModel = component.entityModel.get();
 		@memcpy(component.nodes, entModel.nodes);
@@ -242,8 +280,11 @@ pub const client = struct {
 		}
 
 		const swing = if (miningSwing) |progress| @sin(progress * std.math.pi) * 0.80 else 0.0;
+		const pitch = std.math.clamp(rotation[0], -std.math.pi/2.0, std.math.pi/2.0);
+		const handRestAngle = interpolateHandPose(pitch, settings.handRestAngleDown, settings.handRestAngleForward, settings.handRestAngleUp);
+		const rightArmVelocitySway: f32 = std.math.clamp(verticalVelocity * 0.05 + horizontalSpeed * 0.015, -0.10, 0.10) * settings.handVelocitySwayScale;
 		if (isHoldingItem) {
-			rightArmTarget = -0.52 - swing;
+			rightArmTarget = handRestAngle - swing;
 		} else if (miningSwing != null) {
 			rightArmTarget = -swing;
 		}
@@ -256,7 +297,8 @@ pub const client = struct {
 			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.leftArmAngle);
 		}
 		if (entModel.nodeIndexMap.get("RightArm")) |id| {
-			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.rightArmAngle);
+			const rightArmPitch = component.rightArmAngle + rightArmVelocitySway;
+			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, rightArmPitch);
 		}
 		if (entModel.nodeIndexMap.get("LeftLeg")) |id| {
 			component.nodes[id].rot = vec.Quat.quatFromAxisAngle(Vec3f{1, 0, 0}, component.leftLegAngle);
@@ -274,17 +316,22 @@ pub const client = struct {
 		var headWorldMat: Mat4f = Mat4f.identity();
 		if (headId) |id| {
 			const headParentMat = if (entModel.nodeParents[id]) |p| component.matrices[p].transpose() else Mat4f.identity();
-			headWorldMat = headParentMat.mul(component.nodes[id].recalc(entModel.nodePivots[id]));
+			var headNode = component.nodes[id];
+			if (hideHead) headNode.scale = @splat(0);
+			headWorldMat = headParentMat.mul(headNode.recalc(entModel.nodePivots[id]));
 		}
 		const eyestalksId = entModel.nodeIndexMap.get("Eyestalks");
 		for (component.nodes, 0..) |*node, i| {
+			const nodeId: usize = i;
 			const parentMat = if (eyestalksId != null and eyestalksId.? == i and headId != null)
 				headWorldMat
 			else if (entModel.nodeParents[i]) |p|
 				component.matrices[p].transpose()
 			else
 				Mat4f.identity();
-			component.matrices[i] = parentMat.mul(node.recalc(entModel.nodePivots[i])).transpose();
+			var localNode = node.*;
+			if (hideHead and headId != null and (headId.? == i or nodeHasAncestor(entModel, nodeId, headId.?))) localNode.scale = @splat(0);
+			component.matrices[i] = parentMat.mul(localNode.recalc(entModel.nodePivots[i])).transpose();
 		}
 		nodeBuffer.uploadData(component.matrices, &component.bufferAllocation);
 	}
@@ -305,7 +352,7 @@ pub const client = struct {
 					const velocity = game.Player.getVelBlocking();
 					const horizontalSpeed: f32 = @floatCast(@sqrt(velocity[0]*velocity[0] + velocity[1]*velocity[1]));
 					const verticalVelocity: f32 = @floatCast(velocity[2]);
-					updateNodeMatrices(component, rotation, horizontalSpeed, verticalVelocity, game.Player.inventory.getItem(game.Player.selectedSlot) != .null, renderer.MeshSelection.heldItemSwingProgress());
+					updateNodeMatrices(component, rotation, horizontalSpeed, verticalVelocity, game.Player.inventory.getItem(game.Player.selectedSlot) != .null, renderer.MeshSelection.heldItemSwingProgress(), false);
 					const entModel = component.entityModel.get();
 					entModel.bind();
 					entModel.defaultTexture.?.bindTo(0);
@@ -326,7 +373,7 @@ pub const client = struct {
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
 			const heldAnimation = main.itemdrop.ItemDisplayManager.remoteHeldAnimationState(id);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing);
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing, false);
 			const entModel = component.entityModel.get();
 			entModel.bind();
 			entModel.defaultTexture.?.bindTo(0);
@@ -419,7 +466,19 @@ pub const client = struct {
 			const horizontalSpeed: f32 = @floatCast(@sqrt(ent._interpolationVel[0]*ent._interpolationVel[0] + ent._interpolationVel[1]*ent._interpolationVel[1]));
 			const verticalVelocity: f32 = @floatCast(ent._interpolationVel[2]);
 			const heldAnimation = main.itemdrop.ItemDisplayManager.remoteHeldAnimationState(id);
-			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing);
+			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing, false);
+		}
+
+		if (settings.firstPersonBody) {
+			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
+				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
+					const rotation = game.camera.rotation;
+					const velocity = game.Player.getVelBlocking();
+					const horizontalSpeed: f32 = @floatCast(@sqrt(velocity[0]*velocity[0] + velocity[1]*velocity[1]));
+					const verticalVelocity: f32 = @floatCast(velocity[2]);
+					updateNodeMatrices(component, rotation, horizontalSpeed, verticalVelocity, game.Player.inventory.getItem(game.Player.selectedSlot) != .null, renderer.MeshSelection.heldItemSwingProgress(), true);
+				}
+			}
 		}
 
 		pipeline.bind(null);
@@ -500,6 +559,34 @@ pub const client = struct {
 			const modelViewMatrix = game.camera.viewMatrix.mul(modelMatrix);
 			c.glUniformMatrix4fv(uniforms.modelViewMatrix, 1, c.GL_TRUE, @ptrCast(&modelViewMatrix));
 			c.glDrawElements(c.GL_TRIANGLES, entModel.indexCount, c.GL_UNSIGNED_INT, null);
+		}
+
+		if (settings.firstPersonBody) {
+			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
+				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
+					const entModel = component.entityModel.get();
+
+					entModel.bind();
+					entModel.defaultTexture.?.bindTo(0);
+					const playerEyePos = game.Player.getEyePosBlocking();
+					const blockPos: vec.Vec3i = @floor(playerEyePos);
+					const lightVals: [6]u8 = main.renderer.mesh_storage.getLight(blockPos[0], blockPos[1], blockPos[2]) orelse @splat(0);
+					const light = (@as(u32, lightVals[0] >> 3) << 25 |
+						@as(u32, lightVals[1] >> 3) << 20 |
+						@as(u32, lightVals[2] >> 3) << 15 |
+						@as(u32, lightVals[3] >> 3) << 10 |
+						@as(u32, lightVals[4] >> 3) << 5 |
+						@as(u32, lightVals[5] >> 3) << 0);
+
+					c.glUniform1ui(uniforms.light, @bitCast(@as(u32, light)));
+					c.glUniform1ui(uniforms.nodeBufferOffset, @bitCast(@as(u32, component.bufferAllocation.start)));
+
+					const modelMatrix = firstPersonBodyRootMatrix(component, playerPos);
+					const modelViewMatrix = game.camera.viewMatrix.mul(modelMatrix);
+					c.glUniformMatrix4fv(uniforms.modelViewMatrix, 1, c.GL_TRUE, @ptrCast(&modelViewMatrix));
+					c.glDrawElements(c.GL_TRIANGLES, entModel.indexCount, c.GL_UNSIGNED_INT, null);
+				}
+			}
 		}
 
 		main.entity.systems.modelRenderer.client.nodeBuffer.endRender();

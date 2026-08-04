@@ -532,7 +532,7 @@ pub const ItemDisplayManager = struct {
 	pub var heldToolScale: f32 = 1.60;
 	const maxReplicatedPlayers = 1024;
 	pub const HeldLightTransform = Vec4f;
-	const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
+	pub const defaultHeldLightTransform = HeldLightTransform{ 0.0, 0.12, 0.0, -90.0 };
 	const RemoteHeldItem = struct { item: items.Item = .null, transform: HeldLightTransform = defaultHeldLightTransform, toolRotationYZ: Vec2f = .{0.0, 0.0}, toolScale: f32 = 1.0, miningSwing: f32 = -1.0 };
 	var remoteHeldItems: [maxReplicatedPlayers]RemoteHeldItem = @splat(.{});
 
@@ -1083,6 +1083,7 @@ pub const ItemDropRenderer = struct {
 			if (modelComponent) |component| {
 				if (component.entityModel.get().nodeIndexMap.get("RightItem")) |nodeId| {
 					modelMatrix = modelMatrix.mul(component.matrices[nodeId].transpose());
+					modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.08, 0, 0.04 }));
 				} else {
 					modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.34, 0, 0.05 }));
 				}
@@ -1114,6 +1115,69 @@ pub const ItemDropRenderer = struct {
 		}
 	}
 
+	/// Renders the local player's own held item attached to their "RightItem" hand bone,
+	/// used instead of the screen-space floating item when settings.firstPersonBody is on.
+	pub fn renderLocalHandHeldItem(ambientLight: Vec3f, playerPos: Vec3d) void {
+		if (!main.settings.firstPersonBody) return;
+		const item = game.Player.inventory.getItem(game.Player.selectedSlot);
+		if (item == .null) return;
+
+		main.client.entity_manager.mutex.lock();
+		defer main.client.entity_manager.mutex.unlock();
+		bindCommonUniforms(ambientLight);
+
+		const baseItem = if (item == .baseItem) item.baseItem else null;
+		const blockType = if (baseItem) |candidate| candidate.block() else null;
+		const emittedLight = getItemEmittedLight(item) * @as(Vec3f, @splat(0.55));
+
+		const useBlockModel = if (baseItem) |candidate| blockType != null and (emittedLight[0] != 0 or emittedLight[1] != 0 or emittedLight[2] != 0 or candidate.image().imageData.ptr == graphics.Image.defaultImage.imageData.ptr) else false;
+		const model = if (useBlockModel) getBlockModel(item) else getModel(item);
+		const vertices: u31 = if (useBlockModel) model.len/2*6 else 36;
+		bindModelUniforms(model.index, if (useBlockModel) blockType.? else 0);
+		const playerWorldPos = game.Player.getPosBlocking();
+		const playerBlockPos: Vec3i = @floor(playerWorldPos);
+		const light: [6]u8 = main.renderer.mesh_storage.getLight(playerBlockPos[0], playerBlockPos[1], playerBlockPos[2]) orelse @splat(0);
+		bindLightUniform(light, ambientLight, emittedLight);
+		const modelComponent = main.entity.components.@"cubyz:model".client.get(game.Player.id);
+
+		var modelMatrix: Mat4f = if (modelComponent) |component|
+			main.entity.systems.modelRenderer.client.firstPersonBodyRootMatrix(component, playerPos)
+		else
+			Mat4f.translation(@as(Vec3f, @floatCast(playerWorldPos - playerPos)) + Vec3f{ 0, 0, -0.9 });
+
+		if (modelComponent) |component| {
+			if (component.entityModel.get().nodeIndexMap.get("RightItem")) |nodeId| {
+				modelMatrix = modelMatrix.mul(component.matrices[nodeId].transpose());
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.08, 0, 0.04 }));
+			} else {
+				modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.34, 0, 0.05 }));
+			}
+		} else {
+			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ -0.34, 0, 0.05 }));
+		}
+		const isLantern = blockType == blocks.getTypeById("cubyz:lantern/coal") or blockType == blocks.getTypeById("cubyz:lantern/sulfur");
+		if (isLantern) {
+			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ 0.0, 0.04, -0.12 }));
+			modelMatrix = modelMatrix.mul(Mat4f.rotationZ(@as(f32, std.math.pi / 2.0)));
+		} else {
+			const isTool = item == .proceduralItem;
+			const transform: ItemDisplayManager.HeldLightTransform = if (isTool) .{ ItemDisplayManager.heldToolOffset[0], ItemDisplayManager.heldToolOffset[1], ItemDisplayManager.heldToolOffset[2], ItemDisplayManager.heldToolRotation[0] } else ItemDisplayManager.defaultHeldLightTransform;
+			modelMatrix = modelMatrix.mul(Mat4f.translation(Vec3f{ transform[0], transform[1], transform[2] }));
+			modelMatrix = modelMatrix.mul(Mat4f.rotationX(std.math.degreesToRadians(transform[3])));
+			if (item == .proceduralItem) {
+				const toolRotationYZ = Vec2f{ ItemDisplayManager.heldToolRotation[1], ItemDisplayManager.heldToolRotation[2] };
+				modelMatrix = modelMatrix.mul(Mat4f.rotationY(std.math.degreesToRadians(toolRotationYZ[0])));
+				modelMatrix = modelMatrix.mul(Mat4f.rotationZ(std.math.degreesToRadians(toolRotationYZ[1])));
+				modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(ItemDisplayManager.heldToolScale)));
+			}
+		}
+
+		const heldScale: f32 = if (useBlockModel and emittedLight[0] == 0 and emittedLight[1] == 0 and emittedLight[2] == 0) 0.154 else 0.308;
+		modelMatrix = modelMatrix.mul(Mat4f.scale(@splat(heldScale)));
+		modelMatrix = modelMatrix.mul(Mat4f.translation(@splat(-0.5)));
+		drawItem(vertices, modelMatrix);
+	}
+
 	inline fn getIndex(x: u8, y: u8, z: u8) u32 {
 		return (z*4) + (y*2) + (x);
 	}
@@ -1128,6 +1192,7 @@ pub const ItemDropRenderer = struct {
 
 	pub fn renderDisplayItems(ambientLight: Vec3f, playerPos: Vec3d) void {
 		if (!ItemDisplayManager.showItem) return;
+		if (main.settings.firstPersonBody) return;
 
 		const displayItemUbo = graphics.frame_uniforms.StaticUbo.init(.{
 			.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(65), @as(f32, @floatFromInt(main.renderer.lastWidth))/@as(f32, @floatFromInt(main.renderer.lastHeight)), 0.01, 3).toGl(),

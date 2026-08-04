@@ -390,6 +390,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	if (msaaActive) c.glEnable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
 	itemdrop.ItemDropRenderer.renderRemoteHeldLights(ambientLight, playerPos);
+	itemdrop.ItemDropRenderer.renderLocalHandHeldItem(ambientLight, playerPos);
 	if (msaaActive) c.glDisable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	gpu_performance_measuring.stopQuery();
 
