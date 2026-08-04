@@ -766,7 +766,6 @@ pub const Pipeline = struct {
 
 		conditionalEnable(c.GL_DEPTH_CLAMP, self.rasterState.depthClamp);
 		conditionalEnable(c.GL_RASTERIZER_DISCARD, self.rasterState.rasterizerDiscard);
-		conditionalEnable(c.GL_RASTERIZER_DISCARD, self.rasterState.rasterizerDiscard);
 		c.glPolygonMode(c.GL_FRONT_AND_BACK, switch (self.rasterState.polygonMode) {
 			.fill => c.GL_FILL,
 			.line => c.GL_LINE,

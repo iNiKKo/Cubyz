@@ -73,10 +73,12 @@ fn findAvailableRecipes(list: *VerticalList) bool {
 	if (std.mem.eql(u32, oldAmounts, itemAmount.items)) return false;
 
 	var i: u32 = 0;
-	while (i < availableItems.items.len) : (i += 1) {
+	while (i < availableItems.items.len) {
 		if (itemAmount.items[i] == 0) {
 			_ = itemAmount.swapRemove(i);
 			_ = availableItems.swapRemove(i);
+		} else {
+			i += 1;
 		}
 	}
 	for (inventories.items) |inv| {

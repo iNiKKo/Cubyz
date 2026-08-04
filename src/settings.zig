@@ -86,7 +86,7 @@ pub var streamerMode: bool = false;
 
 pub var lastUsedIPAddress: []const u8 = "";
 
-pub var baseServerCompatibility: bool = false;
+pub var showMobNameTags: bool = true;
 
 pub var storedAccount: main.network.authentication.PasswordEncodedAccountCode = .empty;
 

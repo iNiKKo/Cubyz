@@ -224,7 +224,7 @@ pub fn createInstance() void {
 
 	const availableExtensions = enumerateInstanceExtensionProperties(main.stackAllocator, null);
 	defer main.stackAllocator.free(availableExtensions);
-	std.log.debug("Availabe vulkan instance extensions:", .{});
+	std.log.debug("Available vulkan instance extensions:", .{});
 	for (availableExtensions) |ext| {
 		std.log.debug("\t{s}", .{@as([*:0]const u8, @ptrCast(&ext.extensionName))});
 	}

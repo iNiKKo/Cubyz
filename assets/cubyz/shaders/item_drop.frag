@@ -57,19 +57,6 @@ vec4 fixedCubeMapLookup(vec3 v) {
 	return texture(reflectionMap, v);
 }
 
-float ditherThresholds[16] = float[16] (
-	1/17.0, 9/17.0, 3/17.0, 11/17.0,
-	13/17.0, 5/17.0, 15/17.0, 7/17.0,
-	4/17.0, 12/17.0, 2/17.0, 10/17.0,
-	16/17.0, 8/17.0, 14/17.0, 6/17.0
-);
-
-bool passDitherTest(float alpha) {
-	ivec2 screenPos = ivec2(gl_FragCoord.xy);
-	screenPos &= 3;
-	return alpha > ditherThresholds[screenPos.x*4 + screenPos.y];
-}
-
 void mainBlockDrop() {
 	float animatedTextureIndex = animatedTexture[textureIndex];
 	float normalVariation = lightVariation(faceNormal);

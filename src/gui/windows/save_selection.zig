@@ -57,6 +57,7 @@ pub fn openWorld(name: []const u8) void {
 	std.log.info("Opening world {s}", .{name});
 	main.server.thread = std.Thread.spawn(.{}, main.server.startFromNewThread, .{name, clientConnection.localPort, mode}) catch |err| {
 		std.log.err("Encountered error while starting server thread: {s}", .{@errorName(err)});
+		clientConnection.deinit();
 		return;
 	};
 	main.server.thread.?.setName(main.io, "Server") catch |err| {
@@ -71,6 +72,7 @@ pub fn openWorld(name: []const u8) void {
 	defer main.stackAllocator.free(ipPort);
 	const zon = main.game.testWorld.init(ipPort, clientConnection) catch |err| {
 		std.log.err("Encountered error while opening world: {s}", .{@errorName(err)});
+		clientConnection.deinit();
 		return;
 	};
 	main.game.testWorld.finishHandshake(zon) catch |err| {

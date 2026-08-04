@@ -369,6 +369,8 @@ pub const client = struct {
 		for (main.client.entity_manager.entities.items()) |ent| {
 			if (ent.id == game.Player.id) continue;
 			if (ent.name.len == 0 and !settings.showPlayerIndexWithName) continue;
+			const isPlayer = entity.components.@"cubyz:player".client.get(ent.id) != null;
+			if (!isPlayer and !settings.showMobNameTags) continue;
 
 			var offsetText: f32 = 0;
 			if (main.entity.components.@"cubyz:model".client.get(ent.id)) |component| {

@@ -9,6 +9,7 @@ pub const creative_inventory = @import("creative_inventory.zig");
 pub const crosshair = @import("crosshair.zig");
 pub const debug_network = @import("debug_network.zig");
 pub const debug_network_advanced = @import("debug_network_advanced.zig");
+pub const debug_settings = @import("debug_settings.zig");
 pub const debug_vulkan_info = @import("debug_vulkan_info.zig");
 pub const debug = @import("debug.zig");
 pub const delete_world_confirmation = @import("delete_world_confirmation.zig");

@@ -31,7 +31,7 @@ pub fn initAndGetExtend(zon: ZonElement) sdf.SdfModel.InitResult {
 
 	return .{.model = self, .maxExtend = .{
 		.min = .{@floor(-self.maxRadius - self.maxThickness), @floor(-self.maxRadius - self.maxThickness), @floor(-self.maxThickness)},
-		.max = .{@ceil(-self.maxRadius - self.maxThickness), @ceil(-self.maxRadius - self.maxThickness), @ceil(-self.maxThickness)},
+		.max = .{@ceil(self.maxRadius + self.maxThickness), @ceil(self.maxRadius + self.maxThickness), @ceil(self.maxThickness)},
 	}};
 }
 

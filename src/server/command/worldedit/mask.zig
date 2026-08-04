@@ -36,6 +36,7 @@ pub fn execute(args: Args, source: Source) void {
 		return;
 	}
 	const user = source.user;
+	if (user.worldEditData.mask) |oldMask| oldMask.deinit(main.globalAllocator);
 	switch (args) {
 		.@"/mask <mask>" => |cmd| {
 			user.worldEditData.mask = cmd.mask.mask.clone(main.globalAllocator);

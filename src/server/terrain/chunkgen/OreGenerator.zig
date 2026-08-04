@@ -34,6 +34,7 @@ pub fn generate(worldSeed: u64, chunk: *main.chunk.ServerChunk, caveMap: CaveMap
 	const cy = chunk.super.pos.wy >> main.chunk.chunkShift;
 	const cz = chunk.super.pos.wz >> main.chunk.chunkShift;
 
+	// Generate ores from all nearby chunks:
 	var x = cx - 1;
 	while (x < cx + 1) : (x +%= 1) {
 		var y = cy - 1;
@@ -99,7 +100,7 @@ fn considerCoordinates(ore: *const main.blocks.Ore, relX: f32, relY: f32, relZ: 
 
 						if ((1 - distSqr)*ore.density >= random.nextFloat(&veinSeed)) {
 							const stoneBlock = chunk.getBlock(curX, curY, curZ);
-							if (chunk.getBlock(curX, curY, curZ).allowOres()) {
+							if (stoneBlock.allowOres()) {
 								chunk.updateBlockInGeneration(curX, curY, curZ, .{.typ = ore.blockType, .data = stoneBlock.typ});
 							}
 						}

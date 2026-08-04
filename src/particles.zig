@@ -103,7 +103,7 @@ pub const ParticleManager = struct {
 			isBaseBroken = true;
 		}
 		if (hasEmission and emission.height%emission.width != 0) {
-			std.log.err("Particle emission texture has incorrect dimensions ({}x{}) expected height to be multiple of width for {s} ({s})", .{base.width, base.height, textureId, assetsFolder});
+			std.log.err("Particle emission texture has incorrect dimensions ({}x{}) expected height to be multiple of width for {s} ({s})", .{emission.width, emission.height, textureId, assetsFolder});
 			isEmissionBroken = true;
 		}
 		if (hasEmission and baseAnimationFrameCount != emissionAnimationFrameCount) {

@@ -24,6 +24,7 @@ pub fn onOpen() void {
 	list.add(Button.initText(.{0, 0}, 200, "Controls", .{.onAction = gui.openWindowCallback("controls")}));
 	list.add(Button.initText(.{0, 0}, 200, "Advanced Controls", .{.onAction = gui.openWindowCallback("advanced_controls")}));
 	list.add(Button.initText(.{0, 0}, 200, "Social", .{.onAction = gui.openWindowCallback("social")}));
+	list.add(Button.initText(.{0, 0}, 200, "Debug", .{.onAction = gui.openWindowCallback("debug_settings")}));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();
 	window.contentSize = window.rootComponent.?.pos() + window.rootComponent.?.size() + @as(Vec2f, @splat(padding));

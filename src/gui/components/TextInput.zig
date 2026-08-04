@@ -269,9 +269,10 @@ pub fn right(self: *TextInput, mods: main.Window.Key.Modifiers) void {
 }
 
 fn moveCursorVertically(self: *TextInput, relativeLines: f32) enum { changed, same } {
+	const oldCursor = self.cursor;
 	const newCursor = self.textBuffer.mousePosToIndex(self.textBuffer.indexToCursorPos(self.cursor.?) + Vec2f{0, 16*relativeLines}, self.currentString.items.len);
 	self.cursor = newCursor;
-	if (self.cursor != newCursor) {
+	if (oldCursor != newCursor) {
 		return .changed;
 	}
 	return .same;

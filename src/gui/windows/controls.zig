@@ -70,6 +70,7 @@ fn sprintIsToggleCallback(newValue: bool) void {
 
 fn updateDeadzone(deadzone: f32) void {
 	main.settings.controllerAxisDeadzone = deadzone;
+	main.settings.save();
 }
 
 fn deadzoneFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {

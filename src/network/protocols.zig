@@ -1315,9 +1315,9 @@ pub const crouchState = struct {
 };
 
 /// Syncs which base item the player currently has selected, independent of the
-/// heldLight system (which is skipped entirely under baseServerCompatibility).
+/// heldLight system (which is skipped entirely against legacy 0.3.0 servers).
 /// Gameplay code (e.g. mob AI checking "is the player holding an apple") should
-/// use this rather than heldLight, since it isn't gated by that setting.
+/// use this rather than heldLight, since it isn't gated by that check.
 pub const selectedItemId = struct {
 	pub const id: u8 = 18;
 

@@ -26,7 +26,7 @@ const crystalColor = [_][]const u8{
 };
 var glowCrystals: [crystalColor.len]u16 = undefined;
 
-const surfaceDist = 2;
+const surfaceDist = 2; // How far away crystal can spawn from the wall.
 
 pub fn init(parameters: ZonElement) void {
 	_ = parameters;
@@ -145,8 +145,7 @@ fn considerCoordinates(x: i32, y: i32, z: i32, chunk: *main.chunk.ServerChunk, c
 		const relX = worldX -% chunk.super.pos.wx;
 		const relY = worldY -% chunk.super.pos.wy;
 		const relZ = worldZ -% chunk.super.pos.wz;
-		if (caveMap.isSolid(relX, relY, relZ)) {
-
+		if (caveMap.isSolid(relX, relY, relZ)) { // Only start crystal in solid blocks
 			if ((worldX - x >= surfaceDist and !caveMap.isSolid(relX - surfaceDist, relY, relZ)) or (worldX - x < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX + surfaceDist, relY, relZ)) or (worldY - y >= surfaceDist and !caveMap.isSolid(relX, relY - surfaceDist, relZ)) or (worldY - y < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX, relY + surfaceDist, relZ)) or (worldZ - z >= surfaceDist and !caveMap.isSolid(relX, relY, relZ - surfaceDist)) or (worldZ - z < main.chunk.chunkSize - surfaceDist and !caveMap.isSolid(relX, relY, relZ + surfaceDist))) {
 
 				considerCrystal(worldX, worldY, worldZ, chunk, seed, useNeedles, colors);

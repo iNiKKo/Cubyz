@@ -103,8 +103,8 @@ const AudioData = struct {
 				}
 			} else {
 				self.channelType = if (ogg_info.channels == 2) .stereo else .mono;
-				self.data = main.globalAllocator.alloc(f32, samples*@as(c_uint, @intCast(ogg_info.channels)));
-				_ = c.stb_vorbis_get_samples_float_interleaved(ogg_stream, ogg_info.channels, self.data.ptr, @as(c_int, @intCast(samples))*ogg_info.channels);
+				self.data = main.globalAllocator.alloc(f32, samples*channels);
+				_ = c.stb_vorbis_get_samples_float_interleaved(ogg_stream, channels, self.data.ptr, @as(c_int, @intCast(samples))*channels);
 			}
 		} else {
 			self.data = main.globalAllocator.alloc(f32, channels);
@@ -221,6 +221,7 @@ pub fn init() error{miniaudioError}!void {
 	config.pUserData = undefined;
 
 	try handleError(c.ma_device_init(null, &config, &device));
+	errdefer c.ma_device_uninit(&device);
 
 	try handleError(c.ma_device_start(&device));
 

@@ -114,7 +114,7 @@ pub const collision = struct {
 								minDistance = res.dist;
 							} else if (res.dist == minDistance) {
 								resultBox.?.min = @min(resultBox.?.min, res.box.min);
-								resultBox.?.max = @min(resultBox.?.max, res.box.max);
+								resultBox.?.max = @max(resultBox.?.max, res.box.max);
 							}
 						}
 					}

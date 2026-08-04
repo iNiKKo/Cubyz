@@ -238,15 +238,18 @@ pub fn loadComponentsFromBase64(base64Data: []const u8, entity: Entity, comptime
 	defer main.stackAllocator.free(data);
 
 	var reader = main.utils.BinaryReader.init(data);
-	var lastError: EntityComponentLoadError!void = {};
+	var firstError: EntityComponentLoadError!void = {};
 	while (reader.remaining.len != 0) {
 		const componentId: EntityComponentId = reader.readVarInt(EntityComponentId) catch return EntityComponentLoadError.UnreadableId;
 		const componentVersion: u32 = reader.readVarInt(u32) catch return EntityComponentLoadError.UnreadableVersion;
 		const componentData = reader.readSliceWithSize() catch return EntityComponentLoadError.UnreadableComponentData;
 
-		lastError = loadComponent(side, componentId, entity, componentData, componentVersion);
+		const result = loadComponent(side, componentId, entity, componentData, componentVersion);
+		if (firstError) |_| {
+			firstError = result;
+		} else |_| {}
 	}
-	return lastError;
+	return firstError;
 }
 
 pub const AudienceInfo = enum {

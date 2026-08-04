@@ -41,9 +41,15 @@ pub const client = struct {
 
 	pub fn init() void {}
 	pub fn deinit() void {
+		for (components.dense.items) |*component| {
+			component.bag.deinit();
+		}
 		components.deinit(main.globalAllocator);
 	}
 	pub fn clear() void {
+		for (components.dense.items) |*component| {
+			component.bag.deinit();
+		}
 		components.clear();
 	}
 
@@ -78,6 +84,9 @@ pub const server = struct {
 		components = .{};
 	}
 	pub fn deinit() void {
+		for (components.dense.items) |*component| {
+			component.bag.deinit();
+		}
 		components.deinit(main.globalAllocator);
 	}
 

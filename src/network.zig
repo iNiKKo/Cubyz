@@ -1563,7 +1563,7 @@ pub const Connection = struct {
 	}
 
 	pub fn isBaseServerCompatible(self: *const Connection) bool {
-		return settings.baseServerCompatibility or self.legacy030Server;
+		return self.legacy030Server;
 	}
 
 	fn pause(self: *Connection) void {
