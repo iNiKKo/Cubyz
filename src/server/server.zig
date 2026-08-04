@@ -32,6 +32,7 @@ pub const SimulationChunk = @import("SimulationChunk.zig");
 pub const stdin_handler = @import("stdin_handler.zig");
 pub const storage = @import("storage.zig");
 pub const permission = @import("permission.zig");
+pub const players = @import("players.zig");
 
 pub const command = @import("command.zig");
 pub const WeatherMap = @import("WeatherMap.zig");
@@ -281,7 +282,7 @@ pub const User = struct {
 			const keyBase64 = keys.get([]const u8, keyTypeName) orelse continue;
 			const keyWithType = main.stackAllocator.print("{s}:{s}", .{keyTypeName, keyBase64});
 			defer main.stackAllocator.free(keyWithType);
-			self.playerIndex = world.?.playerDatabase.get(keyWithType) orelse continue;
+			self.playerIndex = main.server.players.lookupIndex(keyWithType) orelse continue;
 			foundKey = true;
 			const keyType = std.meta.stringToEnum(main.network.authentication.KeyTypeEnum, keyTypeName).?;
 			if (keyType == self.key) break;
@@ -289,13 +290,12 @@ pub const User = struct {
 			break;
 		}
 		if (!foundKey) {
-			if (world.?.playerDatabase.size == 0) {
-				std.log.info("Here", .{});
-				self.playerIndex = world.?.localPlayerIndex;
+			if (main.server.players.isEmpty()) { // Claim the local player
+				self.playerIndex = main.server.players.getLocalPlayerIndex();
 			} else {
 				const nameEntry = main.stackAllocator.print("name:{s}", .{name});
 				defer main.stackAllocator.free(nameEntry);
-				self.playerIndex = world.?.playerDatabase.get(nameEntry) orelse world.?.nextPlayerIndex.fetchAdd(1, .monotonic);
+				self.playerIndex = main.server.players.lookupIndex(nameEntry) orelse main.server.players.allocateNewIndex();
 			}
 		}
 	}
@@ -305,10 +305,10 @@ pub const User = struct {
 		self.name = main.globalAllocator.dupe(u8, name);
 
 		if (world.?.settings.testingMode and !self.isLocal) {
-			self.playerIndex = world.?.nextPlayerIndex.fetchAdd(1, .monotonic);
+			self.playerIndex = main.server.players.allocateNewIndex();
 			std.log.info("Assigned temporary testing player index {d} to {s}", .{self.playerIndex, name});
 		} else {
-			self.playerIndex = world.?.localPlayerIndex;
+			self.playerIndex = main.server.players.getLocalPlayerIndex();
 		}
 	}
 
