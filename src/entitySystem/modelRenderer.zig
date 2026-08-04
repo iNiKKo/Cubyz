@@ -348,7 +348,7 @@ pub const client = struct {
 			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
 				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
 					const pos = game.Player.getPosBlocking() - playerPos;
-					const rotation = game.camera.rotation;
+					const rotation = if (game.Player.editorMode.load(.monotonic)) game.frozenBodyRotation else game.camera.rotation;
 					const velocity = game.Player.getVelBlocking();
 					const horizontalSpeed: f32 = @floatCast(@sqrt(velocity[0]*velocity[0] + velocity[1]*velocity[1]));
 					const verticalVelocity: f32 = @floatCast(velocity[2]);
@@ -469,7 +469,7 @@ pub const client = struct {
 			updateNodeMatrices(component, ent.rot, horizontalSpeed, verticalVelocity, heldAnimation.isHoldingItem, heldAnimation.miningSwing, false);
 		}
 
-		if (settings.firstPersonBody) {
+		if (settings.firstPersonBody and !game.Player.editorMode.load(.monotonic)) {
 			if (entity.components.@"cubyz:model".client.get(game.Player.id)) |component| {
 				if (entity.components.@"cubyz:player".client.get(game.Player.id) != null) {
 					const rotation = game.camera.rotation;

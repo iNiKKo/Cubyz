@@ -621,6 +621,9 @@ pub const genericUpdate = struct {
 		blockBreaking = 9,
 		lightning = 10,
 		needs = 11,
+		moveEntity = 12,
+		simulationPaused = 13,
+		moveBlock = 14,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -713,6 +716,23 @@ pub const genericUpdate = struct {
 					if (progress >= 0.0) main.renderer.mesh_storage.addBreakingAnimation(pos, progress);
 				}
 			},
+			.moveEntity => {
+				const entityId = try reader.readEnum(main.entity.Entity);
+				const pos = try reader.readVec(Vec3d);
+				if (entityId == game.Player.id) {
+					game.Player.setPosBlocking(pos);
+				} else if (main.client.entity_manager.getEntity(entityId)) |ent| {
+					ent.pos = pos;
+					var flatPos = [_]f64{pos[0], pos[1], pos[2], @floatCast(ent.rot[0]), @floatCast(ent.rot[1]), @floatCast(ent.rot[2])};
+					var zeroVel = [_]f64{0, 0, 0, 0, 0, 0};
+					ent.interpolatedValues.init(&flatPos, &zeroVel);
+				}
+			},
+			.simulationPaused => {
+				main.game.devSimulationPaused.store(try reader.readBool(), .monotonic);
+				main.gui.windowlist.editor_toolbar.update();
+			},
+			.moveBlock => return error.InvalidSide,
 		.lightning => {
 			const position = try reader.readVec(Vec3d);
 				const intensity = try reader.readFloat(f32);
@@ -772,6 +792,21 @@ pub const genericUpdate = struct {
 			const users = main.server.getUserList(main.stackAllocator);
 			defer main.stackAllocator.free(users);
 			for (users) |user| sendBlockBreakingTo(user.conn, source, pos, progress);
+		},
+		.moveEntity => {
+			const targetId = try reader.readEnum(main.entity.Entity);
+			const pos = try reader.readVec(Vec3d);
+			main.server.queueEditorRequest(.{.moveEntity = .{.sender = conn.user.?.id, .target = targetId, .pos = pos}});
+		},
+		.simulationPaused => {
+			const paused = try reader.readBool();
+			main.server.queueEditorRequest(.{.pauseSimulation = .{.sender = conn.user.?.id, .paused = paused}});
+		},
+		.moveBlock => {
+			const oldPos = try reader.readVec(Vec3i);
+			const newPos = try reader.readVec(Vec3i);
+			const block = Block.fromInt(try reader.readInt(u32));
+			main.server.queueEditorRequest(.{.moveBlock = .{.sender = conn.user.?.id, .oldPos = oldPos, .newPos = newPos, .block = block}});
 		},
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
@@ -863,6 +898,33 @@ pub const genericUpdate = struct {
 		writer.writeVec(Vec3i, pos);
 		writer.writeFloat(f32, progress);
 		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendMoveEntity(conn: *Connection, entityId: main.entity.Entity, pos: Vec3d) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + @sizeOf(main.entity.Entity) + @sizeOf(Vec3d));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .moveEntity);
+		writer.writeEnum(main.entity.Entity, entityId);
+		writer.writeVec(Vec3d, pos);
+		conn.send(.lossy, id, writer.data.items);
+	}
+
+	pub fn sendSimulationPaused(conn: *Connection, paused: bool) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 2);
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .simulationPaused);
+		writer.writeBool(paused);
+		conn.send(.secure, id, writer.data.items);
+	}
+
+	pub fn sendMoveBlock(conn: *Connection, oldPos: Vec3i, newPos: Vec3i, block: Block) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + 2*@sizeOf(Vec3i) + @sizeOf(u32));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .moveBlock);
+		writer.writeVec(Vec3i, oldPos);
+		writer.writeVec(Vec3i, newPos);
+		writer.writeInt(u32, block.toInt());
+		conn.send(.secure, id, writer.data.items);
 	}
 
 	pub fn sendLightning(conn: *Connection, position: Vec3d, intensity: f32) void {

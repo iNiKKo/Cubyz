@@ -625,9 +625,23 @@ var users: main.ListManaged(*User) = undefined;
 var userDeinitList: main.utils.ConcurrentQueue(*User) = undefined;
 var userConnectList: main.utils.ConcurrentQueue(*User) = undefined;
 
+/// Editor-mode requests received on the network thread but which must run on the server tick thread,
+/// since permission checks and world/entity mutation assert they're on the .server thread context.
+pub const EditorRequest = union(enum) {
+	moveEntity: struct {sender: main.entity.Entity, target: main.entity.Entity, pos: Vec3d},
+	pauseSimulation: struct {sender: main.entity.Entity, paused: bool},
+	moveBlock: struct {sender: main.entity.Entity, oldPos: Vec3i, newPos: Vec3i, block: main.blocks.Block},
+};
+var editorRequests: main.utils.ConcurrentQueue(EditorRequest) = undefined;
+
+pub fn queueEditorRequest(request: EditorRequest) void {
+	editorRequests.pushBack(request);
+}
+
 pub var connectionManager: *ConnectionManager = undefined;
 
 pub var running: std.atomic.Value(bool) = .init(false);
+pub var simulationPaused: std.atomic.Value(bool) = .init(false);
 var restart: bool = true;
 
 var lastTime: std.Io.Timestamp = undefined;
@@ -750,10 +764,67 @@ fn updateSurvivalNeeds(user: *User) void {
 	}
 }
 
+fn processEditorRequest(request: EditorRequest) void {
+	switch (request) {
+		.moveEntity => |data| {
+			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/moveEntity")) return;
+
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			var target: ?*User = null;
+			for (userList) |user| {
+				if (user.id == data.target) {
+					target = user;
+					break;
+				}
+			}
+			const targetUser = target orelse return;
+			targetUser.teleport(data.pos, false);
+			for (userList) |user| {
+				if (user == targetUser) continue;
+				main.network.protocols.genericUpdate.sendMoveEntity(user.conn, data.target, data.pos);
+			}
+		},
+		.pauseSimulation => |data| {
+			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/pauseSimulation")) return;
+			simulationPaused.store(data.paused, .monotonic);
+			if (!data.paused) {
+				// Prevent a huge deltaTime spike on the first tick after resuming, which would otherwise
+				// make mobs/physics jump forward by however long the simulation was paused for.
+				world.?.lastUpdateTime = main.timestamp();
+			}
+
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| main.network.protocols.genericUpdate.sendSimulationPaused(user.conn, data.paused);
+		},
+		.moveBlock => |data| {
+			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/moveEntity")) return;
+			world.?.updateBlock(data.oldPos[0], data.oldPos[1], data.oldPos[2], .{.typ = 0, .data = 0});
+			world.?.updateBlock(data.newPos[0], data.newPos[1], data.newPos[2], data.block);
+
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				main.network.protocols.blockUpdate.send(user.conn, &.{
+					.{.pos = data.oldPos, .newBlock = .{.typ = 0, .data = 0}, .blockEntityData = &.{}},
+					.{.pos = data.newPos, .newBlock = data.block, .blockEntityData = &.{}},
+				});
+			}
+		},
+	}
+}
+
 fn update() void {
-	world.?.update();
-	main.entity.server.update();
+	if (!simulationPaused.load(.monotonic)) {
+		world.?.update();
+		main.entity.server.update();
+	}
 	stdin_handler.update();
+
+	while (editorRequests.popFront()) |request| {
+		processEditorRequest(request);
+	}
 
 	while (userConnectList.popFront()) |user| {
 		if (user.connected.load(.monotonic)) connectInternal(user);
@@ -783,6 +854,9 @@ fn update() void {
 	}
 	const mobData = world.?.mobManager.getPositionAndVelocityData(main.stackAllocator);
 	defer main.stackAllocator.free(mobData);
+	if (simulationPaused.load(.monotonic)) {
+		for (mobData) |*data| data.vel = @splat(0);
+	}
 	entityData.appendSlice(mobData);
 
 	for (userList) |user| {
@@ -881,6 +955,7 @@ pub fn startFromExistingThread(name: []const u8, port: ?u16, mode: ServerWorld.M
 	};
 	userDeinitList = .init(main.globalAllocator, 16);
 	userConnectList = .init(main.globalAllocator, 16);
+	editorRequests = .init(main.globalAllocator, 16);
 
 	defer {
 		connectionManager.deinit();
@@ -889,6 +964,7 @@ pub fn startFromExistingThread(name: []const u8, port: ?u16, mode: ServerWorld.M
 		while (userDeinitList.popFront()) |user| {
 			user.privateDeinit();
 		}
+		editorRequests.deinit();
 
 		userDeinitList.deinit();
 		userConnectList.deinit();

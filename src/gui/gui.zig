@@ -521,7 +521,7 @@ pub fn mainButtonPressed(_: main.Window.Key.Modifiers) void {
 			}
 		}
 	}
-	if (main.game.world != null and inventory.carried.getItem(0) == .null) {
+	if (main.game.world != null and inventory.carried.getItem(0) == .null and !main.game.Player.editorMode.load(.monotonic)) {
 		toggleGameMenu();
 	}
 }

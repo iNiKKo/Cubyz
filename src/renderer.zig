@@ -125,6 +125,7 @@ pub fn init() void {
 	Bloom.init();
 	GodRays.init();
 	MeshSelection.init();
+	EditorGizmo.init();
 	MenuBackGround.init();
 	Skybox.init();
 	ShadowRaymarch.init();
@@ -157,6 +158,7 @@ pub fn deinit() void {
 	Bloom.deinit();
 	GodRays.deinit();
 	MeshSelection.deinit();
+	EditorGizmo.deinit();
 	MenuBackGround.deinit();
 	Skybox.deinit();
 	ShadowRaymarch.deinit();
@@ -259,15 +261,16 @@ pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 	mesh_storage.updateMeshes(startTime.addDuration(maximumMeshTime));
 }
 
-pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Vec3f {
-
+/// Computes a world-space ray direction for an arbitrary screen-space point (in pixels, top-left origin),
+/// using the same tan(fov/2) unprojection as crosshairDirection. Used for mouse-driven picking (e.g. the
+/// editor gizmo) where the ray origin isn't the fixed screen-center crosshair.
+pub fn screenPointDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31, screenCoord: Vec2f) Vec3f {
 	const invRotationMatrix = rotationMatrix.transpose();
 	const cameraDir = vec.xyz(invRotationMatrix.mulVec(Vec4f{0, 1, 0, 1}));
 	const cameraUp = vec.xyz(invRotationMatrix.mulVec(Vec4f{0, 0, 1, 1}));
 	const cameraRight = vec.xyz(invRotationMatrix.mulVec(Vec4f{1, 0, 0, 1}));
 
 	const screenSize = Vec2f{@floatFromInt(width), @floatFromInt(height)};
-	const screenCoord = (crosshair.window.pos + crosshair.window.contentSize*Vec2f{0.5, 0.5}*@as(Vec2f, @splat(crosshair.window.scale)))*@as(Vec2f, @splat(main.gui.scale*main.settings.resolutionScale));
 
 	const halfVSide = std.math.tan(std.math.degreesToRadians(fovY)*0.5);
 	const halfHSide = halfVSide*screenSize[0]/screenSize[1];
@@ -280,6 +283,11 @@ pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: 
 
 	const adjusted = forwards + horizontal + vertical;
 	return adjusted;
+}
+
+pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Vec3f {
+	const screenCoord = (crosshair.window.pos + crosshair.window.contentSize*Vec2f{0.5, 0.5}*@as(Vec2f, @splat(crosshair.window.scale)))*@as(Vec2f, @splat(main.gui.scale*main.settings.resolutionScale));
+	return screenPointDirection(rotationMatrix, fovY, width, height, screenCoord);
 }
 
 fn projectDirection(viewProj: Mat4f, dir: Vec3f) ?Vec2f {
@@ -350,8 +358,15 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
 	const direction = crosshairDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight);
-	MeshSelection.select(playerPos, direction, game.Player.inventory.getItem(game.Player.selectedSlot));
-	MeshSelection.selectEntity(playerPos, direction);
+	if (game.Player.editorMode.load(.monotonic)) {
+		const mouseDirection = screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, main.Window.getMousePosition());
+		MeshSelection.select(playerPos, mouseDirection, game.Player.inventory.getItem(game.Player.selectedSlot));
+		MeshSelection.selectEntity(playerPos, mouseDirection);
+		EditorGizmo.update(playerPos, mouseDirection);
+	} else {
+		MeshSelection.select(playerPos, direction, game.Player.inventory.getItem(game.Player.selectedSlot));
+		MeshSelection.selectEntity(playerPos, direction);
+	}
 
 	chunk_meshing.beginRender();
 
@@ -417,6 +432,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	blocks.meshes.emissionTextureArray.bind();
 
 	MeshSelection.render(playerPos);
+	EditorGizmo.render(playerPos);
 
 	worldFrameBuffer.bindTexture(c.GL_TEXTURE3);
 	worldFrameBuffer.bindDepthTexture(c.GL_TEXTURE5);
@@ -2365,5 +2381,215 @@ pub const MeshSelection = struct {
 				drawCube(@as(Vec3d, @floatFromInt(bottomLeft)) - playerPos, .{0, 0, 0}, @floatFromInt(topRight - bottomLeft + Vec3i{1, 1, 1}));
 			}
 		}
+	}
+};
+
+/// Draws a 3-axis move gizmo (red=X, green=Y, blue=Z) at the editor's currently selected entity or
+/// block, and lets the player click-drag an axis to move it, persisting the move to the server via
+/// genericUpdate.sendMoveEntity / sendMoveBlock. Selection is click-only: hovering never selects,
+/// only clicking (on the gizmo axis to drag, or elsewhere to pick whatever's under the cursor).
+pub const EditorGizmo = struct {
+	const axisLength: f32 = 1.0;
+	const grabRadius: f64 = 0.30;
+
+	const Selection = union(enum) {
+		entity: main.entity.Entity,
+		block: Vec3i,
+	};
+
+	var pipeline: graphics.Pipeline = undefined;
+	var uniforms: struct {
+		projectionMatrix: c_int,
+		viewMatrix: c_int,
+		modelPosition: c_int,
+		axisLength: c_int,
+		lineSize: c_int,
+	} = undefined;
+
+	var selection: ?Selection = null;
+	var hoveredAxis: ?u2 = null;
+	var grabbedAxis: ?u2 = null;
+	var grabOriginAtStart: Vec3d = .{0, 0, 0};
+	var grabAxisParamAtStart: f64 = 0;
+	var lastSentPos: Vec3d = .{0, 0, 0};
+	var grabbedBlockType: main.blocks.Block = .{.typ = 0, .data = 0};
+	var lastSentBlockPos: Vec3i = .{0, 0, 0};
+
+	pub fn init() void {
+		pipeline = graphics.Pipeline.init(
+			"assets/cubyz/shaders/editor_gizmo_vertex.vert",
+			"assets/cubyz/shaders/editor_gizmo_fragment.frag",
+			"",
+			&uniforms,
+			graphics.VertexArray.EmptyVertex,
+			&.{},
+			.{.cullMode = .none},
+			.{.depthTest = false, .depthWrite = false},
+			.{.attachments = &.{.alphaBlending}},
+		);
+	}
+
+	pub fn deinit() void {
+		pipeline.deinit();
+	}
+
+	fn currentOrigin() ?Vec3d {
+		switch (selection orelse return null) {
+			.entity => |entityId| {
+				main.client.entity_manager.mutex.lock();
+				defer main.client.entity_manager.mutex.unlock();
+				for (main.client.entity_manager.entities.items()) |ent| {
+					if (ent.id == entityId) return ent.getRenderPosition();
+				}
+				return null;
+			},
+			.block => |pos| return @as(Vec3d, @floatFromInt(pos)) + @as(Vec3d, @splat(0.5)),
+		}
+	}
+
+	const axisDirections = [3]Vec3d{.{1, 0, 0}, .{0, 1, 0}, .{0, 0, 1}};
+
+	/// Closest-point-between-two-lines: projects the mouse ray onto an axis line through gizmoOrigin,
+	/// returning (paramOnAxis, perpendicularDistanceFromAxisToRay).
+	fn closestPointOnAxis(gizmoOrigin: Vec3d, axis: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) struct {t: f64, dist: f64} {
+		const w0 = rayOrigin - gizmoOrigin;
+		const a: f64 = vec.dot(axis, axis);
+		const b: f64 = vec.dot(axis, rayDir);
+		const cc: f64 = vec.dot(rayDir, rayDir);
+		const d: f64 = vec.dot(axis, w0);
+		const e: f64 = vec.dot(rayDir, w0);
+		const denom = a*cc - b*b;
+		if (@abs(denom) < 1e-9) return .{.t = 0, .dist = std.math.inf(f64)};
+		const sc = (b*e - cc*d)/denom;
+		const tc = (a*e - b*d)/denom;
+		const pointOnAxis = gizmoOrigin + axis*@as(Vec3d, @splat(sc));
+		const pointOnRay = rayOrigin + rayDir*@as(Vec3d, @splat(tc));
+		return .{.t = sc, .dist = vec.length(pointOnAxis - pointOnRay)};
+	}
+
+	/// Finds which gizmo axis (if any) the given world-space ray passes closest to, within grabRadius.
+	fn hitTestAxes(gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) ?u2 {
+		var best: ?u2 = null;
+		var bestDist: f64 = grabRadius;
+		for (axisDirections, 0..) |axis, i| {
+			const result = closestPointOnAxis(gizmoOrigin, axis, rayOrigin, rayDir);
+			if (result.t < 0 or result.t > axisLength) continue;
+			if (result.dist < bestDist) {
+				bestDist = result.dist;
+				best = @intCast(i);
+			}
+		}
+		return best;
+	}
+
+	/// Called once per frame while in editor mode with the current camera-relative mouse ray,
+	/// updating hover state and, if an axis is grabbed, dragging the selection along it.
+	pub fn update(playerPos: Vec3d, mouseDirection: Vec3f) void {
+		hoveredAxis = null;
+		if (!game.Player.editorMode.load(.monotonic)) return;
+		const gizmoOrigin = currentOrigin() orelse return;
+		const rayOrigin = playerPos;
+		const rayDir: Vec3d = @floatCast(mouseDirection);
+
+		if (grabbedAxis) |axisIndex| {
+			const axis = axisDirections[axisIndex];
+			const result = closestPointOnAxis(gizmoOrigin, axis, rayOrigin, rayDir);
+			const delta = result.t - grabAxisParamAtStart;
+			const newPos = grabOriginAtStart + axis*@as(Vec3d, @splat(delta));
+
+			switch (selection.?) {
+				.entity => |entityId| {
+					if (main.client.entity_manager.getEntity(entityId)) |ent| ent.pos = newPos;
+					if (vec.lengthSquare(newPos - lastSentPos) > 0.0004) {
+						lastSentPos = newPos;
+						if (game.world) |world| main.network.protocols.genericUpdate.sendMoveEntity(world.conn, entityId, newPos);
+					}
+				},
+				.block => {
+					const newBlockPos: Vec3i = @intFromFloat(@floor(newPos));
+					if (@reduce(.And, newBlockPos == lastSentBlockPos)) return;
+					const oldBlockPos = lastSentBlockPos;
+					lastSentBlockPos = newBlockPos;
+					selection = .{.block = newBlockPos};
+					if (game.world) |world| main.network.protocols.genericUpdate.sendMoveBlock(world.conn, oldBlockPos, newBlockPos, grabbedBlockType);
+				},
+			}
+			return;
+		}
+
+		hoveredAxis = hitTestAxes(gizmoOrigin, rayOrigin, rayDir);
+
+		// If the grab button is still held (e.g. the click that selected this block/entity also
+		// landed near an axis, or the mouse settled onto an axis after the initial press) and we
+		// haven't started a drag yet, start one now instead of requiring a fresh press.
+		if (hoveredAxis != null and main.KeyBoard.key("editorGizmoGrab").pressed) {
+			startGrab(hoveredAxis.?, gizmoOrigin, rayOrigin, rayDir);
+		}
+	}
+
+	fn startGrab(axisIndex: u2, gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) void {
+		const result = closestPointOnAxis(gizmoOrigin, axisDirections[axisIndex], rayOrigin, rayDir);
+		grabbedAxis = axisIndex;
+		grabOriginAtStart = gizmoOrigin;
+		grabAxisParamAtStart = result.t;
+		lastSentPos = gizmoOrigin;
+		if (selection.? == .block) {
+			lastSentBlockPos = selection.?.block;
+			grabbedBlockType = mesh_storage.getBlockFromRenderThread(lastSentBlockPos[0], lastSentBlockPos[1], lastSentBlockPos[2]) orelse .{.typ = 0, .data = 0};
+		}
+	}
+
+	fn pickUnderCursor() void {
+		if (MeshSelection.selectedEntity) |entityId| {
+			selection = .{.entity = entityId};
+		} else if (MeshSelection.selectedBlockPos) |blockPos| {
+			selection = .{.block = blockPos};
+		} else {
+			selection = null;
+		}
+	}
+
+	pub fn grabPress(_: main.Window.Key.Modifiers) void {
+		if (!game.Player.editorMode.load(.monotonic)) return;
+		const rayOrigin = game.devCameraPos;
+		const rayDir: Vec3d = @floatCast(screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, main.Window.getMousePosition()));
+
+		// If something is already selected and this click lands on its gizmo, grab that axis directly.
+		if (currentOrigin()) |gizmoOrigin| {
+			if (hitTestAxes(gizmoOrigin, rayOrigin, rayDir)) |axisIndex| {
+				startGrab(axisIndex, gizmoOrigin, rayOrigin, rayDir);
+				return;
+			}
+		}
+
+		// Otherwise pick whatever's under the cursor, then check if the *new* selection's gizmo
+		// also happens to pass under this same click point — so select+drag can happen in one motion.
+		pickUnderCursor();
+		const newOrigin = currentOrigin() orelse return;
+		if (hitTestAxes(newOrigin, rayOrigin, rayDir)) |axisIndex| {
+			startGrab(axisIndex, newOrigin, rayOrigin, rayDir);
+		}
+	}
+
+	pub fn grabRelease(_: main.Window.Key.Modifiers) void {
+		grabbedAxis = null;
+	}
+
+	pub fn render(playerPos: Vec3d) void {
+		if (main.gui.hideGui) return;
+		if (!game.Player.editorMode.load(.monotonic)) return;
+		const pos = currentOrigin() orelse {
+			selection = null;
+			return;
+		};
+
+		pipeline.bind(null);
+		const relativePosition: Vec3f = @floatCast(pos - playerPos);
+		c.glUniform3f(uniforms.modelPosition, relativePosition[0], relativePosition[1], relativePosition[2]);
+		c.glUniform1f(uniforms.axisLength, axisLength);
+		c.glUniform1f(uniforms.lineSize, 1.0/48.0);
+
+		main.renderer.chunk_meshing.vao.bind();
+		c.glDrawElements(c.GL_TRIANGLES, 3*6*6, c.GL_UNSIGNED_INT, null);
 	}
 };

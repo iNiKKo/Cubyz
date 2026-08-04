@@ -28,6 +28,9 @@ const Block = main.blocks.Block;
 const physics = main.physics;
 const KeyBoard = main.KeyBoard;
 
+/// Client-side mirror of the server's simulation-pause flag, updated via genericUpdate.simulationPaused.
+pub var devSimulationPaused: Atomic(bool) = .init(false);
+
 pub const camera = struct {
 	pub var rotation: Vec3f = Vec3f{0, 0, 0};
 	pub var direction: Vec3f = Vec3f{0, 0, 0};
@@ -89,6 +92,7 @@ pub const Player = struct {
 	pub var isFlying: Atomic(bool) = .init(false);
 	pub var isGhost: Atomic(bool) = .init(false);
 	pub var hyperSpeed: Atomic(bool) = .init(false);
+	pub var editorMode: Atomic(bool) = .init(false);
 	pub var mutex: main.utils.Mutex = .{};
 	pub const inventorySize = 32;
 	pub var inventory: ClientInventory = undefined;
@@ -849,6 +853,7 @@ var lastSentSelectedItemIdBuf: [64]u8 = undefined;
 var lastSentSelectedItemIdLen: ?usize = null;
 
 pub fn pressPlace(mods: main.Window.Key.Modifiers) void {
+	if (Player.editorMode.load(.monotonic)) return;
 	const time = main.timestamp();
 	nextBlockPlaceTime = time.addDuration(main.settings.updateRepeatDelay);
 	Player.placeBlock(mods);
@@ -859,6 +864,7 @@ pub fn releasePlace(_: main.Window.Key.Modifiers) void {
 }
 
 pub fn pressBreak(_: main.Window.Key.Modifiers) void {
+	if (Player.editorMode.load(.monotonic)) return;
 	const time = main.timestamp();
 	nextBlockBreakTime = time.addDuration(main.settings.updateRepeatDelay);
 	main.renderer.MeshSelection.startAirPunch();
@@ -895,6 +901,42 @@ pub fn hyperSpeedToggle(_: main.Window.Key.Modifiers) void {
 	if (!Player.isCreative()) return;
 
 	Player.hyperSpeed.store(!Player.hyperSpeed.load(.monotonic), .monotonic);
+}
+
+pub fn editorModeToggle(_: main.Window.Key.Modifiers) void {
+	if (!Player.isCreative()) return;
+
+	const newEditorMode = !Player.editorMode.load(.monotonic);
+	if (newEditorMode) {
+		devCameraPos = Player.getEyePosBlocking();
+		frozenBodyRotation = camera.rotation;
+	}
+	Player.editorMode.store(newEditorMode, .monotonic);
+	Player.isGhost.store(newEditorMode, .monotonic);
+	Player.isFlying.store(newEditorMode, .monotonic);
+	main.Window.setMouseGrabbed(!newEditorMode);
+	if (newEditorMode) {
+		main.gui.openWindow("editor_toolbar");
+	} else {
+		main.gui.closeWindow("editor_toolbar");
+	}
+}
+
+pub fn editorFlyPress(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	main.Window.setMouseGrabbed(true);
+}
+
+pub fn editorFlyRelease(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	main.Window.setMouseGrabbed(false);
+}
+
+pub fn toggleSimulationPause() void {
+	if (world == null) return;
+	const newPaused = !devSimulationPaused.load(.monotonic);
+	devSimulationPaused.store(newPaused, .monotonic);
+	main.network.protocols.genericUpdate.sendSimulationPaused(world.?.conn, newPaused);
 }
 
 pub fn getBlockWithSide(comptime side: main.sync.Side, x: i32, y: i32, z: i32) ?Block {
@@ -941,9 +983,39 @@ fn touchingLadder() bool {
 	return false;
 }
 
+/// Position of the free-floating dev-mode camera, independent of Player.super.pos so the
+/// player's body and the world stay visually frozen in place while in editor mode.
+pub var devCameraPos: Vec3d = .{0, 0, 0};
+/// Snapshot of the body's look rotation taken on entering editor mode, so the frozen player's
+/// head/arms don't keep tracking the now-detached dev camera around.
+pub var frozenBodyRotation: Vec3f = .{0, 0, 0};
+
+fn updateDevCamera(deltaTime: f64) void {
+	const horizontalForward = vec.rotateZ(Vec3d{0, 1, 0}, -camera.rotation[2]);
+	const forward = vec.rotateX(horizontalForward, camera.rotation[0]);
+	const right = Vec3d{-horizontalForward[1], horizontalForward[0], 0};
+
+	var moveDir: Vec3d = .{0, 0, 0};
+	if (main.Window.grabbed) {
+		const speed: f64 = if (KeyBoard.key("sprint").pressed) 60.0 else 15.0;
+		if (KeyBoard.key("forward").value > 0.0) moveDir += forward*@as(Vec3d, @splat(speed*KeyBoard.key("forward").value));
+		if (KeyBoard.key("backward").value > 0.0) moveDir -= forward*@as(Vec3d, @splat(speed*KeyBoard.key("backward").value));
+		if (KeyBoard.key("left").value > 0.0) moveDir += right*@as(Vec3d, @splat(speed*KeyBoard.key("left").value));
+		if (KeyBoard.key("right").value > 0.0) moveDir -= right*@as(Vec3d, @splat(speed*KeyBoard.key("right").value));
+		if (KeyBoard.key("jump").pressed) moveDir[2] += speed;
+		if (KeyBoard.key("fall").pressed) moveDir[2] -= speed;
+	}
+	devCameraPos += moveDir*@as(Vec3d, @splat(deltaTime));
+}
+
 pub fn update(deltaTime: f64) void {
 	if (world.?.shouldRestart.load(.acquire)) {
 		restart();
+	}
+
+	if (Player.editorMode.load(.monotonic)) {
+		updateDevCamera(deltaTime);
+		return;
 	}
 
 	physics.calculateVolumeProperties(.client, &Player.volumeProperties, Player.super.pos, Player.outerBoundingBox, physics.playerAirTerminalVelocity);
