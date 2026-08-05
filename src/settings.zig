@@ -50,6 +50,12 @@ pub var bloom: bool = true;
 
 pub var reflections: bool = true;
 
+/// Which technique (if any) water uses to render reflections. `reflections` above is kept only so
+/// old settings files (which only ever wrote a bool) still load sensibly - see init() below, which
+/// derives reflectionMode's default from it the first time a settings file predates this field.
+pub const ReflectionMode = enum(u8) { off, ssr, planar };
+pub var reflectionMode: ReflectionMode = .ssr;
+
 pub var foliageSway: bool = true;
 
 pub var waterReflectionDistance: f32 = 128.0;
@@ -163,6 +169,13 @@ pub fn init() void {
 
 	if (resolutionScale < 0.25 or resolutionScale > 1.0) resolutionScale = 1.0;
 	if (fsrSharpness < 0.0 or fsrSharpness > 1.0) fsrSharpness = 0.2;
+
+	// Old settings files only ever had the `reflections` bool, not `reflectionMode` - if this file
+	// predates reflectionMode (no such key) but explicitly turned reflections off, honor that
+	// instead of silently reactivating SSR via reflectionMode's compiled-in .ssr default.
+	if (zon.getChild("reflectionMode") == .null and !reflections) {
+		reflectionMode = .off;
+	}
 
 	const keyboard = zon.getChild("keyboard");
 	for (&main.KeyBoard.keys) |*key| {

@@ -22,6 +22,7 @@ layout(binding = 2) uniform sampler2DArray reflectivityAndAbsorptionSampler;
 layout(binding = 3) uniform sampler2D worldColorSampler;
 layout(binding = 4) uniform samplerCube reflectionMap;
 layout(binding = 5) uniform sampler2D depthTexture;
+layout(binding = 13) uniform sampler2D planarReflectionSampler;
 
 layout(location = 5) uniform float reflectionMapSize;
 layout(location = 6) uniform float contrast;
@@ -29,7 +30,17 @@ layout(location = 6) uniform float contrast;
 layout(location = 8) uniform float zNear;
 layout(location = 9) uniform float zFar;
 
-uniform bool reflectionsEnabled;
+// 0 = off, 1 = SSR, 2 = planar - see main.settings.ReflectionMode (src/settings.zig).
+uniform int reflectionMode;
+uniform mat4 planarViewMatrix;
+uniform mat4 planarProjectionMatrix;
+uniform bool planarReflectionValid;
+// World position of the mirrored camera PlanarReflection.update() rendered from (src/renderer.zig) -
+// needed because worldPos is absolute, but planarViewMatrix (like the real viewMatrix) is rotation
+// only and expects camera-relative input, and frame_uniforms' playerPosition* here still holds the
+// real (unmirrored) camera by the time the transparent pass runs.
+uniform ivec3 planarCameraPositionInteger;
+uniform vec3 planarCameraPositionFraction;
 
 uniform int waterTextureIndex;
 uniform int lavaTextureIndex;
@@ -169,8 +180,30 @@ float sampleSceneDepthAt(vec2 screenUv) {
 
 uniform float waterReflectionDistance;
 
+// Reprojects `worldPos` (the current fragment's world position) into the mirrored camera used by
+// PlanarReflection.update() (src/renderer.zig) and samples the color it rendered there - no
+// raymarch, so no off-screen/behind-camera gaps, but only ever correct for the single water plane
+// that pass mirrored across (the nearest one to the camera - see PlanarReflection's water-plane
+// scan). Falls back the same way sampleSSR does when the reprojected point misses the frame or the
+// pass didn't run this frame (no nearby water, or reflectionMode != planar).
+vec3 samplePlanar(vec3 worldPosition, vec3 fallbackColor) {
+	if (!planarReflectionValid) return fallbackColor;
+
+	vec3 relativePosition = worldPosition - (vec3(planarCameraPositionInteger) + planarCameraPositionFraction);
+	vec4 clipPos = planarProjectionMatrix * (planarViewMatrix * vec4(relativePosition, 1.0));
+	if (clipPos.w <= 0.001) return fallbackColor;
+	vec2 screenUv = (clipPos.xy / clipPos.w) * 0.5 + 0.5;
+
+	vec2 edgeFade = smoothstep(vec2(0.0), vec2(0.02), screenUv) * smoothstep(vec2(1.0), vec2(0.98), screenUv);
+	float fade = edgeFade.x * edgeFade.y;
+	if (fade <= 0.0) return fallbackColor;
+
+	vec3 hitColor = texture(planarReflectionSampler, screenUv).rgb;
+	return mix(fallbackColor, hitColor, fade);
+}
+
 vec3 sampleSSR(vec3 viewPos, vec3 reflDir, vec3 fallbackColor) {
-	if (!reflectionsEnabled) return fallbackColor;
+	if (reflectionMode != 1) return fallbackColor;
 
 	vec3 dir = normalize(reflDir);
 	float maxDistance = max(32.0, waterReflectionDistance);
@@ -307,14 +340,25 @@ void main() {
 	vec3 viewSpaceReflDir = (viewMatrix * vec4(reflDir, 0.0)).xyz;
 
 	bool withinReflectionDistance = isWater && waterDist <= waterReflectionDistance;
-	vec3 reflColor = (reflectionsEnabled && withinReflectionDistance) ? sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl) : skyRefl;
+	vec3 reflColor = skyRefl;
+	if (withinReflectionDistance) {
+		if (reflectionMode == 1) {
+			reflColor = sampleSSR(mvVertexPos, viewSpaceReflDir, skyRefl);
+		} else if (reflectionMode == 2) {
+			// Planar reflections are addressed by the fragment's own world-space position (the
+			// mirrored camera already encodes the geometric reflection) - no ripple perturbation here,
+			// since nudging the sample position pushed fragments near the screen edge in and out of
+			// samplePlanar's edge-fade band every frame, showing up as a strong sway/reveal artifact.
+			reflColor = samplePlanar(worldPos, skyRefl);
+		}
+	}
 
 	vec3 sunDir = normalize((viewMatrix * vec4(sunDirection, 0.0)).xyz);
 	float sunSpecular = isWater ? pow(max(0.0, dot(normalize(viewSpaceReflDir), sunDir)), 48.0) * 1.2 : 0.0;
-	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionsEnabled ? 1.0 : 0.4) * (1.0 - weatherWaterReflectionFade);
+	reflColor += vec3(1.0, 0.95, 0.85) * sunSpecular * (reflectionMode != 0 ? 1.0 : 0.4) * (1.0 - weatherWaterReflectionFade);
 
 	float fresnel = clamp(pow(1.0 + dot(normalize(direction), normal), 2.0), 0.0, 1.0);
-	float fresnelBoost = reflectionsEnabled ? (0.05 + 0.45 * fresnel) : 0.05;
+	float fresnelBoost = reflectionMode != 0 ? (0.05 + 0.45 * fresnel) : 0.05;
 	float specularReflectivity = materialReflectivity * fresnelBoost;
 
 	textureColor.rgb *= textureColor.a;

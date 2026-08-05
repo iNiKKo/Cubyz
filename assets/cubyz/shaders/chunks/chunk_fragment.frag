@@ -13,6 +13,7 @@ layout(location = 7) flat in float distanceForLodCheck;
 layout(location = 8) flat in int opaqueInLod;
 layout(location = 9) in vec3 outBlockLight;
 layout(location = 10) flat in int isFoliage;
+layout(location = 11) in vec3 worldPos;
 
 layout(location = 0) out vec4 fragColor;
 
@@ -50,6 +51,11 @@ uniform vec3 remoteHandLightColor;
 uniform bool reflectionsEnabled;
 
 uniform int snowTextureIndex;
+
+// Only used by PlanarReflection's offscreen pass (src/renderer.zig) to cull geometry on the far
+// side of the mirror plane - the normal opaque pass leaves clipPlaneEnabled false.
+uniform bool clipPlaneEnabled;
+uniform float clipPlaneZ;
 
 layout(std430, binding = 1) buffer _animatedTexture
 {
@@ -116,6 +122,8 @@ vec4 fixedCubeMapLookup(vec3 v) {
 }
 
 void main() {
+	if (clipPlaneEnabled && worldPos.z < clipPlaneZ) discard;
+
 	float animatedTextureIndex = animatedTexture[textureIndex];
 
 	float normalVariation = (opaqueInLod == 0) ? 1.0 : lightVariation(normal);

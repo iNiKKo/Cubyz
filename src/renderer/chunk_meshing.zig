@@ -88,8 +88,15 @@ const UniformStruct = struct {
 	glassTextureIndex20: c_int,
 
 	snowTextureIndex: c_int,
-	reflectionsEnabled: c_int,
+	reflectionMode: c_int,
 	waterReflectionDistance: c_int,
+	clipPlaneEnabled: c_int,
+	clipPlaneZ: c_int,
+	planarViewMatrix: c_int,
+	planarProjectionMatrix: c_int,
+	planarReflectionValid: c_int,
+	planarCameraPositionInteger: c_int,
+	planarCameraPositionFraction: c_int,
 	foliageSway: c_int,
 	weatherWind: c_int,
 
@@ -294,7 +301,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.shadowDarkness, main.settings.shadowDarkness);
 
 	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
-	c.glUniform1i(locations.reflectionsEnabled, @intFromBool(main.settings.reflections));
+	c.glUniform1i(locations.reflectionMode, @intFromEnum(main.settings.reflectionMode));
 	c.glUniform1f(locations.waterReflectionDistance, main.settings.waterReflectionDistance);
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
@@ -367,10 +374,17 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform3fv(locations.remoteHandLightColor, 1, @ptrCast(&remoteLight.color));
 }
 
+// Set by PlanarReflection.update() (src/renderer.zig) right before it re-runs the opaque draw path
+// against its mirrored camera, and reset to null right after - the normal opaque pass always leaves
+// this null, so clipPlaneEnabled stays false and chunk_fragment.frag's discard never triggers.
+pub var clipPlane: ?f32 = null;
+
 pub fn bindShaderAndUniforms(ambient: Vec3f) void {
 	pipeline.bind(null);
 
 	bindCommonUniforms(&uniforms, ambient);
+	c.glUniform1i(uniforms.clipPlaneEnabled, @intFromBool(clipPlane != null));
+	c.glUniform1f(uniforms.clipPlaneZ, clipPlane orelse 0.0);
 
 	vao.bind();
 }
@@ -400,6 +414,15 @@ pub fn bindTransparentShaderAndUniforms(ambient: Vec3f) void {
 	const elapsedNanoseconds = startTimestamp.durationTo(main.timestamp()).toNanoseconds();
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds))*1e-9);
 	c.glUniform1f(transparentUniforms.waterTime, waterTime);
+
+	c.glUniform1i(transparentUniforms.planarReflectionValid, @intFromBool(renderer.PlanarReflection.valid));
+	if (renderer.PlanarReflection.valid) {
+		c.glUniformMatrix4fv(transparentUniforms.planarViewMatrix, 1, c.GL_FALSE, @ptrCast(&renderer.PlanarReflection.viewMatrix.toGl()));
+		c.glUniformMatrix4fv(transparentUniforms.planarProjectionMatrix, 1, c.GL_FALSE, @ptrCast(&renderer.PlanarReflection.projectionMatrix.toGl()));
+		c.glUniform3iv(transparentUniforms.planarCameraPositionInteger, 1, @ptrCast(&renderer.PlanarReflection.cameraPositionInteger));
+		c.glUniform3fv(transparentUniforms.planarCameraPositionFraction, 1, @ptrCast(&renderer.PlanarReflection.cameraPositionFraction));
+		renderer.PlanarReflection.bindTexture(c.GL_TEXTURE13);
+	}
 
 	bindCommonUniforms(&transparentUniforms, ambient);
 

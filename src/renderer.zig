@@ -135,6 +135,7 @@ pub fn init() void {
 	Skybox.init();
 	ShadowRaymarch.init();
 	CascadedShadowMap.init();
+	PlanarReflection.init();
 	clouds.init();
 	thin_clouds.init();
 	rain.init();
@@ -169,6 +170,7 @@ pub fn deinit() void {
 	Skybox.deinit();
 	ShadowRaymarch.deinit();
 	CascadedShadowMap.deinit();
+	PlanarReflection.deinit();
 	clouds.deinit();
 	thin_clouds.deinit();
 	rain.deinit();
@@ -513,6 +515,16 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		CascadedShadowMap.update(playerPos);
 		gpu_performance_measuring.stopQuery();
 		gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
+	}
+
+	if (settings.reflectionMode == .planar) {
+		gpu_performance_measuring.stopQuery();
+		gpu_performance_measuring.startQuery(.shadow_rendering);
+		PlanarReflection.update(playerPos, ambientLight, meshes);
+		gpu_performance_measuring.stopQuery();
+		gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
+	} else {
+		PlanarReflection.valid = false;
 	}
 
 	clouds.update(playerPos);
@@ -2112,6 +2124,170 @@ pub const CascadedShadowMap = struct {
 			worldFrameBuffer.bind();
 		}
 		c.glViewport(0, 0, lastWidth, lastHeight);
+	}
+};
+
+/// Additive water reflection mode selected via main.settings.reflectionMode == .planar - mirrors the
+/// opaque scene across the water surface nearest the camera into a small offscreen texture, sampled
+/// directly (no raymarch) by transparent_fragment.frag's samplePlanar(). Does not replace SSR (.ssr
+/// stays fully intact); this pass simply doesn't run unless .planar is selected.
+///
+/// Water has no single global height in this game (lakes/oceans/cave pools can coexist at any Z), so
+/// this scopes itself to "the water surface closest to the player" via a cheap CPU-side vertical scan
+/// each frame - correct for the common case of looking at one body of water, and simply contributes no
+/// reflection (shader falls back to the sky cubemap, same as SSR's off-screen fallback) when no water
+/// is nearby, which is an accepted limitation rather than a bug.
+pub const PlanarReflection = struct {
+	const verticalSearchRadius = 64;
+	const horizontalSearchRadius = 96;
+	const horizontalSearchStep = 8;
+
+	var reflectionFB: graphics.FrameBuffer = undefined;
+	var fbWidth: u31 = 0;
+	var fbHeight: u31 = 0;
+
+	pub var valid: bool = false;
+	pub var viewMatrix: Mat4f = Mat4f.identity();
+	pub var projectionMatrix: Mat4f = Mat4f.identity();
+	pub var cameraPositionInteger: Vec3i = .{0, 0, 0};
+	pub var cameraPositionFraction: Vec3f = .{0, 0, 0};
+
+	fn init() void {
+		reflectionFB.init(true, c.GL_LINEAR, c.GL_CLAMP_TO_EDGE);
+	}
+
+	fn deinit() void {
+		reflectionFB.deinit();
+	}
+
+	pub fn bindTexture(target: c_uint) void {
+		reflectionFB.bindTexture(target);
+	}
+
+	/// Returns the world Z of the water surface nearest `playerPos`, or null if none is found within
+	/// range. Scans a horizontal grid around the player (not just their exact column) since standing
+	/// near but not directly over/under water - the common case of looking at a lake from its shore -
+	/// otherwise made reflections activate only within a couple blocks of the player, which looked like
+	/// a broken distance cutoff rather than the intended "no water nearby" fallback.
+	fn findNearestWaterPlaneZ(playerPos: Vec3d) ?f64 {
+		const waterType = blocks.getTypeById("cubyz:water");
+		const px: i32 = @intFromFloat(@floor(playerPos[0]));
+		const py: i32 = @intFromFloat(@floor(playerPos[1]));
+		const pz: i32 = @intFromFloat(@floor(playerPos[2]));
+
+		var bestDistSq: i32 = std.math.maxInt(i32);
+		var bestZ: ?f64 = null;
+
+		var dx: i32 = -horizontalSearchRadius;
+		while (dx <= horizontalSearchRadius) : (dx += horizontalSearchStep) {
+			var dy: i32 = -horizontalSearchRadius;
+			while (dy <= horizontalSearchRadius) : (dy += horizontalSearchStep) {
+				const x = px + dx;
+				const y = py + dy;
+
+				var dz: i32 = -verticalSearchRadius;
+				while (dz <= verticalSearchRadius) : (dz += 1) {
+					const z = pz + dz;
+					const block = mesh_storage.getBlockFromRenderThread(x, y, z) orelse continue;
+					if (block.typ != waterType) continue;
+					const above = mesh_storage.getBlockFromRenderThread(x, y, z + 1);
+					if (above != null and above.?.typ == waterType) continue;
+
+					const distSq = dx*dx + dy*dy + dz*dz;
+					if (distSq < bestDistSq) {
+						bestDistSq = distSq;
+						bestZ = @as(f64, @floatFromInt(z)) + 1.0;
+					}
+					break;
+				}
+			}
+		}
+		return bestZ;
+	}
+
+	pub fn update(playerPos: Vec3d, ambientLight: Vec3f, meshes: []*chunk_meshing.ChunkMesh) void {
+		valid = false;
+		if (settings.reflectionMode != .planar) return;
+
+		const waterPlaneZ = findNearestWaterPlaneZ(playerPos) orelse return;
+
+		const desiredWidth = @max(1, lastWidth/2);
+		const desiredHeight = @max(1, lastHeight/2);
+		if (fbWidth != desiredWidth or fbHeight != desiredHeight) {
+			fbWidth = desiredWidth;
+			fbHeight = desiredHeight;
+			reflectionFB.updateSize(fbWidth, fbHeight, c.GL_RGB16F);
+		}
+
+		const savedFrameData = graphics.frame_uniforms.frameData();
+
+		const mirroredRotation = Vec3f{-game.camera.rotation[0], game.camera.rotation[1], game.camera.rotation[2]};
+		viewMatrix = Mat4f.identity().mul(Mat4f.rotationX(mirroredRotation[0])).mul(Mat4f.rotationZ(mirroredRotation[2]));
+
+		const mirroredPlayerZ = 2.0*waterPlaneZ - playerPos[2];
+		const mirroredPlayerPos = Vec3d{playerPos[0], playerPos[1], mirroredPlayerZ};
+
+		projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(fbWidth))/@as(f32, @floatFromInt(fbHeight)), zNear, zFar);
+
+		cameraPositionInteger = @as(Vec3i, @floor(mirroredPlayerPos));
+		cameraPositionFraction = @as(Vec3f, @floatCast(@mod(mirroredPlayerPos, Vec3d{1, 1, 1})));
+
+		graphics.frame_uniforms.uploadNewFrame(.{
+			.playerPositionInteger = cameraPositionInteger,
+			.playerPositionFraction = cameraPositionFraction,
+			.projectionMatrix = projectionMatrix.toGl(),
+			.viewMatrix = viewMatrix.toGl(),
+		});
+
+		reflectionFB.bind();
+		c.glViewport(0, 0, fbWidth, fbHeight);
+		reflectionFB.clear(Vec4f{0, 0, 0, 1});
+
+		c.glActiveTexture(c.GL_TEXTURE0);
+		blocks.meshes.blockTextureArray.bind();
+		c.glActiveTexture(c.GL_TEXTURE1);
+		blocks.meshes.emissionTextureArray.bind();
+		c.glActiveTexture(c.GL_TEXTURE2);
+		blocks.meshes.reflectivityAndAbsorptionTextureArray.bind();
+		c.glActiveTexture(c.GL_TEXTURE5);
+		blocks.meshes.ditherTexture.bind();
+		reflectionCubeMap.bindTo(4);
+
+		// Submitting the whole render-distance mesh list here (same set the main opaque pass uses)
+		// would roughly double per-chunk draw overhead every frame regardless of what's actually near
+		// the water - so this pass only includes chunks within waterReflectionDistance of the mirrored
+		// camera, matching the distance SSR itself already gives up at (main.settings.waterReflectionDistance).
+		const maxDist = @max(32.0, main.settings.waterReflectionDistance) + @as(f64, chunk.chunkSize)*2.0;
+		const maxDistSq = maxDist*maxDist;
+
+		var chunkLists: [main.settings.highestSupportedLod + 1]main.ListManaged(u32) = @splat(main.ListManaged(u32).init(main.stackAllocator));
+		defer for (chunkLists) |list| list.deinit();
+		for (meshes) |mesh| {
+			const chunkSpan: f64 = @floatFromInt(@as(i64, mesh.pos.voxelSize)*chunk.chunkSize);
+			const centerX = @as(f64, @floatFromInt(mesh.pos.wx)) + chunkSpan*0.5;
+			const centerY = @as(f64, @floatFromInt(mesh.pos.wy)) + chunkSpan*0.5;
+			const centerZ = @as(f64, @floatFromInt(mesh.pos.wz)) + chunkSpan*0.5;
+			const dx = centerX - mirroredPlayerPos[0];
+			const dy = centerY - mirroredPlayerPos[1];
+			const dz = centerZ - mirroredPlayerPos[2];
+			if (dx*dx + dy*dy + dz*dz > maxDistSq) continue;
+
+			mesh.prepareRendering(&chunkLists);
+		}
+
+		chunk_meshing.clipPlane = @floatCast(waterPlaneZ);
+		chunk_meshing.drawChunksIndirect(&chunkLists, ambientLight, false);
+		chunk_meshing.clipPlane = null;
+
+		graphics.frame_uniforms.uploadNewFrame(savedFrameData);
+		if (settings.antiAliasingMode == .msaa) {
+			MSAA.frameBuffer.bind();
+		} else {
+			worldFrameBuffer.bind();
+		}
+		c.glViewport(0, 0, lastWidth, lastHeight);
+
+		valid = true;
 	}
 };
 

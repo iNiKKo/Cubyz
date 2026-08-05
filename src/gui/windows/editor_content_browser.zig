@@ -199,9 +199,13 @@ fn updatePendingThumbnails() void {
 /// (Re)builds the tile grid to match the panel's current size. Cheap to call again on resize:
 /// thumbnails already in thumbnailCache aren't regenerated, only the layout (column count, list
 /// height) is rederived - the previous VerticalList (if any) is fully torn down first, matching
-/// what onClose() does, so nothing leaks across a rebuild.
+/// what onClose() does, so nothing leaks across a rebuild. Preserves the previous scroll position
+/// (a fresh VerticalList always starts scrolled to the top) so resizing the panel doesn't kick the
+/// user back to the top of a long list.
 fn rebuildTiles() void {
+	var previousScroll: f32 = 0;
 	if (window.rootComponent) |*comp| {
+		if (comp.* == .verticalList) previousScroll = comp.verticalList.scrollBar.currentState;
 		comp.deinit();
 	}
 	tiles.clearAndFree();
@@ -210,6 +214,7 @@ fn rebuildTiles() void {
 	const labelHeight = smallFont + 3;
 	const listMaxHeight = @max(tileHeight, window.contentSize[1] - handleThickness - 2*padding - labelHeight);
 	const list = VerticalList.init(.{padding, handleThickness + padding}, listMaxHeight, 3);
+	list.scrollBar.currentState = previousScroll;
 	list.add(Label.initWithFontSize(.{0, 0}, 240, "Content Browser - Structures", .left, smallFont));
 
 	// Reserve room for the vertical scrollbar up front (rather than only after rows overflow),

@@ -39,8 +39,11 @@ fn bloomCallback(newValue: bool) void {
 	settings.save();
 }
 
-fn reflectionsCallback(newValue: bool) void {
-	settings.reflections = newValue;
+const reflectionModes = [_][]const u8{"Off", "SSR", "Planar"};
+
+fn reflectionModeCallback(newValue: u16) void {
+	settings.reflectionMode = @enumFromInt(newValue);
+	settings.reflections = settings.reflectionMode != .off;
 	settings.save();
 }
 
@@ -143,8 +146,8 @@ pub fn onOpen() void {
 		else => 1,
 	}, &msaaSamplesCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Bloom", settings.bloom, &bloomCallback));
-	list.add(CheckBox.init(.{0, 0}, 200, "Reflections", settings.reflections, &reflectionsCallback));
-	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 512.0, settings.waterReflectionDistance, &waterReflectionDistanceCallback, &waterReflectionDistanceFormatter));
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffReflections: ", "{s}", &reflectionModes, @intFromEnum(settings.reflectionMode), &reflectionModeCallback));
+	list.add(ContinuousSlider.init(.{0, 0}, 200, 32.0, 2048.0, settings.waterReflectionDistance, &waterReflectionDistanceCallback, &waterReflectionDistanceFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Shadows", settings.shadows, &shadowsCallback));
 	list.add(CheckBox.init(.{0, 0}, 200, "Own Player Shadow", settings.ownPlayerShadow, &ownPlayerShadowCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 1.0, settings.shadowDarkness, &shadowDarknessCallback, &shadowDarknessFormatter));
