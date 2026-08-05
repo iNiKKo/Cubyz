@@ -12,6 +12,9 @@ const itemdrop = @import("itemdrop.zig");
 const main = @import("main");
 const gpu_performance_measuring = main.gui.windowlist.gpu_performance_measuring;
 const crosshair = main.gui.windowlist.crosshair;
+const editor_toolbar = main.gui.windowlist.editor_toolbar;
+const editor_content_browser = main.gui.windowlist.editor_content_browser;
+const editor_details_panel = main.gui.windowlist.editor_details_panel;
 const Window = main.Window;
 const models = @import("models.zig");
 const network = @import("network.zig");
@@ -119,6 +122,8 @@ pub fn init() void {
 	cloudFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGBA16F);
 	waterSurfaceFrameBuffer.init(true, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
 	waterSurfaceFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGBA16F);
+	editorCompositeFrameBuffer.init(false, c.GL_NEAREST, c.GL_CLAMP_TO_EDGE);
+	editorCompositeFrameBuffer.updateSize(Window.width, Window.height, c.GL_RGB16F);
 	MSAA.init();
 	FXAA.init();
 	TAA.init();
@@ -152,6 +157,7 @@ pub fn deinit() void {
 	worldFrameBuffer.deinit();
 	cloudFrameBuffer.deinit();
 	waterSurfaceFrameBuffer.deinit();
+	editorCompositeFrameBuffer.deinit();
 	MSAA.deinit();
 	FXAA.deinit();
 	TAA.deinit();
@@ -200,6 +206,107 @@ var cloudFrameBuffer: graphics.FrameBuffer = undefined;
 
 var waterSurfaceFrameBuffer: graphics.FrameBuffer = undefined;
 
+var editorCompositeFrameBuffer: graphics.FrameBuffer = undefined;
+
+var lastOutputWidth: u31 = 0;
+var lastOutputHeight: u31 = 0;
+var editorViewportX: u31 = 0;
+var editorViewportY: u31 = 0; // Top-left Y in framebuffer pixels.
+
+const ViewportMetrics = struct {
+	enabled: bool,
+	x: u31,
+	y: u31,
+	renderWidth: u31,
+	renderHeight: u31,
+	outputWidth: u31,
+	outputHeight: u31,
+};
+
+fn computeViewportMetrics() ViewportMetrics {
+	if (!game.Player.editorMode.load(.monotonic)) {
+		const outputWidth = main.Window.width;
+		const outputHeight = main.Window.height;
+		return .{
+			.enabled = false,
+			.x = 0,
+			.y = 0,
+			.outputWidth = outputWidth,
+			.outputHeight = outputHeight,
+			.renderWidth = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(outputWidth))*main.settings.resolutionScale))),
+			.renderHeight = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(outputHeight))*main.settings.resolutionScale))),
+		};
+	}
+
+	const scale = main.gui.scale;
+	const framebufferWidth = main.Window.width;
+	const framebufferHeight = main.Window.height;
+
+	const leftPx: u31 = 0;
+	var topPx: u31 = 0;
+	var rightPx: u31 = framebufferWidth;
+	var bottomPx: u31 = framebufferHeight;
+
+	const toolbarOpen = main.gui.isWindowOpen("editor_toolbar");
+	if (toolbarOpen) {
+		const toolbarBottom = @as(u31, @intFromFloat((editor_toolbar.window.pos[1] + editor_toolbar.window.size[1]) * scale));
+		topPx = @min(framebufferHeight - 1, toolbarBottom);
+	}
+
+	const browserOpen = main.gui.isWindowOpen("editor_content_browser");
+	if (browserOpen) {
+		const browserTop = @as(u31, @intFromFloat(editor_content_browser.window.pos[1] * scale));
+		bottomPx = @min(framebufferHeight, browserTop);
+	}
+
+	const detailsOpen = main.gui.isWindowOpen("editor_details_panel");
+	if (detailsOpen) {
+		const detailsLeft = @as(u31, @intFromFloat(editor_details_panel.window.pos[0] * scale));
+		rightPx = @min(framebufferWidth, detailsLeft);
+	}
+
+	if (rightPx <= leftPx) rightPx = @min(framebufferWidth, leftPx + 1);
+	if (bottomPx <= topPx) bottomPx = @min(framebufferHeight, topPx + 1);
+
+	const outputWidth = rightPx - leftPx;
+	const outputHeight = bottomPx - topPx;
+
+	return .{
+		.enabled = true,
+		.x = leftPx,
+		.y = topPx,
+		.outputWidth = outputWidth,
+		.outputHeight = outputHeight,
+		.renderWidth = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(outputWidth))*main.settings.resolutionScale))),
+		.renderHeight = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(outputHeight))*main.settings.resolutionScale))),
+	};
+}
+
+fn syncRenderSizes(metrics: ViewportMetrics) void {
+	editorViewportX = metrics.x;
+	editorViewportY = metrics.y;
+	if (lastWidth == metrics.renderWidth and lastHeight == metrics.renderHeight and lastOutputWidth == metrics.outputWidth and lastOutputHeight == metrics.outputHeight) return;
+
+	lastWidth = metrics.renderWidth;
+	lastHeight = metrics.renderHeight;
+	lastOutputWidth = metrics.outputWidth;
+	lastOutputHeight = metrics.outputHeight;
+
+	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
+	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
+	cloudFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
+	waterSurfaceFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
+	editorCompositeFrameBuffer.updateSize(lastOutputWidth, lastOutputHeight, c.GL_RGB16F);
+	worldFrameBuffer.unbind();
+	fsr.updateSize(lastWidth, lastHeight, lastOutputWidth, lastOutputHeight);
+	CascadedShadowMap.updateMapSize(main.settings.resolutionScale);
+}
+
+fn finalOutputFBO(metrics: ViewportMetrics) c_uint {
+	if (metrics.enabled) return editorCompositeFrameBuffer.frameBuffer;
+	return activeFrameBuffer;
+}
+
 const haltonJitterSequence = [8]Vec2f{
 	.{1.0/2.0 - 0.5, 1.0/3.0 - 0.5},
 	.{1.0/4.0 - 0.5, 2.0/3.0 - 0.5},
@@ -231,20 +338,23 @@ pub fn updateFov(fov: f32) void {
 	}
 }
 pub fn updateViewport(width: u31, height: u31) void {
-	lastWidth = @trunc(@as(f32, @floatFromInt(width))*main.settings.resolutionScale);
-	lastHeight = @trunc(@as(f32, @floatFromInt(height))*main.settings.resolutionScale);
-	game.projectionMatrix = Mat4f.perspective(std.math.degreesToRadians(lastFov), @as(f32, @floatFromInt(lastWidth))/@as(f32, @floatFromInt(lastHeight)), zNear, zFar);
-	worldFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGB16F);
-	cloudFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
-	waterSurfaceFrameBuffer.updateSize(lastWidth, lastHeight, c.GL_RGBA16F);
-	worldFrameBuffer.unbind();
-	fsr.updateSize(lastWidth, lastHeight, width, height);
-	CascadedShadowMap.updateMapSize(main.settings.resolutionScale);
+	syncRenderSizes(.{
+		.enabled = false,
+		.x = 0,
+		.y = 0,
+		.outputWidth = width,
+		.outputHeight = height,
+		.renderWidth = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(width))*main.settings.resolutionScale))),
+		.renderHeight = @max(1, @as(u31, @intFromFloat(@as(f32, @floatFromInt(height))*main.settings.resolutionScale))),
+	});
 }
 
 pub fn render(playerPosition: Vec3d, deltaTime: f64) void {
 
 	std.debug.assert(game.world != null);
+
+	const viewport = computeViewportMetrics();
+	syncRenderSizes(viewport);
 
 	const nightColor: Vec3f = .{0.3, 0.4, 0.5};
 	var ambient = @max(nightColor*@as(Vec3f, @splat(settings.nightBrightness)), @as(Vec3f, @splat(game.world.?.dayTime.ambientLight)));
@@ -283,6 +393,32 @@ pub fn screenPointDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height
 
 	const adjusted = forwards + horizontal + vertical;
 	return adjusted;
+}
+
+/// Converts GLFW cursor coordinates into the current render-target pixel space used by
+/// screenPointDirection/lastWidth/lastHeight. Handles HiDPI window-vs-framebuffer scale.
+pub fn mouseScreenCoordForRenderTarget() Vec2f {
+	var logicalWidth: c_int = 0;
+	var logicalHeight: c_int = 0;
+	c.glfwGetWindowSize(main.Window.window, &logicalWidth, &logicalHeight);
+
+	var framebufferToWindowScale = Vec2f{1, 1};
+	if (logicalWidth > 0 and logicalHeight > 0) {
+		const framebufferSize = main.Window.getWindowSize();
+		const logicalSize = Vec2f{@floatFromInt(logicalWidth), @floatFromInt(logicalHeight)};
+		framebufferToWindowScale = framebufferSize/logicalSize;
+	}
+
+	const rawScreen = main.Window.getMousePosition()*framebufferToWindowScale;
+	const viewport = computeViewportMetrics();
+	if (!viewport.enabled) {
+		return rawScreen*@as(Vec2f, @splat(main.settings.resolutionScale));
+	}
+	const local = rawScreen - Vec2f{@floatFromInt(viewport.x), @floatFromInt(viewport.y)};
+	const maxCoord = Vec2f{@floatFromInt(viewport.outputWidth - 1), @floatFromInt(viewport.outputHeight - 1)};
+	const clamped = @max(Vec2f{0, 0}, @min(local, maxCoord));
+	const normalized = clamped/Vec2f{@floatFromInt(viewport.outputWidth), @floatFromInt(viewport.outputHeight)};
+	return normalized*Vec2f{@floatFromInt(lastWidth), @floatFromInt(lastHeight)};
 }
 
 pub fn crosshairDirection(rotationMatrix: Mat4f, fovY: f32, width: u31, height: u31) Vec3f {
@@ -359,10 +495,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	gpu_performance_measuring.startQuery(.chunk_rendering_preparation);
 	const direction = crosshairDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight);
 	if (game.Player.editorMode.load(.monotonic)) {
-		const mouseDirection = screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, main.Window.getMousePosition());
+		const mouseScreenCoord = mouseScreenCoordForRenderTarget();
+		const mouseDirection = screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, mouseScreenCoord);
 		MeshSelection.select(playerPos, mouseDirection, game.Player.inventory.getItem(game.Player.selectedSlot));
 		MeshSelection.selectEntity(playerPos, mouseDirection);
-		EditorGizmo.update(playerPos, mouseDirection);
+		EditorGizmo.update(playerPos, mouseDirection, mouseScreenCoord);
 	} else {
 		MeshSelection.select(playerPos, direction, game.Player.inventory.getItem(game.Player.selectedSlot));
 		MeshSelection.selectEntity(playerPos, direction);
@@ -593,7 +730,8 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
 	}
 
-	const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+	const viewport = computeViewportMetrics();
+	const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else finalOutputFBO(viewport);
 
 	switch (settings.antiAliasingMode) {
 		.fxaa => FXAA.preDraw(lastWidth, lastHeight),
@@ -620,21 +758,49 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	}
 
 	if (main.settings.resolutionScale < 1.0) {
-		c.glViewport(0, 0, main.Window.width, main.Window.height);
+		c.glViewport(0, 0, lastOutputWidth, lastOutputHeight);
 		if (main.settings.upscalerMode == .fsr2) {
 			const jitter = haltonJitterSequence[taaJitterIndex % haltonJitterSequence.len];
-			fsr2.render(fsr.inputFrameBuffer.texture, worldFrameBuffer.depthTexture, lastWidth, lastHeight, main.Window.width, main.Window.height, jitter, activeFrameBuffer);
+			fsr2.render(fsr.inputFrameBuffer.texture, worldFrameBuffer.depthTexture, lastWidth, lastHeight, lastOutputWidth, lastOutputHeight, jitter, finalOutputFBO(viewport));
 			taaJitterIndex +%= 1;
 		} else {
-			fsr.render(lastWidth, lastHeight, main.Window.width, main.Window.height, activeFrameBuffer);
+			fsr.render(lastWidth, lastHeight, lastOutputWidth, lastOutputHeight, finalOutputFBO(viewport));
 		}
 	} else {
-		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, finalOutputFBO(viewport));
 	}
 
 	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
 
-	if (!main.gui.hideGui) main.entity.client.renderHud(ambientLight, playerPos);
+	if (!main.gui.hideGui and !game.Player.editorMode.load(.monotonic)) main.entity.client.renderHud(ambientLight, playerPos);
+
+	if (viewport.enabled) {
+		const dstY0: u31 = main.Window.height - (editorViewportY + lastOutputHeight);
+		const dstY1: u31 = dstY0 + lastOutputHeight;
+		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, editorCompositeFrameBuffer.frameBuffer);
+		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, 0);
+		c.glBlitFramebuffer(
+			0,
+			0,
+			@intCast(lastOutputWidth),
+			@intCast(lastOutputHeight),
+			@intCast(editorViewportX),
+			@intCast(dstY0),
+			@intCast(editorViewportX + lastOutputWidth),
+			@intCast(dstY1),
+			c.GL_COLOR_BUFFER_BIT,
+			c.GL_NEAREST,
+		);
+		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+		// The blit above leaves the GL viewport set to the reduced editor render
+		// size (lastOutputWidth/lastOutputHeight at origin). Everything drawn after
+		// renderWorld() returns (GUI dock panels, HUD-independent overlays) assumes
+		// the viewport spans the full window, since shaders read GL_VIEWPORT to
+		// compute screen-space coordinates. Without this reset, GUI rendering was
+		// silently drawing into/using the wrong (tiny) viewport, making dock panels
+		// and everything else disappear.
+		c.glViewport(0, 0, main.Window.width, main.Window.height);
+	}
 	gpu_performance_measuring.stopQuery();
 }
 
@@ -715,7 +881,7 @@ const FXAA = struct {
 	fn render(currentWidth: u31, currentHeight: u31) void {
 		pipeline.bind(null);
 		buffer.bindTexture(c.GL_TEXTURE3);
-		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else finalOutputFBO(computeViewportMetrics());
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, targetFBO);
 		c.glUniform2f(uniforms.inverseScreenSize, 1.0/@as(f32, @floatFromInt(currentWidth)), 1.0/@as(f32, @floatFromInt(currentHeight)));
 		graphics.draw.rectVao.bind();
@@ -819,7 +985,7 @@ const TAA = struct {
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
 
 		c.glBindFramebuffer(c.GL_READ_FRAMEBUFFER, resolveBuffers[writeIndex].frameBuffer);
-		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else activeFrameBuffer;
+		const targetFBO = if (main.settings.resolutionScale < 1.0) fsr.inputFrameBuffer.frameBuffer else finalOutputFBO(computeViewportMetrics());
 		c.glBindFramebuffer(c.GL_DRAW_FRAMEBUFFER, targetFBO);
 		c.glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, c.GL_COLOR_BUFFER_BIT, c.GL_NEAREST);
 		c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
@@ -2071,7 +2237,7 @@ pub const MeshSelection = struct {
 		while (total_tMax < closestDistance) {
 			const block = mesh_storage.getBlockFromRenderThread(voxelPos[0], voxelPos[1], voxelPos[2]) orelse break;
 			if (block.typ != 0) blk: {
-				if (!block.isSelectableByItem(item)) break :blk;
+				if (!game.Player.editorMode.load(.monotonic) and !block.isSelectableByItem(item)) break :blk;
 
 				const relativePlayerPos: Vec3f = @floatCast(pos - @as(Vec3d, @floatFromInt(voxelPos)));
 				if (block.mode().rayIntersection(block, item, relativePlayerPos, _dir)) |intersection| {
@@ -2390,7 +2556,7 @@ pub const MeshSelection = struct {
 /// only clicking (on the gizmo axis to drag, or elsewhere to pick whatever's under the cursor).
 pub const EditorGizmo = struct {
 	const axisLength: f32 = 1.0;
-	const grabRadius: f64 = 0.30;
+	const blockDragPixelsPerStep: f64 = 12.0;
 
 	const Selection = union(enum) {
 		entity: main.entity.Entity,
@@ -2404,16 +2570,39 @@ pub const EditorGizmo = struct {
 		modelPosition: c_int,
 		axisLength: c_int,
 		lineSize: c_int,
+		hoveredAxis: c_int,
+		grabbedAxis: c_int,
+		errorActive: c_int,
+		flashPhase: c_int,
+		gizmoMode: c_int,
 	} = undefined;
+
+	pub const Mode = enum {move, rotate};
+	pub var mode: Mode = .move;
+	const ringSegments = 32;
 
 	var selection: ?Selection = null;
 	var hoveredAxis: ?u2 = null;
 	var grabbedAxis: ?u2 = null;
 	var grabOriginAtStart: Vec3d = .{0, 0, 0};
-	var grabAxisParamAtStart: f64 = 0;
+	var grabSelectionPos1AtStart: Vec3i = .{0, 0, 0};
+	var grabSelectionPos2AtStart: Vec3i = .{0, 0, 0};
+	var grabSelectionPos1Current: Vec3i = .{0, 0, 0};
+	var grabSelectionPos2Current: Vec3i = .{0, 0, 0};
+	var grabSelectionActive: bool = false;
+	var grabPlaneNormal: Vec3d = .{0, 0, 1};
+	var grabPlaneHitAtStart: Vec3d = .{0, 0, 0};
+	var grabHasPlaneSolver: bool = false;
+	var grabMouseScreenAtStart: Vec2f = .{0, 0};
+	var grabScreenAxisDir: Vec2f = .{1, 0};
+	var grabScreenPixelsPerAxisUnit: f64 = 96.0;
+	var grabBlockPosAtStart: Vec3i = .{0, 0, 0};
 	var lastSentPos: Vec3d = .{0, 0, 0};
 	var grabbedBlockType: main.blocks.Block = .{.typ = 0, .data = 0};
 	var lastSentBlockPos: Vec3i = .{0, 0, 0};
+	var grabErrorUntil: ?std.Io.Timestamp = null;
+	var visualAxisLength: f32 = 2.0;
+	var visualHalfWidth: f32 = 0.10;
 
 	pub fn init() void {
 		pipeline = graphics.Pipeline.init(
@@ -2433,7 +2622,10 @@ pub const EditorGizmo = struct {
 		pipeline.deinit();
 	}
 
-	fn currentOrigin() ?Vec3d {
+	pub fn currentOrigin() ?Vec3d {
+		if (game.Player.selectionPosition1 != null and game.Player.selectionPosition2 != null) {
+			return @as(Vec3d, @floatFromInt(game.Player.selectionPosition1.?)) + @as(Vec3d, @splat(0.5));
+		}
 		switch (selection orelse return null) {
 			.entity => |entityId| {
 				main.client.entity_manager.mutex.lock();
@@ -2447,54 +2639,179 @@ pub const EditorGizmo = struct {
 		}
 	}
 
-	const axisDirections = [3]Vec3d{.{1, 0, 0}, .{0, 1, 0}, .{0, 0, 1}};
-
-	/// Closest-point-between-two-lines: projects the mouse ray onto an axis line through gizmoOrigin,
-	/// returning (paramOnAxis, perpendicularDistanceFromAxisToRay).
-	fn closestPointOnAxis(gizmoOrigin: Vec3d, axis: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) struct {t: f64, dist: f64} {
-		const w0 = rayOrigin - gizmoOrigin;
-		const a: f64 = vec.dot(axis, axis);
-		const b: f64 = vec.dot(axis, rayDir);
-		const cc: f64 = vec.dot(rayDir, rayDir);
-		const d: f64 = vec.dot(axis, w0);
-		const e: f64 = vec.dot(rayDir, w0);
-		const denom = a*cc - b*b;
-		if (@abs(denom) < 1e-9) return .{.t = 0, .dist = std.math.inf(f64)};
-		const sc = (b*e - cc*d)/denom;
-		const tc = (a*e - b*d)/denom;
-		const pointOnAxis = gizmoOrigin + axis*@as(Vec3d, @splat(sc));
-		const pointOnRay = rayOrigin + rayDir*@as(Vec3d, @splat(tc));
-		return .{.t = sc, .dist = vec.length(pointOnAxis - pointOnRay)};
+	/// The currently *clicked/committed* selection's location, for display in UI (unlike
+	/// `currentOrigin()`, which adds a +0.5 block-center offset for gizmo-drawing purposes).
+	/// Returns null if nothing is actively selected (hovering alone doesn't count).
+	pub const DisplayInfo = union(enum) {
+		block: Vec3i,
+		entityPos: Vec3d,
+	};
+	pub fn selectedDisplayInfo() ?DisplayInfo {
+		if (game.Player.selectionPosition1 != null and game.Player.selectionPosition2 != null) {
+			return .{.block = game.Player.selectionPosition1.?};
+		}
+		switch (selection orelse return null) {
+			.entity => |entityId| {
+				main.client.entity_manager.mutex.lock();
+				defer main.client.entity_manager.mutex.unlock();
+				for (main.client.entity_manager.entities.items()) |ent| {
+					if (ent.id == entityId) return .{.entityPos = ent.getRenderPosition()};
+				}
+				return null;
+			},
+			.block => |pos| return .{.block = pos},
+		}
 	}
 
-	/// Finds which gizmo axis (if any) the given world-space ray passes closest to, within grabRadius.
-	fn hitTestAxes(gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) ?u2 {
+	const axisDirections = [3]Vec3d{.{1, 0, 0}, .{0, 1, 0}, .{0, 0, 1}};
+	const axisDirectionsI = [3]Vec3i{.{1, 0, 0}, .{0, 1, 0}, .{0, 0, 1}};
+
+	fn updateVisualScale(gizmoOrigin: Vec3d, cameraPos: Vec3d) void {
+		const distance = vec.length(gizmoOrigin - cameraPos);
+		visualAxisLength = std.math.clamp(@as(f32, @floatCast(distance*0.22)), 1.75, 7.0);
+		visualHalfWidth = std.math.clamp(@as(f32, @floatCast(distance*0.018)), 0.10, 0.40);
+	}
+
+	fn projectWorldPointToScreen(pointRelativeToCamera: Vec3d) ?Vec2f {
+		const mvPos = game.camera.viewMatrix.mulVec(.{
+			@floatCast(pointRelativeToCamera[0]),
+			@floatCast(pointRelativeToCamera[1]),
+			@floatCast(pointRelativeToCamera[2]),
+			1.0,
+		});
+		const clip = game.projectionMatrix.mulVec(mvPos);
+		if (@abs(clip[3]) < 1e-6) return null;
+		const ndc = vec.xy(clip)/@as(Vec2f, @splat(clip[3]));
+		return (ndc*@as(Vec2f, @splat(0.5)) + Vec2f{0.5, 0.5})*Vec2f{@floatFromInt(lastWidth), @floatFromInt(lastHeight)};
+	}
+
+	fn distancePointToSegment(point: Vec2f, segmentStart: Vec2f, segmentEnd: Vec2f) f64 {
+		const seg = segmentEnd - segmentStart;
+		const segLenSq: f32 = vec.lengthSquare(seg);
+		if (segLenSq <= 1e-6) return @floatCast(vec.length(point - segmentStart));
+		const tUnclamped = vec.dot(point - segmentStart, seg)/segLenSq;
+		const t = std.math.clamp(tUnclamped, 0.0, 1.0);
+		const closest = segmentStart + seg*@as(Vec2f, @splat(t));
+		return @floatCast(vec.length(point - closest));
+	}
+
+	fn rayAabbIntersection(rayOrigin: Vec3d, rayDir: Vec3d, minCorner: Vec3d, maxCorner: Vec3d) ?f64 {
+		var tMin: f64 = -std.math.inf(f64);
+		var tMax: f64 = std.math.inf(f64);
+
+		inline for (0..3) |axis| {
+			const origin = rayOrigin[axis];
+			const dir = rayDir[axis];
+			const minV = minCorner[axis];
+			const maxV = maxCorner[axis];
+			if (@abs(dir) < 1e-9) {
+				if (origin < minV or origin > maxV) return null;
+			} else {
+				const invDir = 1.0/dir;
+				var t0 = (minV - origin)*invDir;
+				var t1 = (maxV - origin)*invDir;
+				if (t0 > t1) std.mem.swap(f64, &t0, &t1);
+				tMin = @max(tMin, t0);
+				tMax = @min(tMax, t1);
+				if (tMax < tMin) return null;
+			}
+		}
+
+		if (tMax < 0) return null;
+		return if (tMin >= 0) tMin else tMax;
+	}
+
+	fn intersectRayPlane(rayOrigin: Vec3d, rayDir: Vec3d, planePoint: Vec3d, planeNormal: Vec3d) ?Vec3d {
+		const denom = vec.dot(rayDir, planeNormal);
+		if (@abs(denom) < 1e-6) return null;
+		const t = vec.dot(planePoint - rayOrigin, planeNormal)/denom;
+		if (t < 0) return null;
+		return rayOrigin + rayDir*@as(Vec3d, @splat(t));
+	}
+
+	fn axisPickAabb(gizmoOrigin: Vec3d, axisIndex: usize) struct { minCorner: Vec3d, maxCorner: Vec3d } {
+		const halfWidth = @max(@as(f64, @floatCast(visualHalfWidth*2.5)), 0.32);
+		const length = @as(f64, @floatCast(visualAxisLength));
+		const minCorner = gizmoOrigin - @as(Vec3d, @splat(halfWidth));
+		var maxCorner = gizmoOrigin + @as(Vec3d, @splat(halfWidth));
+		switch (axisIndex) {
+			0 => maxCorner[0] += length,
+			1 => maxCorner[1] += length,
+			2 => maxCorner[2] += length,
+			else => unreachable,
+		}
+		return .{ .minCorner = minCorner, .maxCorner = maxCorner };
+	}
+
+	/// Finds which gizmo axis (if any) the mouse ray intersects first.
+	fn hitTestAxes(gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d, mouseScreenCoord: Vec2f) ?u2 {
 		var best: ?u2 = null;
-		var bestDist: f64 = grabRadius;
+		var bestT = std.math.inf(f64);
 		for (axisDirections, 0..) |axis, i| {
-			const result = closestPointOnAxis(gizmoOrigin, axis, rayOrigin, rayDir);
-			if (result.t < 0 or result.t > axisLength) continue;
-			if (result.dist < bestDist) {
-				bestDist = result.dist;
+			_ = axis;
+			const bounds = axisPickAabb(gizmoOrigin, i);
+			if (rayAabbIntersection(rayOrigin, rayDir, bounds.minCorner, bounds.maxCorner)) |hitT| {
+				if (hitT < bestT) {
+					bestT = hitT;
+					best = @intCast(i);
+				}
+			}
+		}
+
+		if (best != null) return best;
+
+		// Screen-space fallback for very shallow/edge-on rays.
+		var bestScore = std.math.inf(f64);
+		for (axisDirections, 0..) |axis, i| {
+			const start = projectWorldPointToScreen(gizmoOrigin - rayOrigin) orelse continue;
+			const end = projectWorldPointToScreen(gizmoOrigin + axis*@as(Vec3d, @splat(visualAxisLength)) - rayOrigin) orelse continue;
+			const axisLenPixels: f64 = @floatCast(vec.length(end - start));
+			const distLine = distancePointToSegment(mouseScreenCoord, start, end);
+			const distTip = @as(f64, @floatCast(vec.length(mouseScreenCoord - end)));
+			const score = @min(distLine, distTip*0.7);
+			const threshold: f64 = if (axisLenPixels < 12.0) 34.0 else if (axisLenPixels < 24.0) 24.0 else 14.0;
+			if (score <= threshold and score < bestScore) {
+				bestScore = score;
 				best = @intCast(i);
 			}
 		}
 		return best;
 	}
 
+	/// Whether the mouse ray hits the rotate-mode Z ring — a flat annulus lying in the XY plane
+	/// through the gizmo origin, radius visualAxisLength, half-thickness visualHalfWidth.
+	fn hitTestRing(gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) bool {
+		if (@abs(rayDir[2]) < 1e-9) return false;
+		const t = (gizmoOrigin[2] - rayOrigin[2])/rayDir[2];
+		if (t < 0) return false;
+		const hit = rayOrigin + rayDir*@as(Vec3d, @splat(t));
+		const radial = vec.length(vec.xy(hit - gizmoOrigin));
+		const innerR: f64 = @floatCast(visualAxisLength - visualHalfWidth*3.0);
+		const outerR: f64 = @floatCast(visualAxisLength + visualHalfWidth*3.0);
+		return radial >= innerR and radial <= outerR;
+	}
+
 	/// Called once per frame while in editor mode with the current camera-relative mouse ray,
 	/// updating hover state and, if an axis is grabbed, dragging the selection along it.
-	pub fn update(playerPos: Vec3d, mouseDirection: Vec3f) void {
+	pub fn update(playerPos: Vec3d, mouseDirection: Vec3f, mouseScreenCoord: Vec2f) void {
 		hoveredAxis = null;
 		if (!game.Player.editorMode.load(.monotonic)) return;
 		const gizmoOrigin = currentOrigin() orelse return;
+		updateVisualScale(gizmoOrigin, playerPos);
 		const rayOrigin = playerPos;
 		const rayDir: Vec3d = @floatCast(mouseDirection);
 
 		if (grabbedAxis) |axisIndex| {
 			const axis = axisDirections[axisIndex];
-			const result = closestPointOnAxis(gizmoOrigin, axis, rayOrigin, rayDir);
-			const delta = result.t - grabAxisParamAtStart;
+			const delta = blk: {
+				if (grabHasPlaneSolver) {
+					const hit = intersectRayPlane(rayOrigin, rayDir, grabOriginAtStart, grabPlaneNormal) orelse break :blk 0.0;
+					break :blk vec.dot(hit - grabPlaneHitAtStart, axis);
+				}
+				const mouseDelta = mouseScreenCoord - grabMouseScreenAtStart;
+				const axisPixelsRaw = vec.dot(mouseDelta, grabScreenAxisDir);
+				break :blk @as(f64, @floatCast(axisPixelsRaw))/grabScreenPixelsPerAxisUnit;
+			};
 			const newPos = grabOriginAtStart + axis*@as(Vec3d, @splat(delta));
 
 			switch (selection.?) {
@@ -2506,34 +2823,120 @@ pub const EditorGizmo = struct {
 					}
 				},
 				.block => {
-					const newBlockPos: Vec3i = @intFromFloat(@floor(newPos));
-					if (@reduce(.And, newBlockPos == lastSentBlockPos)) return;
+					if (grabSelectionActive) {
+						const mouseDelta = mouseScreenCoord - grabMouseScreenAtStart;
+						const axisPixelsRaw = vec.dot(mouseDelta, grabScreenAxisDir);
+						const targetStep: i32 = @intFromFloat(@round(@as(f64, @floatCast(axisPixelsRaw))/blockDragPixelsPerStep));
+						const axisStep = axisDirectionsI[axisIndex];
+						const deltaBlock = axisStep*@as(Vec3i, @splat(targetStep));
+						const desiredPos1 = grabSelectionPos1AtStart + deltaBlock;
+						const desiredPos2 = grabSelectionPos2AtStart + deltaBlock;
+						if (@reduce(.And, desiredPos1 == grabSelectionPos1Current) and @reduce(.And, desiredPos2 == grabSelectionPos2Current)) return;
+						const oldPos1 = grabSelectionPos1Current;
+						const oldPos2 = grabSelectionPos2Current;
+						grabSelectionPos1Current = desiredPos1;
+						grabSelectionPos2Current = desiredPos2;
+						game.Player.selectionPosition1 = desiredPos1;
+						game.Player.selectionPosition2 = desiredPos2;
+						if (game.world) |world| {
+							main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos1, desiredPos1);
+							main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos2, desiredPos2);
+							main.network.protocols.genericUpdate.sendMoveSelection(world.conn, oldPos1, oldPos2, desiredPos1, desiredPos2);
+						}
+						return;
+					}
+					const mouseDelta = mouseScreenCoord - grabMouseScreenAtStart;
+					const axisPixelsRaw = vec.dot(mouseDelta, grabScreenAxisDir);
+					const targetStep: i32 = @intFromFloat(@round(@as(f64, @floatCast(axisPixelsRaw))/blockDragPixelsPerStep));
+					const axisStep = axisDirectionsI[axisIndex];
+					const desiredBlockPos = grabBlockPosAtStart + axisStep*@as(Vec3i, @splat(targetStep));
+					if (@reduce(.And, desiredBlockPos == lastSentBlockPos)) return;
+					const targetBlock = mesh_storage.getBlockFromRenderThread(desiredBlockPos[0], desiredBlockPos[1], desiredBlockPos[2]) orelse blocks.Block.air;
+					if (targetBlock != blocks.Block.air) {
+						grabErrorUntil = main.timestamp().addDuration(.fromMilliseconds(250));
+						return;
+					}
 					const oldBlockPos = lastSentBlockPos;
-					lastSentBlockPos = newBlockPos;
-					selection = .{.block = newBlockPos};
-					if (game.world) |world| main.network.protocols.genericUpdate.sendMoveBlock(world.conn, oldBlockPos, newBlockPos, grabbedBlockType);
+					lastSentBlockPos = desiredBlockPos;
+					selection = .{.block = desiredBlockPos};
+					grabErrorUntil = null;
+					if (game.world) |world| main.network.protocols.genericUpdate.sendMoveBlock(world.conn, oldBlockPos, desiredBlockPos, grabbedBlockType);
 				},
 			}
 			return;
 		}
 
-		hoveredAxis = hitTestAxes(gizmoOrigin, rayOrigin, rayDir);
+		hoveredAxis = hitTestAxes(gizmoOrigin, rayOrigin, rayDir, mouseScreenCoord);
 
 		// If the grab button is still held (e.g. the click that selected this block/entity also
 		// landed near an axis, or the mouse settled onto an axis after the initial press) and we
 		// haven't started a drag yet, start one now instead of requiring a fresh press.
 		if (hoveredAxis != null and main.KeyBoard.key("editorGizmoGrab").pressed) {
-			startGrab(hoveredAxis.?, gizmoOrigin, rayOrigin, rayDir);
+			startGrab(hoveredAxis.?, gizmoOrigin, rayOrigin, mouseScreenCoord);
 		}
 	}
 
-	fn startGrab(axisIndex: u2, gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) void {
-		const result = closestPointOnAxis(gizmoOrigin, axisDirections[axisIndex], rayOrigin, rayDir);
-		grabbedAxis = axisIndex;
+	fn startGrab(axisIndex: u2, gizmoOrigin: Vec3d, rayOrigin: Vec3d, mouseScreenCoord: Vec2f) void {
+		updateVisualScale(gizmoOrigin, rayOrigin);
 		grabOriginAtStart = gizmoOrigin;
-		grabAxisParamAtStart = result.t;
 		lastSentPos = gizmoOrigin;
+		grabMouseScreenAtStart = mouseScreenCoord;
+		grabSelectionActive = hasAreaSelection();
+		if (grabSelectionActive) {
+			grabSelectionPos1AtStart = game.Player.selectionPosition1.?;
+			grabSelectionPos2AtStart = game.Player.selectionPosition2.?;
+			grabSelectionPos1Current = grabSelectionPos1AtStart;
+			grabSelectionPos2Current = grabSelectionPos2AtStart;
+			selection = .{.block = grabSelectionPos1AtStart};
+		}
+		if (selection != null and selection.? == .block) {
+			if (game.world) |world| main.network.protocols.genericUpdate.sendEditorDragStart(world.conn);
+		}
+		grabHasPlaneSolver = false;
+		grabErrorUntil = null;
+
+		const invRotationMatrix = game.camera.viewMatrix.transpose();
+		const cameraForward: Vec3f = vec.xyz(invRotationMatrix.mulVec(Vec4f{0, 1, 0, 1}));
+		const cameraRight: Vec3f = vec.xyz(invRotationMatrix.mulVec(Vec4f{1, 0, 0, 1}));
+		const axisDirF: Vec3f = @floatCast(axisDirections[axisIndex]);
+
+		var planeNormalF = vec.cross(axisDirF, cameraForward);
+		if (vec.lengthSquare(planeNormalF) < 1e-6) {
+			planeNormalF = vec.cross(axisDirF, cameraRight);
+		}
+		if (vec.lengthSquare(planeNormalF) < 1e-6) {
+			planeNormalF = vec.cross(axisDirF, Vec3f{0, 0, 1});
+		}
+		if (vec.lengthSquare(planeNormalF) >= 1e-6) {
+			grabPlaneNormal = @floatCast(vec.normalize(planeNormalF));
+			if (intersectRayPlane(rayOrigin, @floatCast(screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, mouseScreenCoord)), grabOriginAtStart, grabPlaneNormal)) |hitStart| {
+				grabPlaneHitAtStart = hitStart;
+				grabHasPlaneSolver = true;
+			}
+		}
+
+		if (projectWorldPointToScreen(gizmoOrigin - rayOrigin)) |screenStart| {
+			if (projectWorldPointToScreen(gizmoOrigin + axisDirections[axisIndex]*@as(Vec3d, @splat(visualAxisLength)) - rayOrigin)) |screenEnd| {
+				const screenAxis = screenEnd - screenStart;
+				const screenAxisLen = vec.length(screenAxis);
+				if (screenAxisLen > 1e-4) {
+					grabScreenAxisDir = screenAxis/@as(Vec2f, @splat(screenAxisLen));
+					grabScreenPixelsPerAxisUnit = @max(@as(f64, @floatCast(screenAxisLen))/visualAxisLength, 10.0);
+				}
+			}
+		}
+		if (!grabHasPlaneSolver and vec.lengthSquare(grabScreenAxisDir) < 1e-6) {
+			grabScreenAxisDir = switch (axisIndex) {
+				0 => .{1, 0},
+				1 => .{0, -1},
+				2 => .{0, -1},
+				else => .{1, 0},
+			};
+		}
+		grabScreenPixelsPerAxisUnit = @max(grabScreenPixelsPerAxisUnit, 10.0);
+		grabbedAxis = axisIndex;
 		if (selection.? == .block) {
+			grabBlockPosAtStart = selection.?.block;
 			lastSentBlockPos = selection.?.block;
 			grabbedBlockType = mesh_storage.getBlockFromRenderThread(lastSentBlockPos[0], lastSentBlockPos[1], lastSentBlockPos[2]) orelse .{.typ = 0, .data = 0};
 		}
@@ -2549,15 +2952,108 @@ pub const EditorGizmo = struct {
 		}
 	}
 
-	pub fn grabPress(_: main.Window.Key.Modifiers) void {
-		if (!game.Player.editorMode.load(.monotonic)) return;
-		const rayOrigin = game.devCameraPos;
-		const rayDir: Vec3d = @floatCast(screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, main.Window.getMousePosition()));
+	/// Cumulative Z rotation applied to the current selection this session, purely for display
+	/// in the details panel (shown as "Rotation: N°") — there's no single universal "orientation"
+	/// value stored per block (each rotation mode encodes its own thing in Block.data), so this
+	/// tracks the total *editor-applied* rotation instead. Reset whenever a new block/area
+	/// becomes the selection anchor (see grabPress) so it doesn't carry over between selections.
+	pub var cumulativeRotationDegrees: u16 = 0;
 
-		// If something is already selected and this click lands on its gizmo, grab that axis directly.
+	/// Rotates the current selection 90° counterclockwise around Z. A single clicked block (only
+	/// selectionPosition1 set) is treated as a 1x1x1 box, matching delete/copy's fallback.
+	fn rotateSelection90() void {
+		const pos1 = game.Player.selectionPosition1 orelse return;
+		if (game.Player.selectionPosition2 == null) {
+			game.Player.selectionPosition2 = pos1;
+			if (game.world) |world| main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos2, pos1);
+		}
+		if (game.world) |world| main.network.protocols.genericUpdate.sendRotateSelection(world.conn, .@"90");
+		cumulativeRotationDegrees = (cumulativeRotationDegrees + 90) % 360;
+	}
+
+	fn hasAreaSelection() bool {
+		return game.Player.selectionPosition1 != null and game.Player.selectionPosition2 != null;
+	}
+
+	fn clearAreaSelection() void {
+		game.Player.selectionPosition1 = null;
+		game.Player.selectionPosition2 = null;
+		cumulativeRotationDegrees = 0;
+		if (game.world) |world| main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .clear, null);
+	}
+
+	var lastClickTime: ?std.Io.Timestamp = null;
+	var lastClickBlockPos: ?Vec3i = null;
+	const doubleClickWindow: std.Io.Duration = .fromMilliseconds(350);
+
+	/// Detects a double-click on the same block (two plain clicks within doubleClickWindow,
+	/// no shift) and fires /selectsimilar (flood-fill same-type blob, capped server-side) if so.
+	/// Returns true if this click was consumed as the second half of a double-click.
+	fn checkDoubleClick(mods: main.Window.Key.Modifiers, hoveredBlock: ?Vec3i) bool {
+		defer {
+			lastClickTime = main.timestamp();
+			lastClickBlockPos = hoveredBlock;
+		}
+		if (mods.shift) return false;
+		const blockPos = hoveredBlock orelse return false;
+		const prevTime = lastClickTime orelse return false;
+		const prevPos = lastClickBlockPos orelse return false;
+		if (!@reduce(.And, blockPos == prevPos)) return false;
+		if (prevTime.durationTo(main.timestamp()).toNanoseconds() > doubleClickWindow.toNanoseconds()) return false;
+
+		game.Player.selectionPosition1 = blockPos;
+		cumulativeRotationDegrees = 0;
+		if (game.world) |world| {
+			main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos1, blockPos);
+			const command = main.globalAllocator.dupe(u8, "selectsimilar");
+			main.sync.client.executeCommand(.{.chatCommand = .{.message = command}});
+		}
+		return true;
+	}
+
+	/// Area-selection semantics: a plain click on a block starts (or restarts) the selection
+	/// anchor at that block. Shift+click while an anchor exists but has no second corner yet
+	/// completes the area [pos1, pos2]. A plain click on any block other than the current
+	/// anchor/second-corner clears the area and starts a new anchor at the clicked block.
+	/// A second plain click on the same block within doubleClickWindow instead flood-selects
+	/// all directly-connected same-type blocks (see checkDoubleClick).
+	pub fn grabPress(mods: main.Window.Key.Modifiers) void {
+		if (!game.Player.editorMode.load(.monotonic)) return;
+		if (checkDoubleClick(mods, MeshSelection.selectedBlockPos)) return;
+		if (mods.shift) {
+			if (MeshSelection.selectedBlockPos) |blockPos| {
+				if (game.Player.selectionPosition1 == null) {
+					game.Player.selectionPosition1 = blockPos;
+					cumulativeRotationDegrees = 0;
+					if (game.world) |world| {
+						main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos1, blockPos);
+					}
+				} else if (game.Player.selectionPosition2 == null) {
+					game.Player.selectionPosition2 = blockPos;
+					if (game.world) |world| {
+						main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos2, blockPos);
+					}
+				}
+			}
+			return;
+		}
+
+		const rayOrigin = game.devCameraPos;
+		const mouseScreenCoord = mouseScreenCoordForRenderTarget();
+		const rayDir: Vec3d = @floatCast(screenPointDirection(game.camera.viewMatrix, lastFov, lastWidth, lastHeight, mouseScreenCoord));
+
+		// If something is already selected and this click lands on its gizmo, act on it directly:
+		// grab an axis to drag (move mode), or rotate 90° immediately (rotate mode — there's no
+		// drag, since only discrete 90° Z rotation exists, see rotateSelection/Blueprint.rotateZ).
 		if (currentOrigin()) |gizmoOrigin| {
-			if (hitTestAxes(gizmoOrigin, rayOrigin, rayDir)) |axisIndex| {
-				startGrab(axisIndex, gizmoOrigin, rayOrigin, rayDir);
+			updateVisualScale(gizmoOrigin, rayOrigin);
+			if (mode == .rotate) {
+				if (hitTestRing(gizmoOrigin, rayOrigin, rayDir)) {
+					rotateSelection90();
+					return;
+				}
+			} else if (hitTestAxes(gizmoOrigin, rayOrigin, rayDir, mouseScreenCoord)) |axisIndex| {
+				startGrab(axisIndex, gizmoOrigin, rayOrigin, mouseScreenCoord);
 				return;
 			}
 		}
@@ -2565,13 +3061,32 @@ pub const EditorGizmo = struct {
 		// Otherwise pick whatever's under the cursor, then check if the *new* selection's gizmo
 		// also happens to pass under this same click point — so select+drag can happen in one motion.
 		pickUnderCursor();
+		if (MeshSelection.selectedBlockPos) |hoveredBlock| {
+			const isCurrentAnchor = if (game.Player.selectionPosition1) |pos1| @reduce(.And, hoveredBlock == pos1) else false;
+			const isCurrentSecondCorner = if (game.Player.selectionPosition2) |pos2| @reduce(.And, hoveredBlock == pos2) else false;
+			if (!isCurrentAnchor and !isCurrentSecondCorner) {
+				clearAreaSelection();
+				game.Player.selectionPosition1 = hoveredBlock;
+				if (game.world) |world| {
+					main.network.protocols.genericUpdate.sendWorldEditPos(world.conn, .selectedPos1, hoveredBlock);
+				}
+			}
+		} else if (hasAreaSelection()) {
+			clearAreaSelection();
+		}
 		const newOrigin = currentOrigin() orelse return;
-		if (hitTestAxes(newOrigin, rayOrigin, rayDir)) |axisIndex| {
-			startGrab(axisIndex, newOrigin, rayOrigin, rayDir);
+		updateVisualScale(newOrigin, rayOrigin);
+		if (mode == .rotate) {
+			if (hitTestRing(newOrigin, rayOrigin, rayDir)) rotateSelection90();
+		} else if (hitTestAxes(newOrigin, rayOrigin, rayDir, mouseScreenCoord)) |axisIndex| {
+			startGrab(axisIndex, newOrigin, rayOrigin, mouseScreenCoord);
 		}
 	}
 
 	pub fn grabRelease(_: main.Window.Key.Modifiers) void {
+		if (grabbedAxis != null and selection != null and selection.? == .block) {
+			if (game.world) |world| main.network.protocols.genericUpdate.sendEditorDragEnd(world.conn);
+		}
 		grabbedAxis = null;
 	}
 
@@ -2585,11 +3100,21 @@ pub const EditorGizmo = struct {
 
 		pipeline.bind(null);
 		const relativePosition: Vec3f = @floatCast(pos - playerPos);
+		updateVisualScale(pos, playerPos);
 		c.glUniform3f(uniforms.modelPosition, relativePosition[0], relativePosition[1], relativePosition[2]);
-		c.glUniform1f(uniforms.axisLength, axisLength);
-		c.glUniform1f(uniforms.lineSize, 1.0/48.0);
+		c.glUniform1f(uniforms.axisLength, visualAxisLength);
+		c.glUniform1f(uniforms.lineSize, visualHalfWidth);
+		c.glUniform1i(uniforms.hoveredAxis, if (hoveredAxis) |axis| axis else -1);
+		c.glUniform1i(uniforms.grabbedAxis, if (grabbedAxis) |axis| axis else -1);
+		c.glUniform1i(uniforms.errorActive, if (grabErrorUntil) |until| @intFromBool(main.timestamp().durationTo(until).nanoseconds > 0) else 0);
+		const flashPhase: f32 = @floatCast(@as(f64, @floatFromInt(@mod(main.timestamp().toNanoseconds(), 10_000_000_000)))*1e-9);
+		c.glUniform1f(uniforms.flashPhase, flashPhase);
+		c.glUniform1i(uniforms.gizmoMode, if (mode == .rotate) 1 else 0);
 
 		main.renderer.chunk_meshing.vao.bind();
-		c.glDrawElements(c.GL_TRIANGLES, 3*6*6, c.GL_UNSIGNED_INT, null);
+		switch (mode) {
+			.move => c.glDrawArrays(c.GL_TRIANGLES, 0, 3*6),
+			.rotate => c.glDrawArrays(c.GL_TRIANGLES, 0, ringSegments*6),
+		}
 	}
 };

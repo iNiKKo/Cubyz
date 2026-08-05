@@ -624,6 +624,10 @@ pub const genericUpdate = struct {
 		moveEntity = 12,
 		simulationPaused = 13,
 		moveBlock = 14,
+		moveSelection = 15,
+		editorDragStart = 16,
+		editorDragEnd = 17,
+		rotateSelection = 18,
 	};
 
 	const WorldEditPosition = enum(u2) {
@@ -644,6 +648,10 @@ pub const genericUpdate = struct {
 			.teleport => {
 				game.Player.setPosBlocking(try reader.readVec(Vec3d));
 			},
+			.moveSelection => return error.InvalidSide,
+			.editorDragStart => return error.InvalidSide,
+			.editorDragEnd => return error.InvalidSide,
+			.rotateSelection => return error.InvalidSide,
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
 				const pos: ?Vec3i = switch (typ) {
@@ -808,6 +816,23 @@ pub const genericUpdate = struct {
 			const block = Block.fromInt(try reader.readInt(u32));
 			main.server.queueEditorRequest(.{.moveBlock = .{.sender = conn.user.?.id, .oldPos = oldPos, .newPos = newPos, .block = block}});
 		},
+		.moveSelection => {
+			const oldPos1 = try reader.readVec(Vec3i);
+			const oldPos2 = try reader.readVec(Vec3i);
+			const newPos1 = try reader.readVec(Vec3i);
+			const newPos2 = try reader.readVec(Vec3i);
+			main.server.queueEditorRequest(.{.moveSelection = .{.sender = conn.user.?.id, .oldPos1 = oldPos1, .oldPos2 = oldPos2, .newPos1 = newPos1, .newPos2 = newPos2}});
+		},
+		.editorDragStart => {
+			main.server.queueEditorRequest(.{.dragStart = .{.sender = conn.user.?.id}});
+		},
+		.editorDragEnd => {
+			main.server.queueEditorRequest(.{.dragEnd = .{.sender = conn.user.?.id}});
+		},
+		.rotateSelection => {
+			const angle = try reader.readEnum(main.rotation.Degrees);
+			main.server.queueEditorRequest(.{.rotateSelection = .{.sender = conn.user.?.id, .angle = angle}});
+		},
 			.worldEditPos => {
 				const typ = try reader.readEnum(WorldEditPosition);
 				const pos: ?Vec3i = switch (typ) {
@@ -815,9 +840,18 @@ pub const genericUpdate = struct {
 					.clear => null,
 				};
 				switch (typ) {
-					.selectedPos1 => conn.user.?.worldEditData.selectionPosition1 = pos.?,
+					.selectedPos1 => {
+						// A new selection anchor invalidates any select-similar block-type mask from
+						// a previous selection — otherwise stale masks silently filter out unrelated
+						// later selections in delete/copy/move.
+						if (conn.user.?.worldEditData.mask) |oldMask| oldMask.deinit(main.globalAllocator);
+						conn.user.?.worldEditData.mask = null;
+						conn.user.?.worldEditData.selectionPosition1 = pos.?;
+					},
 					.selectedPos2 => conn.user.?.worldEditData.selectionPosition2 = pos.?,
 					.clear => {
+						if (conn.user.?.worldEditData.mask) |oldMask| oldMask.deinit(main.globalAllocator);
+						conn.user.?.worldEditData.mask = null;
 						conn.user.?.worldEditData.selectionPosition1 = null;
 						conn.user.?.worldEditData.selectionPosition2 = null;
 					},
@@ -925,6 +959,36 @@ pub const genericUpdate = struct {
 		writer.writeVec(Vec3i, newPos);
 		writer.writeInt(u32, block.toInt());
 		conn.send(.secure, id, writer.data.items);
+	}
+
+	pub fn sendMoveSelection(conn: *Connection, oldPos1: Vec3i, oldPos2: Vec3i, newPos1: Vec3i, newPos2: Vec3i) void {
+		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, 1 + 4*@sizeOf(Vec3i));
+		defer writer.deinit();
+		writer.writeEnum(UpdateType, .moveSelection);
+		writer.writeVec(Vec3i, oldPos1);
+		writer.writeVec(Vec3i, oldPos2);
+		writer.writeVec(Vec3i, newPos1);
+		writer.writeVec(Vec3i, newPos2);
+		conn.send(.secure, id, writer.data.items);
+	}
+
+	/// Marks the start of a gizmo drag (block or selection move) so the server can capture the
+	/// pre-drag world state once, instead of on every intermediate move message during the drag.
+	pub fn sendEditorDragStart(conn: *Connection) void {
+		conn.send(.secure, id, &.{@intFromEnum(UpdateType.editorDragStart)});
+	}
+
+	/// Marks the end of a gizmo drag, so the server pushes exactly one undo entry for the whole
+	/// drag (captured at sendEditorDragStart) rather than nothing at all, or one per move message.
+	pub fn sendEditorDragEnd(conn: *Connection) void {
+		conn.send(.secure, id, &.{@intFromEnum(UpdateType.editorDragEnd)});
+	}
+
+	/// Rotates the current selection (pos1/pos2) in place around the Z axis by `angle`,
+	/// counterclockwise, anchored at the selection's own center — a 90/270 rotation can swap
+	/// the selection's X/Y footprint, so the server recomputes and re-syncs pos1/pos2 afterward.
+	pub fn sendRotateSelection(conn: *Connection, angle: main.rotation.Degrees) void {
+		conn.send(.secure, id, &.{@intFromEnum(UpdateType.rotateSelection), @intFromEnum(angle)});
 	}
 
 	pub fn sendLightning(conn: *Connection, position: Vec3d, intensity: f32) void {

@@ -23,11 +23,13 @@ pub fn execute(_: Args, source: Source) void {
 		defer action.deinit();
 
 		const redo = Blueprint.capture(main.globalAllocator, action.selection());
-		action.blueprint.paste(action.position, .{.preserveVoid = true});
+		action.blueprint.paste(action.position, .{.preserveVoid = action.preserveVoid});
 
 		switch (redo) {
 			.success => |blueprint| {
-				user.worldEditData.redoHistory.push(.init(blueprint, action.position, action.message));
+				var value = @TypeOf(action).init(blueprint, action.position, action.message);
+				value.preserveVoid = action.preserveVoid;
+				user.worldEditData.redoHistory.push(value);
 			},
 			.failure => {
 				user.sendMessage("#ff0000Error: Could not capture redo history.", .{});

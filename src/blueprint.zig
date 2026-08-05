@@ -103,6 +103,13 @@ pub const Blueprint = struct {
 	};
 
 	pub fn capture(allocator: NeverFailingAllocator, selection: Selection) CaptureResult {
+		return captureMasked(allocator, selection, null);
+	}
+
+	/// Like capture(), but cells that don't match `mask` (when non-null) are stored as the void
+	/// sentinel block instead of their real content — used so copying an irregular blob selection
+	/// (e.g. from select-similar) doesn't paste back a solid bounding-box stamp.
+	pub fn captureMasked(allocator: NeverFailingAllocator, selection: Selection, mask: ?Mask) CaptureResult {
 		const startX, const startY, const startZ = selection.minPos;
 		const sizeX, const sizeY, const sizeZ = selection.size();
 
@@ -119,7 +126,11 @@ pub const Blueprint = struct {
 
 					const maybeBlock = main.server.world.?.getBlock(worldX, worldY, worldZ);
 					if (maybeBlock) |block| {
-						self.blocks.set(x, y, z, block);
+						if (mask != null and !mask.?.match(block)) {
+							self.blocks.set(x, y, z, getVoidBlock());
+						} else {
+							self.blocks.set(x, y, z, block);
+						}
 					} else {
 						return .{.failure = .{.pos = .{worldX, worldY, worldZ}, .message = "Chunk containing block not loaded."}};
 					}
@@ -488,6 +499,17 @@ pub const Mask = struct {
 			return isMatch;
 		}
 	};
+
+	/// Builds a mask matching exactly one block type, without going through the string
+	/// expression parser — used by the editor's select-similar/blob-shape features, where the
+	/// block type is already known from the world rather than typed by the user.
+	pub fn fromBlockType(allocator: NeverFailingAllocator, blockType: u16) @This() {
+		var andStorage: AndList = .empty;
+		andStorage.append(allocator, .{.inner = .{.blockType = blockType}, .isInverse = false});
+		var result: @This() = .{.entries = .empty};
+		result.entries.append(allocator, andStorage);
+		return result;
+	}
 
 	pub fn initFromString(allocator: NeverFailingAllocator, source: []const u8) !@This() {
 		var result: @This() = .{.entries = .empty};

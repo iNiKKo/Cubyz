@@ -23,7 +23,7 @@ pub fn execute(_: Args, source: Source) void {
 	const selection = command.getCurrentSelection(user) catch return;
 	user.sendMessage("Copying: {f}", .{selection});
 
-	const result = Blueprint.capture(main.globalAllocator, selection);
+	const result = Blueprint.captureMasked(main.globalAllocator, selection, user.worldEditData.mask);
 	switch (result) {
 		.success => {
 			if (user.worldEditData.clipboard != null) {

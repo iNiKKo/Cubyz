@@ -21,11 +21,13 @@ pub fn execute(_: Args, source: Source) void {
 		defer action.deinit();
 
 		const undo = Blueprint.capture(main.globalAllocator, action.selection());
-		action.blueprint.paste(action.position, .{.preserveVoid = true});
+		action.blueprint.paste(action.position, .{.preserveVoid = action.preserveVoid});
 
 		switch (undo) {
 			.success => |blueprint| {
-				user.worldEditData.undoHistory.push(.init(blueprint, action.position, action.message));
+				var value = @TypeOf(action).init(blueprint, action.position, action.message);
+				value.preserveVoid = action.preserveVoid;
+				user.worldEditData.undoHistory.push(value);
 			},
 			.failure => {
 				user.sendMessage("#ff0000Error: Could not capture undo history.", .{});

@@ -879,6 +879,63 @@ pub fn pressAcquireSelectedBlock(_: main.Window.Key.Modifiers) void {
 	Player.acquireSelectedBlock();
 }
 
+pub fn editorUndoSelection(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	if (main.gui.selectedTextInput != null) return;
+	if (world == null) return;
+
+	const command = main.globalAllocator.dupe(u8, "undo");
+	main.sync.client.executeCommand(.{.chatCommand = .{.message = command}});
+}
+
+/// Ensures selectionPosition1 (and its server mirror) reflects the actively selected block,
+/// falling back to whatever the gizmo currently has selected if no explicit area was set —
+/// so Delete/Ctrl+C/Ctrl+V act on what's actually selected, never on whatever the mouse
+/// happens to be hovering (that's a separate, purely visual hover state).
+fn ensureSelectionFromGizmo() bool {
+	if (Player.selectionPosition1 != null) return true;
+	const info = main.renderer.EditorGizmo.selectedDisplayInfo() orelse return false;
+	const blockPos = switch (info) {
+		.block => |pos| pos,
+		.entityPos => return false,
+	};
+	Player.selectionPosition1 = blockPos;
+	if (world) |w| {
+		main.network.protocols.genericUpdate.sendWorldEditPos(w.conn, .selectedPos1, blockPos);
+	}
+	return true;
+}
+
+pub fn editorDeleteSelection(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	if (main.gui.selectedTextInput != null) return;
+	if (world == null) return;
+	if (!ensureSelectionFromGizmo()) return;
+
+	const command = main.globalAllocator.dupe(u8, "delete");
+	main.sync.client.executeCommand(.{.chatCommand = .{.message = command}});
+}
+
+pub fn editorCopySelection(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	if (main.gui.selectedTextInput != null) return;
+	if (world == null) return;
+	if (!ensureSelectionFromGizmo()) return;
+
+	const command = main.globalAllocator.dupe(u8, "copy");
+	main.sync.client.executeCommand(.{.chatCommand = .{.message = command}});
+}
+
+pub fn editorPasteAboveSelection(_: main.Window.Key.Modifiers) void {
+	if (!Player.editorMode.load(.monotonic)) return;
+	if (main.gui.selectedTextInput != null) return;
+	if (world == null) return;
+	if (!ensureSelectionFromGizmo()) return;
+
+	const command = main.globalAllocator.dupe(u8, "pasteabove");
+	main.sync.client.executeCommand(.{.chatCommand = .{.message = command}});
+}
+
 pub fn flyToggle(_: main.Window.Key.Modifiers) void {
 	if (!Player.isCreative()) return;
 
@@ -916,9 +973,16 @@ pub fn editorModeToggle(_: main.Window.Key.Modifiers) void {
 	Player.isFlying.store(newEditorMode, .monotonic);
 	main.Window.setMouseGrabbed(!newEditorMode);
 	if (newEditorMode) {
+		main.gui.hideGui = false;
+		main.gui.closeHud();
 		main.gui.openWindow("editor_toolbar");
+		main.gui.openWindow("editor_details_panel");
+		main.gui.openWindow("editor_content_browser");
 	} else {
 		main.gui.closeWindow("editor_toolbar");
+		main.gui.closeWindow("editor_details_panel");
+		main.gui.closeWindow("editor_content_browser");
+		main.gui.reopenHud();
 	}
 }
 

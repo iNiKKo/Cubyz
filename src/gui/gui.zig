@@ -386,6 +386,24 @@ pub fn openHud() void {
 	reorderWindows = false;
 }
 
+/// Closes just the isHud windows (hotbar, crosshair, energybar, hungerbar, ...), leaving any
+/// other open windows (e.g. editor-mode dock panels) untouched. Pair with reopenHud() to restore.
+pub fn closeHud() void {
+	for (hudWindows.items) |window| {
+		closeWindowFromRef(window);
+	}
+}
+
+/// Re-opens the isHud windows closed by closeHud(), without re-running inventory.init() —
+/// unlike openHud(), which is only meant to be called once per world-enter. Calling
+/// inventory.init() a second time here would leak the previous carried-item ClientInventory's
+/// client-side InventoryId (asserted on at shutdown in Inventory.zig's client.deinit()).
+pub fn reopenHud() void {
+	for (hudWindows.items) |window| {
+		openWindowFromRef(window);
+	}
+}
+
 pub fn openWindowCallback(comptime id: []const u8) main.callbacks.SimpleCallback {
 	return .initWithPtr(openWindowFromRef, &@field(windowlist, id).window);
 }

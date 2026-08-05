@@ -508,7 +508,7 @@ const stun = struct {
 pub const ConnectionManager = struct {
 	socket: Socket = undefined,
 	thread: std.Thread = undefined,
-	threadId: std.Thread.Id = undefined,
+	threadId: ?std.Thread.Id = null,
 	externalAddress: SocketAddress = undefined,
 	online: Atomic(bool) = .init(false),
 	running: Atomic(bool) = .init(false),
@@ -664,6 +664,7 @@ pub const ConnectionManager = struct {
 	}
 
 	pub fn addConnection(self: *ConnectionManager, conn: *Connection) error{AlreadyConnected}!void {
+		if (self.threadId) |threadId| std.debug.assert(threadId != std.Thread.getCurrentId());
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		for (self.connections.items) |other| {
@@ -673,7 +674,7 @@ pub const ConnectionManager = struct {
 	}
 
 	pub fn finishCurrentReceive(self: *ConnectionManager) void {
-		std.debug.assert(self.threadId != std.Thread.getCurrentId());
+		std.debug.assert(self.threadId != null and self.threadId.? == std.Thread.getCurrentId());
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		self.waitingToFinishReceive.wait(&self.mutex);
@@ -1580,11 +1581,11 @@ pub const Connection = struct {
 		std.debug.assert(self.connectionState.load(.monotonic) != .connected);
 		if (self.connectionState.load(.monotonic) == .paused) {
 			self.connectionState.store(.connected, .monotonic);
-		}
-		main.network.protocols.reload.informClientOfRestart(self);
-		self.handShakeState.store(.signatureResponse, .monotonic);
-		if (self.user) |user| {
-			user.@"continue"();
+			main.network.protocols.reload.informClientOfRestart(self);
+			self.handShakeState.store(.signatureResponse, .monotonic);
+			if (self.user) |user| {
+				user.@"continue"();
+			}
 		}
 	}
 	fn checkRestartCounter(conn: *Connection, protocolIndex: u8, data: []const u8, channelId: ChannelId) !enum { discard, evaluate } {
@@ -1712,7 +1713,7 @@ pub const Connection = struct {
 	}
 
 	fn sendConfirmationPacket(self: *Connection, timestamp: i64) void {
-		std.debug.assert(self.manager.threadId == std.Thread.getCurrentId());
+		std.debug.assert(self.manager.threadId != null and self.manager.threadId.? == std.Thread.getCurrentId());
 		var writer = utils.BinaryWriter.initCapacity(main.stackAllocator, self.mtuEstimate);
 		defer writer.deinit();
 
@@ -1741,7 +1742,7 @@ pub const Connection = struct {
 	}
 
 	fn tryReceive(self: *Connection, data: []const u8) !void {
-		std.debug.assert(self.manager.threadId == std.Thread.getCurrentId());
+		std.debug.assert(self.manager.threadId != null and self.manager.threadId.? == std.Thread.getCurrentId());
 		self.lastConnectionTime = networkTimestamp();
 		var reader = utils.BinaryReader.init(data);
 		const channel = try reader.readEnum(ChannelId);

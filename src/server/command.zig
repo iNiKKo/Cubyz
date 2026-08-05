@@ -162,10 +162,8 @@ pub fn getCurrentSelection(source: *User) !Blueprint.Selection {
 		source.sendMessage("#ff0000Position 1 isn't set", .{});
 		return error.SelectionPartiallyUnset;
 	};
-	const pos2 = source.worldEditData.selectionPosition2 orelse {
-		source.sendMessage("#ff0000Position 2 isn't set", .{});
-		return error.SelectionPartiallyUnset;
-	};
+	// A single clicked block (no shift+click for a second corner) is a valid 1x1x1 selection.
+	const pos2 = source.worldEditData.selectionPosition2 orelse pos1;
 	return .initFromInclusive(pos1, pos2);
 }
 

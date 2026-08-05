@@ -87,6 +87,10 @@ pub const std_options: std.Options = .{
 
 fn escape(mods: Window.Key.Modifiers) void {
 	if (gui.selectedTextInput != null) gui.setSelectedTextInput(null);
+	if (game.Player.editorMode.load(.monotonic)) {
+		game.editorModeToggle(mods);
+		return;
+	}
 	inventory(mods);
 }
 fn inventory(_: Window.Key.Modifiers) void {
@@ -103,6 +107,7 @@ fn ungrabMouse(_: Window.Key.Modifiers) void {
 fn openCreativeInventory(mods: Window.Key.Modifiers) void {
 	if (game.world == null) return;
 	if (!game.Player.isCreative()) return;
+	if (game.Player.editorMode.load(.monotonic)) return;
 	ungrabMouse(mods);
 	gui.openWindow("creative_inventory");
 }
@@ -186,6 +191,10 @@ pub const KeyBoard = struct {
 		.{.name = "editorMode", .key = c.GLFW_KEY_F10, .pressAction = &game.editorModeToggle},
 		.{.name = "editorFly", .mouseButton = c.GLFW_MOUSE_BUTTON_RIGHT, .pressAction = &game.editorFlyPress, .releaseAction = &game.editorFlyRelease},
 		.{.name = "editorGizmoGrab", .mouseButton = c.GLFW_MOUSE_BUTTON_LEFT, .pressAction = &renderer.EditorGizmo.grabPress, .releaseAction = &renderer.EditorGizmo.grabRelease, .notifyRequirement = .inMenu},
+		.{.name = "editorDeleteSelection", .key = c.GLFW_KEY_DELETE, .pressAction = &game.editorDeleteSelection, .notifyRequirement = .inMenu},
+		.{.name = "editorUndoSelection", .key = c.GLFW_KEY_Z, .pressAction = &game.editorUndoSelection, .requiredModifiers = .{.control = true}, .notifyRequirement = .inMenu},
+		.{.name = "editorCopySelection", .key = c.GLFW_KEY_C, .pressAction = &game.editorCopySelection, .requiredModifiers = .{.control = true}, .notifyRequirement = .inMenu},
+		.{.name = "editorPasteAboveSelection", .key = c.GLFW_KEY_V, .pressAction = &game.editorPasteAboveSelection, .requiredModifiers = .{.control = true}, .notifyRequirement = .inMenu},
 		.{.name = "fall", .key = c.GLFW_KEY_LEFT_SHIFT, .gamepadButton = c.GLFW_GAMEPAD_BUTTON_RIGHT_THUMB},
 		.{.name = "placeBlock", .mouseButton = c.GLFW_MOUSE_BUTTON_RIGHT, .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_LEFT_TRIGGER}, .pressAction = &game.pressPlace, .releaseAction = &game.releasePlace, .notifyRequirement = .inGame},
 		.{.name = "breakBlock", .mouseButton = c.GLFW_MOUSE_BUTTON_LEFT, .gamepadAxis = .{.axis = c.GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER}, .pressAction = &game.pressBreak, .releaseAction = &game.releaseBreak, .notifyRequirement = .inGame},

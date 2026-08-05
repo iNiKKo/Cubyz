@@ -38,7 +38,8 @@ pub const command = @import("command.zig");
 pub const WeatherMap = @import("WeatherMap.zig");
 
 pub const WorldEditData = struct {
-	const maxWorldEditHistoryCapacity: u32 = 1024;
+	const maxWorldEditHistoryCapacity: u32 = 100;
+	const worldEditHistoryBufferCapacity: u32 = 128;
 
 	selectionPosition1: ?Vec3i = null,
 	selectionPosition2: ?Vec3i = null,
@@ -47,6 +48,21 @@ pub const WorldEditData = struct {
 	redoHistory: History,
 	mask: ?Mask = null,
 
+	/// Set true by dragStart, consumed by the first moveBlock/moveSelection request after it
+	/// (which captures the true pre-drag content, since only the *first* message's oldPos in a
+	/// drag reflects the position before any mutation — later messages' oldPos is just the
+	/// previous frame's position). Cleared once consumed so a whole drag pushes one undo entry,
+	/// not one per mouse-move frame.
+	dragAwaitingCapture: bool = false,
+	/// The pre-drag content, captured once at the start of the drag (see dragAwaitingCapture).
+	pendingDragOriginal: ?Blueprint = null,
+	pendingDragOriginalPos: Vec3i = .{0, 0, 0},
+	/// The most recent destination box, updated on every moveBlock/moveSelection message during
+	/// the drag — needed at dragEnd to know where the moved blocks actually ended up, since that
+	/// message carries no position data of its own.
+	pendingDragLatestNewMin: Vec3i = .{0, 0, 0},
+	pendingDragLatestNewMax: Vec3i = .{0, 0, 0},
+
 	const History = struct {
 		changes: CircularBufferQueue(Value),
 
@@ -54,6 +70,12 @@ pub const WorldEditData = struct {
 			blueprint: Blueprint,
 			position: Vec3i,
 			message: []const u8,
+			/// Whether restoring this entry should stamp every cell including void ones (the
+			/// normal case: delete/paste always capture a fully "real" rectangular region) or
+			/// skip void cells (used by move-undo's combined old+new union blueprint, where cells
+			/// outside both the old and new footprints are void placeholders that must be left
+			/// completely untouched, not overwritten with void blocks).
+			preserveVoid: bool = true,
 
 			pub fn init(blueprint: Blueprint, position: Vec3i, message: []const u8) Value {
 				return .{.blueprint = blueprint, .position = position, .message = main.globalAllocator.dupe(u8, message)};
@@ -67,7 +89,7 @@ pub const WorldEditData = struct {
 			}
 		};
 		pub fn init() History {
-			return .{.changes = .init(main.globalAllocator, maxWorldEditHistoryCapacity)};
+			return .{.changes = .init(main.globalAllocator, worldEditHistoryBufferCapacity)};
 		}
 		pub fn deinit(self: *History) void {
 			self.clear();
@@ -99,6 +121,7 @@ pub const WorldEditData = struct {
 		if (self.mask) |mask| {
 			mask.deinit(main.globalAllocator);
 		}
+		if (self.pendingDragOriginal) |original| original.deinit(main.globalAllocator);
 	}
 };
 
@@ -150,7 +173,7 @@ pub const User = struct {
 	spawnPos: ?Vec3d = null,
 	worldEditData: WorldEditData = undefined,
 
-	playerIndex: PlayerIndex = undefined,
+	playerIndex: PlayerIndex = 0,
 
 	jobQueue: main.utils.ConcurrentMaxHeap(main.utils.ThreadPool.Task) = undefined,
 	jobQueueScheduled: bool = false,
@@ -631,6 +654,10 @@ pub const EditorRequest = union(enum) {
 	moveEntity: struct {sender: main.entity.Entity, target: main.entity.Entity, pos: Vec3d},
 	pauseSimulation: struct {sender: main.entity.Entity, paused: bool},
 	moveBlock: struct {sender: main.entity.Entity, oldPos: Vec3i, newPos: Vec3i, block: main.blocks.Block},
+	moveSelection: struct {sender: main.entity.Entity, oldPos1: Vec3i, oldPos2: Vec3i, newPos1: Vec3i, newPos2: Vec3i},
+	dragStart: struct {sender: main.entity.Entity},
+	dragEnd: struct {sender: main.entity.Entity},
+	rotateSelection: struct {sender: main.entity.Entity, angle: main.rotation.Degrees},
 };
 var editorRequests: main.utils.ConcurrentQueue(EditorRequest) = undefined;
 
@@ -764,6 +791,58 @@ fn updateSurvivalNeeds(user: *User) void {
 	}
 }
 
+/// Builds a single combined Blueprint spanning the union of an old (pre-edit) region and a new
+/// (post-edit) region, suitable for a one-shot undo of any "move content from old to new" style
+/// edit (gizmo drag, rotate-in-place, ...): cells inside the old box get `original`'s captured
+/// content (restoring it), cells inside the new box get cleared — to air, or to the blueprint
+/// void sentinel if the corresponding old-box cell (same relative offset; old and new must be
+/// the same size) was itself void, so a masked/blob edit's untouched gaps aren't wrongly
+/// stamped with air — and cells in neither box are void so paste()'s preserveVoid=false skips
+/// them entirely. Returns null if the union region is degenerate (shouldn't normally happen).
+fn buildUnionUndoBlueprint(original: main.blueprint.Blueprint, oldMin: Vec3i, newMin: Vec3i, newMax: Vec3i, oldNewSameSizeMasked: bool) ?struct {blueprint: main.blueprint.Blueprint, pos: Vec3i} {
+	const oldMax = oldMin +% original.extent();
+	const unionMin = @min(oldMin, newMin);
+	const unionMax = @max(oldMax, newMax);
+	const unionExtent = unionMax -% unionMin;
+	if (@reduce(.Or, unionExtent <= @as(Vec3i, @splat(0)))) return null;
+
+	const combined = main.blueprint.Blueprint{.blocks = .init(main.globalAllocator, @intCast(unionExtent[0]), @intCast(unionExtent[1]), @intCast(unionExtent[2]))};
+	var x: i32 = 0;
+	while (x < unionExtent[0]) : (x += 1) {
+		var y: i32 = 0;
+		while (y < unionExtent[1]) : (y += 1) {
+			var z: i32 = 0;
+			while (z < unionExtent[2]) : (z += 1) {
+				const worldPos = unionMin + Vec3i{x, y, z};
+				const insideOld = @reduce(.And, worldPos >= oldMin) and @reduce(.And, worldPos < oldMax);
+				const insideNew = @reduce(.And, worldPos >= newMin) and @reduce(.And, worldPos < newMax);
+				if (insideOld) {
+					const localOld = worldPos -% oldMin;
+					combined.blocks.set(@intCast(x), @intCast(y), @intCast(z), original.blocks.get(@intCast(localOld[0]), @intCast(localOld[1]), @intCast(localOld[2])));
+				} else if (insideNew) {
+					// For a masked/blob edit where old and new are the same size (gizmo drag),
+					// only clear cells that were actually part of the edit — derived from whether
+					// the *old* box's cell at the same relative offset was void in the capture.
+					// For rotate (box can resize on 90/270) or a plain unmasked move, there's no
+					// such gap concept: every new-box cell is always cleared to air.
+					if (oldNewSameSizeMasked) {
+						const localNew = worldPos -% newMin;
+						const correspondingOld = original.blocks.get(@intCast(localNew[0]), @intCast(localNew[1]), @intCast(localNew[2]));
+						if (correspondingOld.typ == main.blueprint.getVoidBlock().typ) {
+							combined.blocks.set(@intCast(x), @intCast(y), @intCast(z), main.blueprint.getVoidBlock());
+							continue;
+						}
+					}
+					combined.blocks.set(@intCast(x), @intCast(y), @intCast(z), main.blocks.Block.air);
+				} else {
+					combined.blocks.set(@intCast(x), @intCast(y), @intCast(z), main.blueprint.getVoidBlock());
+				}
+			}
+		}
+	}
+	return .{.blueprint = combined, .pos = unionMin};
+}
+
 fn processEditorRequest(request: EditorRequest) void {
 	switch (request) {
 		.moveEntity => |data| {
@@ -800,16 +879,232 @@ fn processEditorRequest(request: EditorRequest) void {
 		},
 		.moveBlock => |data| {
 			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/moveEntity")) return;
-			world.?.updateBlock(data.oldPos[0], data.oldPos[1], data.oldPos[2], .{.typ = 0, .data = 0});
-			world.?.updateBlock(data.newPos[0], data.newPos[1], data.newPos[2], data.block);
+			if (@reduce(.And, data.oldPos == data.newPos)) return;
+			const targetBlock = world.?.getBlock(data.newPos[0], data.newPos[1], data.newPos[2]) orelse return;
+			if (targetBlock != main.blocks.Block.air) return;
 
 			const userList = getUserList(main.stackAllocator);
 			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				if (user.id != data.sender) continue;
+				if (user.worldEditData.dragAwaitingCapture) {
+					user.worldEditData.dragAwaitingCapture = false;
+					const selection = main.blueprint.Blueprint.Selection.initFromInclusive(data.oldPos, data.oldPos);
+					const capture = main.blueprint.Blueprint.capture(main.globalAllocator, selection);
+					if (capture == .success) {
+						user.worldEditData.pendingDragOriginal = capture.success;
+						user.worldEditData.pendingDragOriginalPos = data.oldPos;
+					}
+				}
+				user.worldEditData.pendingDragLatestNewMin = data.newPos;
+				user.worldEditData.pendingDragLatestNewMax = data.newPos +% @as(Vec3i, @splat(1));
+				break;
+			}
+
+			world.?.updateBlock(data.oldPos[0], data.oldPos[1], data.oldPos[2], .{.typ = 0, .data = 0});
+			world.?.updateBlock(data.newPos[0], data.newPos[1], data.newPos[2], data.block);
+
 			for (userList) |user| {
 				main.network.protocols.blockUpdate.send(user.conn, &.{
 					.{.pos = data.oldPos, .newBlock = .{.typ = 0, .data = 0}, .blockEntityData = &.{}},
 					.{.pos = data.newPos, .newBlock = data.block, .blockEntityData = &.{}},
 				});
+			}
+		},
+		.moveSelection => |data| {
+			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/moveEntity")) return;
+			const oldSelection = main.blueprint.Blueprint.Selection.initFromInclusive(data.oldPos1, data.oldPos2);
+			const newSelection = main.blueprint.Blueprint.Selection.initFromInclusive(data.newPos1, data.newPos2);
+
+			var senderMask: ?main.blueprint.Mask = null;
+			const userList0 = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList0);
+			for (userList0) |u| {
+				if (u.id != data.sender) continue;
+				senderMask = u.worldEditData.mask;
+				if (u.worldEditData.dragAwaitingCapture) {
+					u.worldEditData.dragAwaitingCapture = false;
+					const undoCapture = main.blueprint.Blueprint.captureMasked(main.globalAllocator, oldSelection, senderMask);
+					if (undoCapture == .success) {
+						u.worldEditData.pendingDragOriginal = undoCapture.success;
+						u.worldEditData.pendingDragOriginalPos = oldSelection.minPos;
+					}
+				}
+				u.worldEditData.pendingDragLatestNewMin = newSelection.minPos;
+				u.worldEditData.pendingDragLatestNewMax = newSelection.maxPos;
+				break;
+			}
+
+			const capture = main.blueprint.Blueprint.captureMasked(main.globalAllocator, oldSelection, senderMask);
+			const blueprint = switch (capture) {
+				.success => |captured| captured,
+				.failure => return,
+			};
+			defer blueprint.deinit(main.globalAllocator);
+
+			// Non-blob cells (masked out, stored as void above) are allowed to overlap existing
+			// content at the destination since they'll be skipped at paste time below; only cells
+			// that are actually part of the moved selection need the destination to be free.
+			var checkX = newSelection.minPos[0];
+			while (checkX < newSelection.maxPos[0]) : (checkX += 1) {
+				var checkY = newSelection.minPos[1];
+				while (checkY < newSelection.maxPos[1]) : (checkY += 1) {
+					var checkZ = newSelection.minPos[2];
+					while (checkZ < newSelection.maxPos[2]) : (checkZ += 1) {
+						const insideOld =
+							checkX >= oldSelection.minPos[0] and checkX < oldSelection.maxPos[0] and
+							checkY >= oldSelection.minPos[1] and checkY < oldSelection.maxPos[1] and
+							checkZ >= oldSelection.minPos[2] and checkZ < oldSelection.maxPos[2];
+						if (insideOld) continue;
+						if (senderMask != null) {
+							const localPos: Vec3i = Vec3i{checkX, checkY, checkZ} -% newSelection.minPos;
+							const capturedBlock = blueprint.blocks.get(@intCast(localPos[0]), @intCast(localPos[1]), @intCast(localPos[2]));
+							if (capturedBlock.typ == main.blueprint.getVoidBlock().typ) continue;
+						}
+						const targetBlock = world.?.getBlock(checkX, checkY, checkZ) orelse return;
+						if (targetBlock != main.blocks.Block.air) return;
+					}
+				}
+			}
+
+			const oldMin = oldSelection.minPos;
+			const oldSize = oldSelection.maxPos -% oldSelection.minPos;
+			for (0..@intCast(oldSize[0])) |x| {
+				for (0..@intCast(oldSize[1])) |y| {
+					for (0..@intCast(oldSize[2])) |z| {
+						if (senderMask != null) {
+							const capturedBlock = blueprint.blocks.get(x, y, z);
+							if (capturedBlock.typ == main.blueprint.getVoidBlock().typ) continue;
+						}
+						world.?.updateBlock(oldMin[0] + @as(i32, @intCast(x)), oldMin[1] + @as(i32, @intCast(y)), oldMin[2] + @as(i32, @intCast(z)), .{.typ = 0, .data = 0});
+					}
+				}
+			}
+
+			blueprint.paste(newSelection.minPos, .{.preserveVoid = senderMask == null});
+
+			const userList = main.server.getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				if (user.id != data.sender) continue;
+				user.worldEditData.selectionPosition1 = data.newPos1;
+				user.worldEditData.selectionPosition2 = data.newPos2;
+				main.network.protocols.genericUpdate.sendWorldEditPos(user.conn, .selectedPos1, data.newPos1);
+				main.network.protocols.genericUpdate.sendWorldEditPos(user.conn, .selectedPos2, data.newPos2);
+				break;
+			}
+		},
+		.dragStart => |data| {
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				if (user.id != data.sender) continue;
+				if (user.worldEditData.pendingDragOriginal) |original| original.deinit(main.globalAllocator);
+				user.worldEditData.pendingDragOriginal = null;
+				user.worldEditData.dragAwaitingCapture = true;
+				break;
+			}
+		},
+		.dragEnd => |data| {
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				if (user.id != data.sender) continue;
+				user.worldEditData.dragAwaitingCapture = false;
+				const original = user.worldEditData.pendingDragOriginal orelse break;
+				defer {
+					original.deinit(main.globalAllocator);
+					user.worldEditData.pendingDragOriginal = null;
+				}
+
+				// Undo needs to both restore the old region's original content AND clear the new
+				// region back to what it was before the move (guaranteed to have been air/masked
+				// cells the move was allowed to skip — the destination-occupied check in
+				// moveBlock/moveSelection above enforces this). Build one combined blueprint over
+				// the union of both boxes so a single paste() on undo does both at once, reusing
+				// undo.zig entirely unchanged.
+				const result = buildUnionUndoBlueprint(
+					original,
+					user.worldEditData.pendingDragOriginalPos,
+					user.worldEditData.pendingDragLatestNewMin,
+					user.worldEditData.pendingDragLatestNewMax,
+					true,
+				) orelse break;
+
+				var undoValue = WorldEditData.History.Value.init(result.blueprint, result.pos, "move");
+				undoValue.preserveVoid = false;
+				user.worldEditData.undoHistory.push(undoValue);
+				user.worldEditData.redoHistory.clear();
+				break;
+			}
+		},
+		.rotateSelection => |data| {
+			if (!main.entity.components.@"cubyz:permissions".server.hasPermission(data.sender, "/editor/moveEntity")) return;
+			const userList = getUserList(main.stackAllocator);
+			defer main.stackAllocator.free(userList);
+			for (userList) |user| {
+				if (user.id != data.sender) continue;
+
+				const pos1 = user.worldEditData.selectionPosition1 orelse break;
+				const pos2 = user.worldEditData.selectionPosition2 orelse pos1;
+				const oldSelection = main.blueprint.Blueprint.Selection.initFromInclusive(pos1, pos2);
+
+				const capture = main.blueprint.Blueprint.capture(main.globalAllocator, oldSelection);
+				const original = switch (capture) {
+					.success => |captured| captured,
+					.failure => break,
+				};
+				defer original.deinit(main.globalAllocator);
+
+				const rotated = original.rotateZ(main.globalAllocator, data.angle);
+				defer rotated.deinit(main.globalAllocator);
+
+				// Rotate anchors on the selection's own center, so a 90/270 (which can swap the
+				// X/Y footprint) still feels like it's spinning in place rather than jumping.
+				const oldCenter = @divTrunc(oldSelection.minPos + oldSelection.maxPos, @as(Vec3i, @splat(2)));
+				const newMin = oldCenter -% @divTrunc(rotated.extent(), @as(Vec3i, @splat(2)));
+				const newMax = newMin +% rotated.extent();
+
+				var checkX = newMin[0];
+				while (checkX < newMax[0]) : (checkX += 1) {
+					var checkY = newMin[1];
+					while (checkY < newMax[1]) : (checkY += 1) {
+						var checkZ = newMin[2];
+						while (checkZ < newMax[2]) : (checkZ += 1) {
+							const insideOld =
+								checkX >= oldSelection.minPos[0] and checkX < oldSelection.maxPos[0] and
+								checkY >= oldSelection.minPos[1] and checkY < oldSelection.maxPos[1] and
+								checkZ >= oldSelection.minPos[2] and checkZ < oldSelection.maxPos[2];
+							if (insideOld) continue;
+							const targetBlock = world.?.getBlock(checkX, checkY, checkZ) orelse return;
+							if (targetBlock != main.blocks.Block.air) return;
+						}
+					}
+				}
+
+				const oldMin = oldSelection.minPos;
+				const oldSize = oldSelection.maxPos -% oldSelection.minPos;
+				for (0..@intCast(oldSize[0])) |x| {
+					for (0..@intCast(oldSize[1])) |y| {
+						for (0..@intCast(oldSize[2])) |z| {
+							world.?.updateBlock(oldMin[0] + @as(i32, @intCast(x)), oldMin[1] + @as(i32, @intCast(y)), oldMin[2] + @as(i32, @intCast(z)), .{.typ = 0, .data = 0});
+						}
+					}
+				}
+				rotated.paste(newMin, .{.preserveVoid = true});
+
+				user.worldEditData.selectionPosition1 = newMin;
+				user.worldEditData.selectionPosition2 = newMax -% @as(Vec3i, @splat(1));
+				main.network.protocols.genericUpdate.sendWorldEditPos(user.conn, .selectedPos1, newMin);
+				main.network.protocols.genericUpdate.sendWorldEditPos(user.conn, .selectedPos2, newMax -% @as(Vec3i, @splat(1)));
+
+				if (buildUnionUndoBlueprint(original, oldMin, newMin, newMax, false)) |result| {
+					var undoValue = WorldEditData.History.Value.init(result.blueprint, result.pos, "rotate");
+					undoValue.preserveVoid = false;
+					user.worldEditData.undoHistory.push(undoValue);
+					user.worldEditData.redoHistory.clear();
+				}
+				break;
 			}
 		},
 	}
