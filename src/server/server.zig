@@ -690,6 +690,7 @@ fn init(name: []const u8, singlePlayerPort: ?u16, mode: ServerWorld.Mode) void {
 	users = .init(main.globalAllocator);
 	lastTime = main.timestamp();
 
+	main.systems.server.init();
 	main.entity.server.init();
 	main.items.Inventory.server.init();
 	main.sync.server.init();
@@ -742,6 +743,7 @@ fn deinit() void {
 	main.items.Inventory.server.deinit();
 	main.entity.server.deinit();
 	WeatherMap.deinit();
+	main.systems.server.deinit();
 
 	command.deinit();
 
@@ -1133,10 +1135,10 @@ fn processEditorRequest(request: EditorRequest) void {
 	}
 }
 
-fn update() void {
+fn update() void { // MARK: update()
 	if (!simulationPaused.load(.monotonic)) {
 		world.?.update();
-		main.entity.server.update();
+		main.systems.server.update();
 	}
 	stdin_handler.update();
 

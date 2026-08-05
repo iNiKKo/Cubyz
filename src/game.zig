@@ -551,6 +551,7 @@ pub const World = struct {
 
 		Player.super.deinit(.client);
 		main.entity.client.clear();
+		main.systems.client.clear();
 		self.itemDrops.deinit();
 		self.blockPalette.deinit();
 		self.itemPalette.deinit();

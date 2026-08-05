@@ -549,7 +549,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	gpu_performance_measuring.startQuery(.entity_rendering);
 
-	main.entity.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
+	main.systems.client.render(ambientLight, playerPos, main.lastDeltaTime.load(.monotonic));
 
 	if (msaaActive) c.glEnable(c.GL_SAMPLE_ALPHA_TO_COVERAGE);
 	itemdrop.ItemDropRenderer.renderItemDrops(ambientLight, playerPos);
@@ -784,7 +784,7 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 
 	itemdrop.ItemDropRenderer.renderDisplayItems(ambientLight, playerPos);
 
-	if (!main.gui.hideGui and !game.Player.editorMode.load(.monotonic)) main.entity.client.renderHud(ambientLight, playerPos);
+	if (!main.gui.hideGui and !game.Player.editorMode.load(.monotonic)) main.systems.client.renderHud(ambientLight, playerPos);
 
 	if (viewport.enabled) {
 		const dstY0: u31 = main.Window.height - (editorViewportY + lastOutputHeight);
@@ -2014,7 +2014,7 @@ pub const CascadedShadowMap = struct {
 		const maxFrameAge: u32 = 20;
 		const refreshNearFoliageShadowEveryFrame = settings.foliageSway and settings.foliageShadows;
 
-		const refreshNearPlayerShadowEveryFrame = main.entity.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
+		const refreshNearPlayerShadowEveryFrame = main.systems.systems.modelRenderer.client.hasNearbyPlayerShadowCaster(playerPos, cascadeFarDistances[0]);
 		const nowMilliseconds = main.timestamp().toMilliseconds();
 		const dynamicShadowRefreshDue = nowMilliseconds - lastDynamicShadowRefreshMilliseconds >= 16;
 
@@ -2099,7 +2099,7 @@ pub const CascadedShadowMap = struct {
 					c.glMultiDrawElementsIndirect(c.GL_TRIANGLES, c.GL_UNSIGNED_INT, @ptrFromInt(allocation.start * @sizeOf(chunk_meshing.IndirectData)), drawCallsEstimate, 0);
 				}
 
-				main.entity.systems.modelRenderer.client.renderShadows(&baseLightSpaceMatrices[i], playerPos);
+				main.systems.systems.modelRenderer.client.renderShadows(&baseLightSpaceMatrices[i], playerPos);
 			}
 
 			const deltaX: f32 = @floatCast(playerPos[0] - renderedPlayerPos[i][0]);

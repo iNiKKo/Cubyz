@@ -1141,7 +1141,7 @@ pub const ItemDropRenderer = struct {
 		const modelComponent = main.entity.components.@"cubyz:model".client.get(game.Player.id);
 
 		var modelMatrix: Mat4f = if (modelComponent) |component|
-			main.entity.systems.modelRenderer.client.firstPersonBodyRootMatrix(component, playerPos)
+			main.systems.systems.modelRenderer.client.firstPersonBodyRootMatrix(component, playerPos)
 		else
 			Mat4f.translation(@as(Vec3f, @floatCast(playerWorldPos - playerPos)) + Vec3f{ 0, 0, -0.9 });
 

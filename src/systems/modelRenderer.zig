@@ -524,7 +524,7 @@ pub const client = struct {
 		c.glUniform3fv(uniforms.remoteHandLightPositionRelative, 1, @ptrCast(&nearestRemoteLight.positionRelative));
 		c.glUniform3fv(uniforms.remoteHandLightColor, 1, @ptrCast(&nearestRemoteLight.color));
 
-		main.entity.systems.modelRenderer.client.nodeBuffer.beginRender();
+		main.systems.systems.modelRenderer.client.nodeBuffer.beginRender();
 
 		for (entity.components.@"cubyz:model".client.components.dense.items, entity.components.@"cubyz:model".client.components.denseToSparseIndex.items) |component, id| {
 			if (id == game.Player.id) continue;
@@ -589,7 +589,7 @@ pub const client = struct {
 			}
 		}
 
-		main.entity.systems.modelRenderer.client.nodeBuffer.endRender();
+		main.systems.systems.modelRenderer.client.nodeBuffer.endRender();
 	}
 };
 
