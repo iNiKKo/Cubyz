@@ -49,7 +49,7 @@ pub const client = struct {
 		cloudCoverageWorldSize: c_int,
 		cloudHeightRelative: c_int,
 		sunDirection: c_int,
-		isSunlight: c_int,
+		dayNightFactor: c_int,
 		shadowTransitionFade: c_int,
 		handLightPositionRelative: c_int,
 		handLightColor: c_int,
@@ -498,7 +498,7 @@ pub const client = struct {
 		c.glUniform1f(uniforms.cloudHeightRelative, renderer.clouds.cloudHeightRelative);
 		const sunDirection = game.world.?.dayTime.getShadowLightDirection();
 		c.glUniform3fv(uniforms.sunDirection, 1, @ptrCast(&sunDirection));
-		c.glUniform1i(uniforms.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
+		c.glUniform1f(uniforms.dayNightFactor, game.world.?.dayTime.dayNightFactor());
 		c.glUniform1f(uniforms.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());
 		c.glUniform3fv(uniforms.handLightPositionRelative, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightPositionRelative));
 		c.glUniform3fv(uniforms.handLightColor, 1, @ptrCast(&main.itemdrop.ItemDisplayManager.handLightColor));

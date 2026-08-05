@@ -674,7 +674,9 @@ pub const ConnectionManager = struct {
 	}
 
 	pub fn finishCurrentReceive(self: *ConnectionManager) void {
-		std.debug.assert(self.threadId != null and self.threadId.? == std.Thread.getCurrentId());
+		// Must NOT be called from the network thread itself - it waits for that thread's next
+		// broadcast() (see run()), so calling it from there would deadlock forever.
+		std.debug.assert(self.threadId == null or self.threadId.? != std.Thread.getCurrentId());
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		self.waitingToFinishReceive.wait(&self.mutex);
@@ -748,7 +750,16 @@ pub const ConnectionManager = struct {
 		var lastExternalPacketTime = lastTime;
 		while (self.running.load(.monotonic)) {
 			main.heap.GarbageCollection.syncPoint();
-			self.waitingToFinishReceive.broadcast();
+			{
+				// finishCurrentReceive() (called from a disconnecting client's Connection.deinit())
+				// locks self.mutex before waiting on this condition - broadcasting without holding
+				// the same mutex let this fire concurrently with a waiter's internal unlock/relock in
+				// Condition.wait, which could leave self.mutex double-unlocked and crash with
+				// "unreachable" in std.Io.Mutex.unlock() on disconnect.
+				self.mutex.lock();
+				defer self.mutex.unlock();
+				self.waitingToFinishReceive.broadcast();
+			}
 			var source: SocketAddress = undefined;
 			if (self.socket.receive(&self.receiveBuffer, 1, &source)) |data| {
 				self.onReceive(data, source);

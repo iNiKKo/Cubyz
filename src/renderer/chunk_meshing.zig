@@ -55,7 +55,7 @@ const UniformStruct = struct {
 	cloudCoverageWorldSize: c_int,
 	cloudHeightRelative: c_int,
 	sunDirection: c_int,
-	isSunlight: c_int,
+	dayNightFactor: c_int,
 	shadowDarkness: c_int,
 	shadowTransitionFade: c_int,
 
@@ -282,7 +282,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.lodDistance, main.settings.@"lod0.5Distance");
 
 	c.glUniform3f(locations.ambientLight, ambient[0], ambient[1], ambient[2]);
-	const weatherVisibility: f32 = if (main.game.world) |world| world.dayTime.weatherVisibility else 0.0;
+	const weatherVisibility: f32 = if (main.settings.weatherFog) (if (main.game.world) |world| world.dayTime.weatherVisibility else 0.0) else 0.0;
 
 	c.glUniform1f(locations.weatherShadowFade, std.math.clamp(weatherVisibility*1.1, 0.0, 0.9));
 
@@ -297,7 +297,7 @@ fn bindCommonUniforms(locations: *UniformStruct, ambient: Vec3f) void {
 	c.glUniform1f(locations.cloudHeightRelative, renderer.clouds.cloudHeightRelative);
 	const sunDirection = game.world.?.dayTime.getShadowLightDirection();
 	c.glUniform3fv(locations.sunDirection, 1, @ptrCast(&sunDirection));
-	c.glUniform1i(locations.isSunlight, @intFromBool(game.world.?.dayTime.isSunlight()));
+	c.glUniform1f(locations.dayNightFactor, game.world.?.dayTime.dayNightFactor());
 	c.glUniform1f(locations.shadowDarkness, main.settings.shadowDarkness);
 
 	c.glUniform1f(locations.shadowTransitionFade, game.world.?.dayTime.getShadowTransitionFade());

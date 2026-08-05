@@ -736,9 +736,11 @@ pub fn renderWorld(world: *World, ambientLight: Vec3f, skyColor: Vec3f, playerPo
 	const waterTime: f32 = @floatCast(@as(f64, @floatFromInt(elapsedNanoseconds)) * 1e-9);
 	c.glUniform1f(deferredUniforms.waterTime, waterTime);
 	{
-
-		const isSunlight = game.world.?.dayTime.isSunlight();
-		const tint: Vec3f = if (isSunlight) Vec3f{1.0, 0.9, 0.6} else Vec3f{0.9, 0.92, 0.95};
+		// A hard isSunlight() boolean pick here used to snap between the two tints right at the
+		// horizon crossing, right where god rays are most visible (sunrise/sunset) - smoothly
+		// blending via dayNightFactor() avoids the flicker.
+		const dayNightFactor = game.world.?.dayTime.dayNightFactor();
+		const tint = @as(Vec3f, @splat(1 - dayNightFactor))*Vec3f{0.9, 0.92, 0.95} + @as(Vec3f, @splat(dayNightFactor))*Vec3f{1.0, 0.9, 0.6};
 		c.glUniform3fv(deferredUniforms.godRayTint, 1, @ptrCast(&tint));
 	}
 
@@ -1259,7 +1261,10 @@ const GodRays = struct {
 
 		const sunScreenPos = projectDirection(viewProj, lightDir) orelse offScreenSentinel;
 
-		const moonDimming: f32 = if (game.world.?.dayTime.isSunlight()) 1.0 else 0.5;
+		// Smoothly blended via dayNightFactor() rather than a hard isSunlight() flip, which used to
+		// snap god-ray strength right at the horizon crossing - the exact moment god rays are most
+		// visible - and looked like a flicker.
+		const moonDimming: f32 = std.math.lerp(@as(f32, 0.5), @as(f32, 1.0), game.world.?.dayTime.dayNightFactor());
 
 		const centerDist = vec.length(sunScreenPos - Vec2f{0.5, 0.5});
 		const centerFadeInner: f32 = 0.15;
@@ -1716,7 +1721,11 @@ pub const Skybox = struct {
 			sunCloudAttenuation += (sunCloudTarget - sunCloudAttenuation)*smoothing;
 			moonCloudAttenuation += (moonCloudTarget - moonCloudAttenuation)*smoothing;
 			const weatherVisibility = game.world.?.dayTime.weatherVisibilityAtAltitude(playerPos[2]);
-			const celestialWeatherTarget: f32 = if (weatherVisibility > 0.001) 0.0 else 1.0;
+			// Continuous falloff instead of a hard >0.001 threshold - that hard cutoff snapping the
+			// sun/moon sprite's opacity target between 0 and 1 was most visible right at low sun
+			// angle (sunrise/sunset), where horizonFade() already makes the sprite faint, so the
+			// snap read as a flicker between "there" and "not there" instead of a smooth fade.
+			const celestialWeatherTarget: f32 = 1.0 - std.math.clamp(weatherVisibility/0.25, 0.0, 1.0);
 			celestialWeatherAttenuation += (celestialWeatherTarget - celestialWeatherAttenuation)*smoothing;
 
 			drawCelestial(sunDir*@as(Vec3f, @splat(celestialDist)), sunBasis.right, sunBasis.up, 19.0, Vec3f{1.0, 0.9, 0.6}, horizonFade(sunDir) * sunCloudAttenuation * celestialWeatherAttenuation, sunCloudAttenuation * celestialWeatherAttenuation);

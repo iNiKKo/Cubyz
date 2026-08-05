@@ -643,6 +643,7 @@ pub const World = struct {
 		dayTimeFraction: f32 = 0,
 
 		pub fn weatherVisibilityAtAltitude(self: *const DayTime, z: f64) f32 {
+			if (!main.settings.weatherFog) return 0.0;
 			return if (z > 6000.0) 0.0 else self.weatherVisibility;
 		}
 
@@ -677,6 +678,20 @@ pub const World = struct {
 
 		pub fn isSunlight(self: *DayTime) bool {
 			return self.getSunDirection()[2] >= 0;
+		}
+
+		/// Continuous 0 (full night) -> 1 (full day) factor, smoothed across a window around the
+		/// horizon crossing (sun elevation == 0). isSunlight()'s hard >= 0 boolean flip caused a
+		/// visible flicker at sunrise/sunset: shaders picking between shadowAmbientFloorDay/Night
+		/// (shadow.glsl) based on that boolean would snap between two quite different values on
+		/// every frame where sun elevation oscillated across zero near the horizon. This gives
+		/// those shaders a smooth ramp to use instead, so the ambient floor eases across the
+		/// transition rather than popping.
+		pub fn dayNightFactor(self: *DayTime) f32 {
+			const elevation = self.getSunDirection()[2];
+			const windowHalfWidth: f32 = 0.06;
+			const t = std.math.clamp((elevation + windowHalfWidth)/(2*windowHalfWidth), 0.0, 1.0);
+			return t*t*(3.0 - 2.0*t);
 		}
 
 		pub fn getShadowTransitionFade(self: *DayTime) f32 {
@@ -830,7 +845,7 @@ pub const World = struct {
 				else => 96,
 			};
 			self.weatherFogRange += (weatherFogRangeTarget - self.weatherFogRange)*t;
-			if (self.weatherVisibility > 0.01) {
+			if (main.settings.weatherFog and self.weatherVisibility > 0.01) {
 				const hazeStrength = std.math.clamp(self.weatherVisibility * 0.92, 0.0, 0.82);
 				self.fog.fogColor += (self.weatherHazeColor - self.fog.fogColor)*@as(Vec3f, @splat(hazeStrength));
 				self.fog.skyColor += (self.weatherSkyHazeColor - self.fog.skyColor)*@as(Vec3f, @splat(hazeStrength * 0.72));

@@ -82,6 +82,8 @@ pub var godRayIntensity: f32 = 1.0;
 
 pub var rain: bool = false;
 
+pub var weatherFog: bool = true;
+
 pub var vsync: bool = true;
 
 pub var playerName: []const u8 = "";

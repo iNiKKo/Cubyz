@@ -187,7 +187,7 @@ void main() {
 		float backLight = clamp(-NdotL, 0.0, 1.0);
 		float sunLowness = 1.0 - clamp(abs(lightDir.z), 0.0, 1.0);
 		float sssTranslucency = backLight * sunLowness * 0.18;
-		float sssIntensity = isSunlight ? 1.0 : 0.1;
+		float sssIntensity = mix(0.1, 1.0, dayNightFactor);
 
 		float rootAO = opaqueInLod == 0 ? mix(0.70, 1.0, smoothstep(0.0, 0.4, uv.y)) : 1.0;
 

@@ -127,6 +127,11 @@ fn rainCallback(newValue: bool) void {
 	settings.save();
 }
 
+fn weatherFogCallback(newValue: bool) void {
+	settings.weatherFog = newValue;
+	settings.save();
+}
+
 fn shadowDarknessFormatter(allocator: main.heap.NeverFailingAllocator, value: f32) []const u8 {
 	return allocator.print("#ffffffShadow Darkness: {d:.0}%", .{value * 100.0});
 }
@@ -160,6 +165,7 @@ pub fn onOpen() void {
 	list.add(CheckBox.init(.{0, 0}, 200, "God Rays", settings.godRays, &godRaysCallback));
 	list.add(ContinuousSlider.init(.{0, 0}, 200, 0.0, 3.0, settings.godRayIntensity, &godRayIntensityCallback, &godRayIntensityFormatter));
 	list.add(CheckBox.init(.{0, 0}, 200, "Rain", settings.rain, &rainCallback));
+	list.add(CheckBox.init(.{0, 0}, 200, "Weather Fog", settings.weatherFog, &weatherFogCallback));
 	list.finish(.center);
 	window.rootComponent = list.toComponent();
 	window.contentSize = window.rootComponent.?.pos() + window.rootComponent.?.size() + @as(Vec2f, @splat(padding));

@@ -77,7 +77,14 @@ const Material = struct {
 		};
 		self.textureRoughness = @max(0, zon.get(f32, "textureRoughness") orelse 1.0);
 		self.loadColorsFromTexture(allocator, colorTexturePath, colorReplacementTexturePath) catch |err| {
-			std.log.err("Could not load material colors. Tried '{s}' and '{s}': {s}", .{colorTexturePath, colorReplacementTexturePath, @errorName(err)});
+			// Missing colorTexture is expected for mods that predate the palette-texture format
+			// (they never had this attribute to begin with) - not a broken/corrupt asset, so it
+			// doesn't warrant an error-level log; other failures (bad image, wrong size, ...) still do.
+			if (err == error.@"Missing attribute 'colorTexture'") {
+				std.log.warn("Could not load material colors. Tried '{s}' and '{s}': {s}", .{colorTexturePath, colorReplacementTexturePath, @errorName(err)});
+			} else {
+				std.log.err("Could not load material colors. Tried '{s}' and '{s}': {s}", .{colorTexturePath, colorReplacementTexturePath, @errorName(err)});
+			}
 			const defaultImage = graphics.Image.defaultImage;
 			self.colorPalette = allocator.alloc(Color, defaultImage.width);
 			for (0..defaultImage.width) |x| {

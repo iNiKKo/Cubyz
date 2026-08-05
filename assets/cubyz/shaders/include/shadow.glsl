@@ -10,7 +10,10 @@ layout(location = 47) uniform float csmCascadeFar[3];
 layout(location = 50) uniform vec3 csmTexelSize;
 
 layout(location = 33) uniform bool shadowsEnabled;
-layout(location = 38) uniform bool isSunlight;
+// 0 = full night, 1 = full day, smoothly ramped across the horizon crossing - see
+// DayTime.dayNightFactor() (src/game.zig). Replaces a hard isSunlight boolean that used to snap
+// shadowAmbientFloorDay/Night instantly and caused a visible flicker right at sunrise/sunset.
+layout(location = 38) uniform float dayNightFactor;
 layout(location = 37) uniform vec3 sunDirection;
 layout(location = 39) uniform float shadowDarkness;
 
@@ -99,7 +102,7 @@ float sampleSunShadow(vec3 worldPosRelative, vec3 normal, float cameraDepth, boo
 	if (!shadowsEnabled) return 1.0;
 
 	vec3 lightDir = sunDirection;
-	float baseAmbientFloor = isSunlight ? shadowAmbientFloorDay : shadowAmbientFloorNight;
+	float baseAmbientFloor = mix(shadowAmbientFloorNight, shadowAmbientFloorDay, dayNightFactor);
 	float shadowAmbientFloor = (shadowDarkness <= 0.5)
 		? mix(1.0, baseAmbientFloor, shadowDarkness * 2.0)
 		: mix(baseAmbientFloor, baseAmbientFloor * 0.2, (shadowDarkness - 0.5) * 2.0);

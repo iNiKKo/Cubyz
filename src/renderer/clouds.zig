@@ -468,24 +468,44 @@ fn computeCloudCoverage(outCoverage: []u8, gridDim: u32, originCellX: i64, origi
 
 pub fn getCloudAttenuationForDirection(playerPos: Vec3d, dir: Vec3f) f32 {
 	if (!settings.clouds) return 1.0;
-	if (dir[2] <= 0.001) return 1.0;
+	// Below this the ray-to-cloud-layer hit point shoots off to a huge/unstable distance (t = relZ/
+	// dir[2] blows up as dir[2] -> 0), so below the window there's no meaningful hit test and this
+	// returns 1.0 (no attenuation) same as before. But the cutoff used to be a hard dir[2] <= 0.001
+	// step, which flickered the sun/moon sprite dark/bright every frame right at low angle (elevation
+	// ticking above/below 0.001 across the day cycle) - now it's a smooth fade over a small window
+	// instead of an instant snap.
+	const lowAngleWindow: f32 = 0.05;
+	const lowAngleFade = std.math.clamp(dir[2]/lowAngleWindow, 0.0, 1.0);
+	if (lowAngleFade <= 0.0) return 1.0;
 	var atten: f32 = 1.0;
+
+	// At this range of dayTime (roughly sunrise/sunset, when the sun/moon sits at a very shallow
+	// angle) the flat ray-to-cloud-layer hit test below becomes far too easy to hit any cloud cover
+	// at all, over-darkening the sun/moon sprite - disabled here, with a soft-edged fade rather than
+	// a hard cutoff so the transition in/out of this range doesn't itself introduce a new snap.
+	const duskDawnFadeWidth = 150;
+	const duskDawnFade = if (game.world) |world| blk: {
+		const t = world.dayTime.dayTime;
+		const distFromWindow: i64 = if (t < 2600) 2600 - t else if (t > 3200) t - 3200 else 0;
+		break :blk std.math.clamp(@as(f32, @floatFromInt(distFromWindow))/@as(f32, @floatFromInt(duskDawnFadeWidth)), 0.0, 1.0);
+	} else 1.0;
+	if (duskDawnFade <= 0.0) return 1.0;
 
 	const relZ = cloudBaseHeight - playerPos[2];
 	if (relZ > 0) {
-		const t = relZ / dir[2];
+		const t = relZ / @max(dir[2], lowAngleWindow);
 
 		const hitX = playerPos[0] + @as(f64, dir[0])*@as(f64, t);
 		const hitY = playerPos[1] + @as(f64, dir[1])*@as(f64, t);
 
 		if (sampleCoverage(hitX, hitY)) {
-			atten *= 0.30;
+			atten *= std.math.lerp(1.0, std.math.lerp(1.0, 0.30, lowAngleFade), duskDawnFade);
 		}
 		const weatherSnapshot = if (game.world) |world| world.weatherGrid.snapshot() else game.WeatherGrid.Snapshot{};
 		const weather = game.WeatherGrid.sampleSnapshot(weatherSnapshot, hitX, hitY);
 		if (weather.precipitation > 0.01) {
 
-			atten *= std.math.lerp(1.0, 0.30, weather.precipitation);
+			atten *= std.math.lerp(1.0, std.math.lerp(1.0, std.math.lerp(1.0, 0.30, weather.precipitation), lowAngleFade), duskDawnFade);
 		}
 	}
 	return atten;
