@@ -14,6 +14,7 @@ const Connection = network.Connection;
 const ConnectionManager = network.ConnectionManager;
 const vec = @import("vec.zig");
 const Vec2f = vec.Vec2f;
+const Vec2d = vec.Vec2d;
 const Vec2i = vec.Vec2i;
 const Vec3i = vec.Vec3i;
 const Vec3f = vec.Vec3f;
@@ -108,6 +109,8 @@ pub const Player = struct {
 	pub var onGround: bool = false;
 	pub var jumpCooldown: f64 = 0;
 	pub var jumpCoyote: f64 = 0;
+	/// Horizontal distance walked since the last footstep sound - see footstep triggering in update().
+	pub var footstepDistanceAccumulator: f64 = 0;
 	pub const jumpCooldownConstant = 0.3;
 	pub const jumpCoyoteTimeConstant = 0.100;
 
@@ -1088,6 +1091,11 @@ fn updateDevCamera(deltaTime: f64) void {
 	devCameraPos += moveDir*@as(Vec3d, @splat(deltaTime));
 }
 
+/// Tracks Player.super.pos across ticks purely for footstep distance accumulation - see update()'s
+/// footstep block. Initialized to the player's actual position on first use so the very first tick
+/// after spawn/teleport doesn't register a huge bogus "step" from a stale (0,0,0) default.
+var prevPlayerPosForFootsteps: ?Vec3d = null;
+
 pub fn update(deltaTime: f64) void {
 	if (world.?.shouldRestart.load(.acquire)) {
 		restart();
@@ -1322,6 +1330,37 @@ pub fn update(deltaTime: f64) void {
 		Player.eye.pos = @max(Player.eye.box.min, @min(Player.eye.pos, Player.eye.box.max));
 		Player.eye.coyote -= deltaTime;
 		Player.jumpCoyote -= deltaTime;
+	}
+
+	// Footsteps: accumulate horizontal distance walked while grounded, and fire a sound every
+	// strideLength blocks - the standard "distance-based" footstep cadence rather than a fixed
+	// timer, so footstep rate naturally follows movement speed. Reset the accumulator (not just
+	// skipped) whenever airborne so landing doesn't immediately trigger a step from leftover
+	// pre-jump distance.
+	{
+		const prevPos = prevPlayerPosForFootsteps orelse Player.super.pos;
+		const horizontalDelta = Vec2d{Player.super.pos[0] - prevPos[0], Player.super.pos[1] - prevPos[1]};
+		prevPlayerPosForFootsteps = Player.super.pos;
+		if (Player.onGround and !Player.isFlying.load(.monotonic) and !Player.isGhost.load(.monotonic)) {
+			Player.footstepDistanceAccumulator += vec.length(horizontalDelta);
+			const strideLength = 1.6;
+			if (Player.footstepDistanceAccumulator >= strideLength) {
+				Player.footstepDistanceAccumulator = @mod(Player.footstepDistanceAccumulator, strideLength);
+				const feetPos = Player.super.pos;
+				// Sound varies with the block underfoot via Block.soundMaterial() (src/blocks.zig,
+				// derived from the block's existing .tags) e.g. "cubyz:footstep/stone" vs
+				// "cubyz:footstep/wood" - queries one block below the feet (standing *on* it, not in
+				// it). Falls back to the generic material id if there's no block there (e.g. over a
+				// liquid surface or an unloaded chunk edge).
+				const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
+				const material = if (footBlock) |block| block.soundMaterial() else "generic";
+				const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
+				defer main.stackAllocator.free(soundId);
+				main.audio.playSoundVariant(soundId, 5, feetPos, 0.6, 12.0);
+			}
+		} else {
+			Player.footstepDistanceAccumulator = 0;
+		}
 	}
 
 	const time = main.timestamp();

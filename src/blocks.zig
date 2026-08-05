@@ -493,6 +493,35 @@ pub const Block = packed struct(u32) {
 		return std.mem.containsAtLeastScalar(Tag, self.tags(), 1, tag);
 	}
 
+	/// Best-effort "what does this sound like" grouping for footstep/break/place sound variants
+	/// (main.audio's SFX triggers append this to a sound id, e.g. "cubyz:footstep_wood") - derived
+	/// from the existing block .tags rather than a new dedicated field, since tags are already
+	/// widely used across assets/cubyz/blocks/*.zig.zon for exactly this kind of categorization
+	/// (.wood, .stone, .leaf, .mushroom, ...) and adding a whole separate soundMaterial attribute to
+	/// every block file would duplicate information that's mostly already there. Checked in priority
+	/// order (most specific first) since a block can carry multiple tags (e.g. logs are
+	/// .choppable+.wood+.log). Tags are dynamic/mod-definable (see tag.zig) so this only recognizes
+	/// tag *names* the base game already uses - falls back to "generic" for anything else (including
+	/// mod-added blocks with no matching tag), which is exactly today's single-generic-sound behavior.
+	pub fn soundMaterial(self: Block) []const u8 {
+		const knownTags = [_]struct {name: []const u8, material: []const u8}{
+			.{.name = "wood", .material = "wood"},
+			.{.name = "log", .material = "wood"},
+			.{.name = "leaf", .material = "leaves"},
+			.{.name = "mushroom", .material = "mushroom"},
+			.{.name = "stone", .material = "stone"},
+			.{.name = "mineable", .material = "stone"},
+			.{.name = "diggable", .material = "dirt"},
+			.{.name = "sliceable", .material = "plant"},
+			.{.name = "cuttable", .material = "plant"},
+		};
+		for (knownTags) |entry| {
+			const tag = Tag.get(entry.name) orelse continue;
+			if (self.hasTag(tag)) return entry.material;
+		}
+		return "generic";
+	}
+
 	pub inline fn light(self: Block) u32 {
 		return _light[self.typ];
 	}

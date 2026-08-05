@@ -208,6 +208,199 @@ const MusicLoadTask = struct {
 	}
 };
 
+// MARK: Sound effects
+//
+// General-purpose positional one-shot SFX, layered on top of AudioData's existing cache/decode
+// machinery (same lazy-load-via-threadPool pattern as music, just pointed at assets/<addon>/sounds/
+// instead of assets/<addon>/music/). Unlike music there is no single "active track" - many sound
+// effects can be playing at once (footsteps, block breaks, ...), so this keeps a small fixed-size
+// pool of concurrently-playing instances instead of one global `currentMusic`-style slot.
+//
+// Positional attenuation is linear distance falloff only for now (no stereo panning) - AudioData
+// always upmixes mono source files to interleaved stereo at load time (see AudioData.init), so doing
+// real per-instance panning would need the original mono signal kept separately. Fine for a first
+// pass; real panning can be added later once actual SFX assets exist to tune it against.
+//
+// Trigger call sites (block break/place, footsteps, ...) are expected to pass ids like
+// "cubyz:block_break/stone" or "cubyz:mob/moffalo/hurt" - see playSound's doc comment. Until real
+// files exist at those paths, AudioData.init's existing missing-file fallback (silence, logged once
+// via the same err path music already uses) makes every call here a safe no-op.
+
+// 32 buckets x 8 slots = 256 cached sounds - each distinct "<id>_NNN" variant is its own cache entry
+// (playSoundVariant picks a different suffix per call), so the real working set is (number of sound
+// families) x (variants per family), not just the number of families - a too-small cache here meant
+// almost every play was a cache miss (silent this call, loads in the background for next time),
+// which read as "sounds are quiet/don't play the first time" / "no sound until the block breaks".
+var soundCache: utils.Cache(AudioData, 32, 8, AudioData.deinit) = .{};
+var soundTaskMutex: main.utils.Mutex = .{};
+var activeSoundTasks: main.List([]const u8) = .empty;
+
+fn findSound(soundId: []const u8) ?[]const f32 {
+	{
+		soundTaskMutex.lock();
+		defer soundTaskMutex.unlock();
+		if (soundCache.find(AudioData{.audioId = soundId}, null)) |soundData| {
+			return soundData.data;
+		}
+		for (activeSoundTasks.items) |taskId| {
+			if (std.mem.eql(u8, soundId, taskId)) return null;
+		}
+	}
+	SoundLoadTask.schedule(soundId);
+	return null;
+}
+
+const SoundLoadTask = struct {
+	soundId: []const u8,
+
+	const vtable = utils.ThreadPool.VTable{
+		.getPriority = main.meta.castFunctionSelfToAnyopaque(getPriority),
+		.isStillNeeded = main.meta.castFunctionSelfToAnyopaque(isStillNeeded),
+		.run = main.meta.castFunctionSelfToAnyopaque(run),
+		.clean = main.meta.castFunctionSelfToAnyopaque(clean),
+		.taskType = .misc,
+	};
+
+	pub fn schedule(soundId: []const u8) void {
+		const task = main.globalAllocator.create(SoundLoadTask);
+		task.* = SoundLoadTask{.soundId = main.globalAllocator.dupe(u8, soundId)};
+		main.threadPool.addTask(task, &vtable);
+		soundTaskMutex.lock();
+		defer soundTaskMutex.unlock();
+		activeSoundTasks.append(main.globalAllocator, task.soundId);
+	}
+
+	pub fn getPriority(_: *SoundLoadTask) f32 {
+		return std.math.floatMax(f32);
+	}
+
+	pub fn isStillNeeded(_: *SoundLoadTask) bool {
+		return true;
+	}
+
+	pub fn run(self: *SoundLoadTask) void {
+		defer self.clean();
+		const data = AudioData.init(self.soundId, "sounds");
+		const hasOld = soundCache.addToCache(data, data.hashCode());
+		if (hasOld) |old| old.deinit();
+	}
+
+	pub fn clean(self: *SoundLoadTask) void {
+		soundTaskMutex.lock();
+		var index: usize = 0;
+		while (index < activeSoundTasks.items.len) : (index += 1) {
+			if (activeSoundTasks.items[index].ptr == self.soundId.ptr) break;
+		}
+		_ = activeSoundTasks.swapRemove(index);
+		soundTaskMutex.unlock();
+		main.globalAllocator.free(self.soundId);
+		main.globalAllocator.destroy(self);
+	}
+};
+
+const maxConcurrentSounds = 32;
+/// Sounds fall off to silence at this many blocks away, scaled by each call's `maxDistance` param.
+const defaultSoundMaxDistance: f32 = 24.0;
+
+const PlayingSound = struct {
+	buffer: []const f32 = &.{},
+	pos: usize = 0,
+	volume: f32 = 0,
+	/// null = non-positional (always full volume, e.g. UI sounds) - see playSoundFlat.
+	worldPos: ?main.vec.Vec3d = null,
+	maxDistance: f32 = defaultSoundMaxDistance,
+	active: bool = false,
+};
+
+var playingSounds: [maxConcurrentSounds]PlayingSound = @splat(.{});
+var soundMutex: main.utils.Mutex = .{};
+
+fn startSoundInstance(buffer: []const f32, volume: f32, worldPos: ?main.vec.Vec3d, maxDistance: f32) void {
+	soundMutex.lock();
+	defer soundMutex.unlock();
+	for (&playingSounds) |*slot| {
+		if (!slot.active) {
+			slot.* = .{.buffer = buffer, .pos = 0, .volume = volume, .worldPos = worldPos, .maxDistance = maxDistance, .active = true};
+			return;
+		}
+	}
+	// Pool exhausted - drop the new sound rather than cutting off one already playing.
+}
+
+/// Plays a one-shot sound effect at a world position, attenuated by distance from the listener
+/// (the local player's eye position) down to silence at `maxDistance` blocks. `soundId` follows the
+/// same "addon:file_name" convention as music ids, loaded from assets/<addon>/sounds/<file_name>.ogg
+/// (or the server-assets override path) - see AudioData.open_vorbis_file_by_id. Safe to call for a
+/// sound file that doesn't exist yet: it resolves to silence (logged once) rather than erroring,
+/// same fallback behavior main.audio's music loading already has.
+pub fn playSound(soundId: []const u8, worldPos: main.vec.Vec3d, volume: f32, maxDistance: f32) void {
+	const buffer = findSound(soundId) orelse return;
+	if (buffer.len == 0) return;
+	startSoundInstance(buffer, volume, worldPos, maxDistance);
+}
+
+/// Plays a one-shot sound effect with no positional attenuation (always full volume) - for UI clicks
+/// and other sounds that aren't tied to a place in the world.
+pub fn playSoundFlat(soundId: []const u8, volume: f32) void {
+	const buffer = findSound(soundId) orelse return;
+	if (buffer.len == 0) return;
+	startSoundInstance(buffer, volume, null, 0);
+}
+
+/// Picks a random variant N in [0, variantCount) and plays "<baseId>_NNN" (zero-padded to 3 digits,
+/// matching Kenney's own asset naming e.g. footstep_wood_000.ogg..footstep_wood_004.ogg) so the same
+/// trigger doesn't play the exact same sample every time - avoids the "on loop" repetitiveness of a
+/// single fixed sound. variantCount must be >= 1; asserts otherwise since 0 would mean "no sound
+/// exists at all", which should be expressed by not calling this rather than passing 0.
+pub fn playSoundVariant(baseId: []const u8, variantCount: u32, worldPos: main.vec.Vec3d, volume: f32, maxDistance: f32) void {
+	std.debug.assert(variantCount >= 1);
+	const variant = main.random.nextIntBounded(u32, &main.seed, variantCount);
+	const soundId = main.stackAllocator.print("{s}_{:0>3}", .{baseId, variant});
+	defer main.stackAllocator.free(soundId);
+	playSound(soundId, worldPos, volume, maxDistance);
+}
+
+/// Non-positional counterpart to playSoundVariant - see its doc comment.
+pub fn playSoundVariantFlat(baseId: []const u8, variantCount: u32, volume: f32) void {
+	std.debug.assert(variantCount >= 1);
+	const variant = main.random.nextIntBounded(u32, &main.seed, variantCount);
+	const soundId = main.stackAllocator.print("{s}_{:0>3}", .{baseId, variant});
+	defer main.stackAllocator.free(soundId);
+	playSoundFlat(soundId, volume);
+}
+
+fn mixSoundEffects(buffer: []f32) void {
+	soundMutex.lock();
+	defer soundMutex.unlock();
+	const listenerPos = if (main.game.world != null) main.game.Player.getEyePosBlocking() else main.vec.Vec3d{0, 0, 0};
+	for (&playingSounds) |*slot| {
+		if (!slot.active) continue;
+
+		var distanceGain: f32 = 1.0;
+		if (slot.worldPos) |soundPos| {
+			const diff = soundPos - listenerPos;
+			const dist: f32 = @floatCast(main.vec.length(diff));
+			if (dist >= slot.maxDistance) {
+				slot.active = false;
+				continue;
+			}
+			distanceGain = std.math.clamp(1.0 - dist/slot.maxDistance, 0.0, 1.0);
+		}
+		const amplitude = slot.volume*distanceGain*main.settings.soundVolume;
+
+		var i: usize = 0;
+		while (i < buffer.len) : (i += 2) {
+			if (slot.pos + 1 >= slot.buffer.len) {
+				slot.active = false;
+				break;
+			}
+			buffer[i] += amplitude*slot.buffer[slot.pos];
+			buffer[i + 1] += amplitude*slot.buffer[slot.pos + 1];
+			slot.pos += 2;
+		}
+	}
+}
+
 var device: c.ma_device = undefined;
 
 var sampleRate: f32 = 0;
@@ -240,6 +433,10 @@ pub fn deinit() void {
 	preferredMusic.len = 0;
 	main.globalAllocator.free(activeMusicId);
 	activeMusicId.len = 0;
+
+	main.threadPool.closeAllTasksOfType(&SoundLoadTask.vtable);
+	soundCache.clear();
+	activeSoundTasks.deinit(main.globalAllocator);
 }
 
 const currentMusic = struct {
@@ -390,4 +587,5 @@ fn miniaudioCallback(
 	@memset(buffer, 0);
 	mixMusic(buffer);
 	mixThunder(buffer);
+	mixSoundEffects(buffer);
 }

@@ -1627,6 +1627,27 @@ pub const Command = struct {
 					main.network.protocols.blockUpdate.send(ctx.user.?.conn, &.{.init(self.pos, actualBlock, writer.data.items)});
 					return error.serverFailure;
 				}
+			} else {
+				// Client-side only: by this point the change is actually going through (the server-side
+				// branch above is the one that can still reject it with error.serverFailure). Sound id
+				// is picked per Block.soundMaterial() (src/blocks.zig, derived from the block's existing
+				// .tags) e.g. "cubyz:block_break/wood" - positional at the changed block's center, safe
+				// no-op via AudioData's missing-file fallback until matching .ogg files actually exist
+				// under assets/cubyz/sounds/block_break/ and block_place/.
+				const soundPos = Vec3d{
+					@as(f64, @floatFromInt(self.pos[0])) + 0.5,
+					@as(f64, @floatFromInt(self.pos[1])) + 0.5,
+					@as(f64, @floatFromInt(self.pos[2])) + 0.5,
+				};
+				if (self.newBlock.typ == 0 and self.oldBlock.typ != 0) {
+					const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{self.oldBlock.soundMaterial()});
+					defer main.stackAllocator.free(soundId);
+					main.audio.playSoundVariant(soundId, 5, soundPos, 1.0, 16.0);
+				} else if (self.oldBlock.typ == 0 and self.newBlock.typ != 0) {
+					const soundId = main.stackAllocator.print("cubyz:block_place/{s}", .{self.newBlock.soundMaterial()});
+					defer main.stackAllocator.free(soundId);
+					main.audio.playSoundVariant(soundId, 5, soundPos, 1.0, 16.0);
+				}
 			}
 
 			const handItem = self.source.inv.getItem(self.source.slot);

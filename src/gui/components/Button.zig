@@ -139,6 +139,9 @@ pub fn mainButtonReleased(self: *Button, mousePosition: Vec2f) void {
 	if (self.pressed) {
 		self.pressed = false;
 		if (GuiComponent.contains(self.pos, self.size, mousePosition)) {
+			// Every button click across every menu funnels through here - single fixed click sound
+			// (user picked this exact variant, click_000.ogg, over the other 4 options).
+			main.audio.playSoundFlat("cubyz:ui/click_000", 0.5);
 			self.onAction.run();
 		}
 	}

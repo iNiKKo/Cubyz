@@ -2646,6 +2646,20 @@ pub const MeshSelection = struct {
 					while (currentSwingProgress > currentSwingTime) {
 						currentSwingProgress -= currentSwingTime;
 						currentBlockProgress += damage*currentSwingTime/swingTime/block.blockHealth();
+						// One iteration here = one swing actually landing on the block (not yet
+						// breaking it - that's the separate "block destroyed" sound in sync.zig's
+						// UpdateBlock.run()) - without this, mining a multi-hit block like stone was
+						// completely silent for however long it took to break.
+						{
+							const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{block.soundMaterial()});
+							defer main.stackAllocator.free(soundId);
+							const hitPos = Vec3d{
+								@as(f64, @floatFromInt(selectedPos[0])) + 0.5,
+								@as(f64, @floatFromInt(selectedPos[1])) + 0.5,
+								@as(f64, @floatFromInt(selectedPos[2])) + 0.5,
+							};
+							main.audio.playSoundVariant(soundId, 5, hitPos, 0.4, 16.0);
+						}
 						if (currentBlockProgress > 0.9999) break;
 						const swings = @ceil(block.blockHealth()/damage);
 						const damagePerSwing = block.blockHealth()/swings;
