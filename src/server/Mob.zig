@@ -24,14 +24,21 @@ pub const MobType = enum(u8) {
 
 	pub fn maxHealth(self: MobType) f32 {
 		return switch (self) {
-			.moffalo => 10,
+			.moffalo => 8,
 		};
 	}
 
-	/// Item id dropped on death (currently one stack of a fixed amount; no per-type variance yet).
+	/// Item id dropped on death.
 	pub fn dropItemId(self: MobType) []const u8 {
 		return switch (self) {
 			.moffalo => "cubyz:raw_meat",
+		};
+	}
+
+	/// Inclusive [min, max] range for how many of dropItemId() drop on death.
+	pub fn dropAmountRange(self: MobType) struct {min: u16, max: u16} {
+		return switch (self) {
+			.moffalo => .{.min = 3, .max = 4},
 		};
 	}
 };

@@ -774,19 +774,24 @@ fn updateSurvivalNeeds(user: *User) void {
 	const player = user.player();
 	if (user.gamemode.raw == .survival) {
 		const horizontalSpeed = @sqrt(player.vel[0]*player.vel[0] + player.vel[1]*player.vel[1]);
-		const hungerInterval: f32 = if (horizontalSpeed >= 6.0 and @abs(player.vel[2]) >= 0.5) 30.0 else if (horizontalSpeed >= 6.0) 60.0 else 180.0;
+		// *1.25 so each hunger point takes 25% longer to lose (a 25% slower depletion rate).
+		const baseHungerInterval: f32 = if (horizontalSpeed >= 6.0 and @abs(player.vel[2]) >= 0.5) 30.0 else if (horizontalSpeed >= 6.0) 60.0 else 180.0;
+		const hungerInterval: f32 = baseHungerInterval*1.25;
 		user.hungerExhaustion += 1.0/(hungerInterval*@as(f32, @floatFromInt(updatesPerSec)));
 		while (user.hungerExhaustion >= 1.0) {
 			user.hungerExhaustion -= 1.0;
 			player.hunger = @max(0, player.hunger - 1);
 		}
 
+		// Passive regen: 0.5 HP every 2s (0.25 HP/sec, down from 1 HP/sec) at a 1-hunger-per-HP
+		// cost - healing from near-death to full now costs most of a full hunger bar and takes
+		// ~32s instead of ~8s, so it's a real trade-off against food rather than a rounding error.
 		if (player.health < player.maxHealth and player.energy >= player.maxEnergy and player.hunger >= 1.5) {
 			user.healingTime += 1.0/@as(f32, @floatFromInt(updatesPerSec));
-			if (user.healingTime >= 1.5) {
+			if (user.healingTime >= 2.0) {
 				user.healingTime = 0;
-				player.health = @min(player.maxHealth, player.health + 1.5);
-				player.hunger = @max(0, player.hunger - 1.5);
+				player.health = @min(player.maxHealth, player.health + 0.5);
+				player.hunger = @max(0, player.hunger - 0.5);
 			}
 		} else {
 			user.healingTime = 0;

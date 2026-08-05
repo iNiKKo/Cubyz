@@ -198,7 +198,9 @@ pub fn damage(self: *@This(), targetId: main.entity.Entity, amount: f32) bool {
 
 		const dropItemId = mob.mobType.dropItemId();
 		if (main.items.BaseItemIndex.fromId(dropItemId)) |baseItem| {
-			const stack = main.items.ItemStack{.item = .{.baseItem = baseItem}, .amount = 1};
+			const range = mob.mobType.dropAmountRange();
+			const dropAmount = range.min + random.nextIntBounded(u16, &main.seed, range.max - range.min + 1);
+			const stack = main.items.ItemStack{.item = .{.baseItem = baseItem}, .amount = dropAmount};
 			self.world.drop(stack, mob.pos, .{0, 0, 1}, 2.0);
 		} else {
 			std.log.err("Unknown drop item id {s} for mob type", .{dropItemId});
