@@ -843,10 +843,33 @@ pub const genericUpdate = struct {
 					.selectedPos1 => {
 						// A new selection anchor invalidates any select-similar block-type mask from
 						// a previous selection — otherwise stale masks silently filter out unrelated
-						// later selections in delete/copy/move.
+						// later selections in delete/copy/move. Also (re)establishes the rotation
+						// pivot for this selection — see WorldEditData.rotationPivot.
 						if (conn.user.?.worldEditData.mask) |oldMask| oldMask.deinit(main.globalAllocator);
 						conn.user.?.worldEditData.mask = null;
 						conn.user.?.worldEditData.selectionPosition1 = pos.?;
+						conn.user.?.worldEditData.rotationPivot = pos.?;
+
+						// If the clicked block belongs to a previously-placed structure, reselect its
+						// exact footprint (not just this one block) so it can be moved/deleted as a
+						// whole — mirrors how /selectsimilar sets both corners plus a mask. Both
+						// corners must be overridden to the structure's own bounding box: the clicked
+						// block is usually somewhere *inside* the structure, not at its min corner, so
+						// leaving selectionPosition1 as the clicked block would truncate the box.
+						if (main.server.terrain.placed_structures.find(pos.?)) |structure| {
+							const selectionPosition1 = structure.min;
+							const selectionPosition2 = structure.max -% @as(Vec3i, @splat(1));
+							conn.user.?.worldEditData.selectionPosition1 = selectionPosition1;
+							conn.user.?.worldEditData.selectionPosition2 = selectionPosition2;
+
+							const absolutePositions = main.server.terrain.placed_structures.absolutePositions(main.stackAllocator, structure);
+							defer main.stackAllocator.free(absolutePositions);
+							conn.user.?.worldEditData.mask = main.blueprint.Mask.fromPositionSet(main.globalAllocator, absolutePositions);
+
+							sendWorldEditPos(conn, .selectedPos1, selectionPosition1);
+
+							sendWorldEditPos(conn, .selectedPos2, selectionPosition2);
+						}
 					},
 					.selectedPos2 => conn.user.?.worldEditData.selectionPosition2 = pos.?,
 					.clear => {
@@ -854,6 +877,7 @@ pub const genericUpdate = struct {
 						conn.user.?.worldEditData.mask = null;
 						conn.user.?.worldEditData.selectionPosition1 = null;
 						conn.user.?.worldEditData.selectionPosition2 = null;
+						conn.user.?.worldEditData.rotationPivot = null;
 					},
 				}
 			},

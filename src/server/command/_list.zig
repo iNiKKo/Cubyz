@@ -34,6 +34,7 @@ pub const delete = @import("worldedit/delete.zig");
 pub const copy = @import("worldedit/copy.zig");
 pub const paste = @import("worldedit/paste.zig");
 pub const pasteabove = @import("worldedit/pasteabove.zig");
+pub const placestructure = @import("worldedit/placestructure.zig");
 pub const blueprint = @import("worldedit/blueprint.zig");
 pub const rotate = @import("worldedit/rotate.zig");
 pub const set = @import("worldedit/set.zig");

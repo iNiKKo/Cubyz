@@ -7,8 +7,12 @@ const draw = main.graphics.draw;
 const gui = @import("../gui.zig");
 const GuiWindow = gui.GuiWindow;
 const Label = @import("../components/Label.zig");
+const Button = @import("../components/Button.zig");
+const Icon = @import("../components/Icon.zig");
 const HorizontalList = @import("../components/HorizontalList.zig");
 const VerticalList = @import("../components/VerticalList.zig");
+const StructureBuildingBlock = main.server.terrain.sbb.StructureBuildingBlock;
+const structure_preview = main.server.terrain.structure_preview;
 
 pub var toolbarHeight: f32 = 28;
 pub var browserHeight: f32 = 220;
@@ -118,26 +122,166 @@ fn ensureLayoutMetrics() void {
 	window.contentSize = .{width, browserHeight};
 }
 
+/// Arms a structure drag when its row button is clicked; actual placement happens on
+/// mouse-release over the 3D world (see gui.structureDrag in ../gui.zig).
+fn armStructure(structure: *const StructureBuildingBlock) void {
+	gui.structureDrag.arm(structure.id);
+}
+
+const tileWidth: f32 = 64;
+const tileHeight: f32 = 64;
+const tileSpacing: f32 = 4;
+const scrollBarWidth: f32 = 10 + 2*3;
+
+/// Lazily-generated, process-lifetime cache of structure thumbnail textures keyed by structure id
+/// (which is stable/interned in main.worldArena for as long as the world is loaded - see sbb.zig).
+/// Generating one is a full offscreen render pass - doing this for the whole registry (100+
+/// structures) synchronously in one frame (e.g. the moment the browser first opens) caused a
+/// multi-second stall/lag spiral. Instead, every not-yet-ready tile's icon is sized to zero (so it
+/// draws nothing - see makeTile()) and its structure gets queued in pendingThumbnails; update()
+/// drains a small budget of that queue per frame (see thumbnailBudgetPerFrame) so the cost is
+/// spread across many frames instead of one. (A shared placeholder GL texture was tried first, but
+/// every tile going blank at the exact same instant pointed at GL texture-id lifecycle/reuse risk
+/// from sharing one texture object across ~150 icons - safer to just not touch a texture at all
+/// until the real one exists.)
+var thumbnailCache: std.StringHashMapUnmanaged(main.graphics.Texture) = .{};
+const thumbnailBudgetPerFrame: u32 = 2;
+
+fn generateThumbnail(structure: *const StructureBuildingBlock) main.graphics.Texture {
+	const preview = structure_preview.assemble(main.globalAllocator, structure);
+	defer preview.deinit(main.globalAllocator);
+	return main.graphics.generateStructureTexture(preview.buffer, preview.extent);
+}
+
+fn makeTile(structure: *const StructureBuildingBlock) struct {button: *Button, icon: *Icon} {
+	const ready = thumbnailCache.get(structure.id);
+	// Texture id 0 is GL's always-valid "no texture" binding - a safe placeholder for the
+	// not-ready case, where icon.size is also zero so nothing actually gets drawn with it.
+	const icon = Icon.init(.{0, 0}, if (ready != null) .{tileWidth - 6, tileHeight - 6} else .{0, 0}, ready orelse .{.textureID = 0});
+	const button = main.globalAllocator.create(Button);
+	button.* = Button{
+		.pos = .{0, 0},
+		.size = .{tileWidth, tileHeight},
+		.onAction = .initWithPtr(armStructure, @constCast(structure)),
+		.child = icon.toComponent(),
+	};
+	return .{.button = button, .icon = icon};
+}
+
+/// (button, icon, structure) for every tile currently built: update() uses Button.hovered (see
+/// updateHoveredTooltip()) for the tooltip, and swaps each Icon's texture in place once its
+/// thumbnail finishes generating (see updatePendingThumbnails()).
+var tiles: main.ListManaged(struct {button: *Button, icon: *Icon, structure: *const StructureBuildingBlock}) = .init(main.globalAllocator);
+var hoveredTileId: ?[]const u8 = null;
+/// Structures whose thumbnail hasn't been generated (or queued) yet - drained a few at a time
+/// per frame by updatePendingThumbnails().
+var pendingThumbnails: main.ListManaged(*const StructureBuildingBlock) = .init(main.globalAllocator);
+
+fn updatePendingThumbnails() void {
+	var remaining = thumbnailBudgetPerFrame;
+	while (remaining > 0 and pendingThumbnails.items.len > 0) : (remaining -= 1) {
+		const structure = pendingThumbnails.pop();
+		if (thumbnailCache.contains(structure.id)) continue;
+
+		const texture = generateThumbnail(structure);
+		thumbnailCache.put(main.globalAllocator.allocator, structure.id, texture) catch unreachable;
+
+		for (tiles.items) |tile| {
+			if (tile.structure == structure) {
+				tile.icon.updateTexture(texture) catch unreachable;
+				tile.icon.size = .{tileWidth - 6, tileHeight - 6};
+				break;
+			}
+		}
+	}
+}
+
+/// (Re)builds the tile grid to match the panel's current size. Cheap to call again on resize:
+/// thumbnails already in thumbnailCache aren't regenerated, only the layout (column count, list
+/// height) is rederived - the previous VerticalList (if any) is fully torn down first, matching
+/// what onClose() does, so nothing leaks across a rebuild.
+fn rebuildTiles() void {
+	if (window.rootComponent) |*comp| {
+		comp.deinit();
+	}
+	tiles.clearAndFree();
+	pendingThumbnails.clearAndFree();
+
+	const labelHeight = smallFont + 3;
+	const listMaxHeight = @max(tileHeight, window.contentSize[1] - handleThickness - 2*padding - labelHeight);
+	const list = VerticalList.init(.{padding, handleThickness + padding}, listMaxHeight, 3);
+	list.add(Label.initWithFontSize(.{0, 0}, 240, "Content Browser - Structures", .left, smallFont));
+
+	// Reserve room for the vertical scrollbar up front (rather than only after rows overflow),
+	// so it lines up flush against the panel's real right edge instead of sitting right after
+	// however wide the tile rows happen to be.
+	const columns: usize = @max(1, @as(usize, @intFromFloat(@floor((window.contentSize[0] - 2*padding - scrollBarWidth + tileSpacing)/(tileWidth + tileSpacing)))));
+
+	var row: ?*HorizontalList = null;
+	var columnIndex: usize = 0;
+	for (main.server.terrain.sbb.list()) |*structure| {
+		if (row == null) row = HorizontalList.init();
+		const tile = makeTile(structure);
+		tiles.append(.{.button = tile.button, .icon = tile.icon, .structure = structure});
+		if (!thumbnailCache.contains(structure.id)) pendingThumbnails.append(structure);
+		row.?.add(tile.button);
+		columnIndex += 1;
+		if (columnIndex >= columns) {
+			row.?.finish(.{0, 0}, .left);
+			list.add(row.?.toComponent());
+			row = null;
+			columnIndex = 0;
+		}
+	}
+	if (row) |r| {
+		r.finish(.{0, 0}, .left);
+		list.add(r.toComponent());
+	}
+
+	list.finish(.left);
+	window.rootComponent = list.toComponent();
+	gui.updateWindowPositions();
+}
+
 pub fn onOpen() void {
 	loadDockSizes();
 	ensureLayoutMetrics();
-	const list = VerticalList.init(.{padding, handleThickness + padding}, 300, 3);
-	list.add(Label.initWithFontSize(.{0, 0}, 240, "Content Browser", .left, smallFont));
-	const tabs = HorizontalList.init();
-	tabs.add(Label.initWithFontSize(.{0, 0}, 60, "Assets", .left, smallFont));
-	tabs.add(Label.initWithFontSize(.{0, 0}, 60, "Blocks", .left, smallFont));
-	tabs.add(Label.initWithFontSize(.{0, 0}, 60, "Items", .left, smallFont));
-	tabs.finish(.{0, 0}, .left);
-	list.add(tabs.toComponent());
-	window.rootComponent = list.toComponent();
-	gui.updateWindowPositions();
+	rebuildTiles();
 }
 
 pub fn onClose() void {
 	if (window.rootComponent) |*comp| {
 		comp.deinit();
 	}
+	tiles.clearAndFree();
+	pendingThumbnails.clearAndFree();
+	hoveredTileId = null;
 	dragging = false;
+}
+
+/// Runs between the hover-detection pass and the render pass (see update() below), so
+/// Button.hovered still reflects this frame's hit-test before render() consumes/clears it.
+fn updateHoveredTooltip() void {
+	hoveredTileId = null;
+	for (tiles.items) |tile| {
+		if (tile.button.hovered) {
+			hoveredTileId = tile.structure.id;
+			break;
+		}
+	}
+}
+
+/// gui.tooltip.renderFromText() expects screen-absolute coordinates, but this is called from
+/// renderResizeHandle() while GuiWindow.render() has an active window-local translation - reset
+/// to absolute space temporarily (mirroring how nested GuiComponents save/restore translation)
+/// so the tooltip doesn't get double-offset by the window's own position.
+fn renderTooltip() void {
+	const id = hoveredTileId orelse return;
+	const mousePos = main.Window.getMousePosition()/@as(Vec2f, @splat(gui.scale));
+	const currentTranslation = main.graphics.draw.setTranslation(.{0, 0});
+	main.graphics.draw.restoreTranslation(.{0, 0});
+	defer main.graphics.draw.restoreTranslation(currentTranslation);
+	gui.tooltip.renderFromText(id, mousePos);
 }
 
 /// Hit-tests and handles the top-edge drag handle in framebuffer/window mouse space directly,
@@ -172,13 +316,22 @@ fn renderResizeHandle() void {
 	const oldColor = draw.setColor(if (dragging or draggingHovered) 0xffa0c0ff else 0xff606060);
 	defer draw.restoreColor(oldColor);
 	draw.rect(.{0, 0}, .{window.contentSize[0], handleThickness});
+	renderTooltip();
 }
 
 pub fn update() void {
 	const oldSize = window.contentSize;
 	ensureLayoutMetrics();
 	if (@reduce(.Or, oldSize != window.contentSize)) {
+		// The tile grid's column count and the VerticalList's own maxHeight (which drives its
+		// scrollbar range/clip rect) are both derived from window.contentSize once at build time -
+		// without a rebuild here, resizing the panel changes the window itself but leaves the list
+		// still clipping/scrolling against its old, stale height, which looks like the content
+		// sliding out from under the panel rather than the panel actually resizing around it.
+		rebuildTiles();
 		gui.updateWindowPositions();
 	}
 	updateResizeDrag();
+	updateHoveredTooltip();
+	updatePendingThumbnails();
 }

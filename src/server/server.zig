@@ -48,6 +48,14 @@ pub const WorldEditData = struct {
 	redoHistory: History,
 	mask: ?Mask = null,
 
+	/// The block a rotate-in-place pivots around, stable across repeated rotations of the same
+	/// selection — unlike selectionPosition1, which gets overwritten with the box's new
+	/// min-corner after every rotation (since box/move/delete/copy code all expect pos1 to mean
+	/// "a corner", not "the pivot"). Set once when a selection is (re)started (see the
+	/// .selectedPos1 branch of the worldEditPos network handler), read (never written) by
+	/// .rotateSelection so every rotation of the same selection pivots around the same point.
+	rotationPivot: ?Vec3i = null,
+
 	/// Set true by dragStart, consumed by the first moveBlock/moveSelection request after it
 	/// (which captures the true pre-drag content, since only the *first* message's oldPos in a
 	/// drag reflects the position before any mutation — later messages' oldPos is just the
@@ -1048,6 +1056,7 @@ fn processEditorRequest(request: EditorRequest) void {
 				const pos1 = user.worldEditData.selectionPosition1 orelse break;
 				const pos2 = user.worldEditData.selectionPosition2 orelse pos1;
 				const oldSelection = main.blueprint.Blueprint.Selection.initFromInclusive(pos1, pos2);
+				const pivot = user.worldEditData.rotationPivot orelse pos1;
 
 				const capture = main.blueprint.Blueprint.capture(main.globalAllocator, oldSelection);
 				const original = switch (capture) {
@@ -1059,11 +1068,25 @@ fn processEditorRequest(request: EditorRequest) void {
 				const rotated = original.rotateZ(main.globalAllocator, data.angle);
 				defer rotated.deinit(main.globalAllocator);
 
-				// Rotate anchors on the selection's own center, so a 90/270 (which can swap the
-				// X/Y footprint) still feels like it's spinning in place rather than jumping.
-				const oldCenter = @divTrunc(oldSelection.minPos + oldSelection.maxPos, @as(Vec3i, @splat(2)));
-				const newMin = oldCenter -% @divTrunc(rotated.extent(), @as(Vec3i, @splat(2)));
-				const newMax = newMin +% rotated.extent();
+				// Anchors the rotation on the selection's stable rotationPivot (the block first
+				// clicked to start this selection — see WorldEditData.rotationPivot) rather than
+				// selectionPosition1, which gets overwritten with the box's new min-corner after
+				// every rotation and would otherwise make the pivot drift on repeated rotations.
+				// Replicates the same (xOld,yOld)->(xNew,yNew) local-space mapping Blueprint.rotateZ
+				// uses internally to find where the pivot's own cell lands in the rotated result,
+				// then shifts the whole rotated blueprint so that cell comes back out at the
+				// pivot's original world position.
+				const oldExtent = oldSelection.maxPos -% oldSelection.minPos;
+				const pivotLocal = pivot -% oldSelection.minPos;
+				const rotatedExtent = rotated.extent();
+				const pivotLocalNew: Vec3i = switch (data.angle) {
+					.@"0" => pivotLocal,
+					.@"90" => .{rotatedExtent[0] - pivotLocal[1] - 1, pivotLocal[0], pivotLocal[2]},
+					.@"180" => .{oldExtent[0] - pivotLocal[0] - 1, oldExtent[1] - pivotLocal[1] - 1, pivotLocal[2]},
+					.@"270" => .{pivotLocal[1], rotatedExtent[1] - pivotLocal[0] - 1, pivotLocal[2]},
+				};
+				const newMin = pivot -% pivotLocalNew;
+				const newMax = newMin +% rotatedExtent;
 
 				var checkX = newMin[0];
 				while (checkX < newMax[0]) : (checkX += 1) {

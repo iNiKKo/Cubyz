@@ -533,6 +533,8 @@ pub const ServerWorld = struct {
 		try permission.loadGroups(try dir.openIterableDir("groups"));
 		std.debug.assert(main.entityModel.getById("cubyz:missing") != null);
 
+		terrain.placed_structures.loadFromDisk(dir);
+
 		return self;
 	}
 
@@ -549,6 +551,16 @@ pub const ServerWorld = struct {
 		self.saveWorldConfig() catch |err| {
 			std.log.err("Error while saving world config: {s}", .{@errorName(err)});
 		};
+		savePlacedStructures: {
+			const worldDirPath = main.stackAllocator.print("saves/{s}", .{self.path});
+			defer main.stackAllocator.free(worldDirPath);
+			var dir = files.cubyzDir().openDir(worldDirPath) catch |err| {
+				std.log.err("Error while opening world dir to save placed structures: {s}", .{@errorName(err)});
+				break :savePlacedStructures;
+			};
+			defer dir.close();
+			terrain.placed_structures.saveToDisk(dir);
+		}
 		self.saveAllPlayers() catch |err| {
 			std.log.err("Error while saving player data: {s}", .{@errorName(err)});
 		};

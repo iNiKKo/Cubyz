@@ -9,6 +9,7 @@ const Vec4f = vec.Vec4f;
 const Vec2f = vec.Vec2f;
 const Vec2i = vec.Vec2i;
 const Vec3f = vec.Vec3f;
+const Vec3i = vec.Vec3i;
 
 const main = @import("main");
 const Window = main.Window;
@@ -2370,6 +2371,26 @@ const block_texture = struct {
 	var depthTexture: Texture = undefined;
 	const textureSize = 128;
 
+	/// Dedicated GPU buffers for generateStructureTexture(), sized generously for a single
+	/// structure's worth of geometry so they never need to grow. Kept separate from
+	/// main.renderer.chunk_meshing's faceBuffers[0]/chunkBuffer/lightBuffers[0] (which store real,
+	/// live in-world chunk meshes) because that buffer only ever grows and never shrinks - reusing
+	/// it as scratch space for ~150 one-off thumbnail renders in a row permanently bloated it
+	/// (observed growing to 64 MiB in one session) with memory that then sat unused for the rest of
+	/// the game, competing with what real chunk meshes need.
+	var structureFaceBuffer: LargeBuffer(main.renderer.chunk_meshing.FaceData) = undefined;
+	var structureLightBuffer: LargeBuffer(u32) = undefined;
+	var structureChunkBuffer: LargeBuffer(main.renderer.chunk_meshing.ChunkData) = undefined;
+	var structureBuffersInitialized = false;
+
+	fn ensureStructureBuffers() void {
+		if (structureBuffersInitialized) return;
+		structureFaceBuffer.init(main.globalAllocator, 1 << 15, 3);
+		structureLightBuffer.init(main.globalAllocator, 1 << 10, 10);
+		structureChunkBuffer.init(main.globalAllocator, 1 << 6, 6);
+		structureBuffersInitialized = true;
+	}
+
 	fn init() void {
 		pipeline = Pipeline.init(
 			"assets/cubyz/shaders/item_texture_post.vert",
@@ -2513,6 +2534,182 @@ pub fn generateBlockTexture(blockType: u16) Texture {
 	defer c.glDeleteFramebuffers(1, &finalFrameBuffer.frameBuffer);
 	block_texture.pipeline.bind(null);
 	c.glUniform1i(block_texture.uniforms.transparent, if (block.transparent()) c.GL_TRUE else c.GL_FALSE);
+	frameBuffer.bindTexture(c.GL_TEXTURE3);
+
+	draw.rectVao.bind();
+	c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);
+
+	c.glBindFramebuffer(c.GL_FRAMEBUFFER, 0);
+
+	c.glViewport(0, 0, main.Window.width, main.Window.height);
+	c.glBlendFunc(c.GL_SRC_ALPHA, c.GL_ONE_MINUS_SRC_ALPHA);
+	return texture;
+}
+
+/// Whether a face between `block` and `other` along `neighbor` should be drawn - mirrors
+/// src/renderer/chunk_meshing.zig's private canBeSeenThroughOtherBlock() (duplicated here since
+/// it isn't exported; same precedent as duplicating SbbGen.placeSbb in placestructure.zig).
+fn canBeSeenThroughOtherBlock(block: main.blocks.Block, other: main.blocks.Block, neighbor: main.chunk.Neighbor) bool {
+	if (block.typ == other.typ and block.hasTag(.fluid)) return false;
+	return block.typ != 0 and (other.typ == 0 or (block.typ != other.typ and other.viewThrough()) or other.alwaysViewThrough() or !main.blocks.meshes.model(other).model().isNeighborOccluded[neighbor.reverse().toInt()]);
+}
+
+/// Renders a fully-assembled structure (main.server.terrain.structure_preview.Preview - an
+/// in-memory block buffer, e.g. a composite SBB with all its children pasted in) to a GUI icon
+/// texture, reusing the same offscreen chunk-shader pipeline as generateBlockTexture() above -
+/// just walking every block in the buffer instead of a single hardcoded one, with real
+/// (buffer-bounded, treating out-of-bounds as air) face culling instead of "always show all
+/// faces". The whole preview is drawn through the opaque pipeline regardless of individual block
+/// transparency - a reasonable simplification for a small identification thumbnail.
+pub fn generateStructureTexture(buffer: main.utils.Array3D(main.blocks.Block), extent: Vec3i) Texture {
+	block_texture.ensureStructureBuffers();
+	const textureSize = block_texture.textureSize;
+	c.glViewport(0, 0, textureSize, textureSize);
+
+	// The opaque chunk pipeline runs with GL_DEPTH_TEST enabled and GL_LESS (see chunk_meshing.zig's
+	// pipeline init: .{.depthTest = true, .depthWrite = true}), so this render target needs a real
+	// depth attachment - without one, depth test results are undefined and drivers commonly discard
+	// every fragment, producing a completely blank texture with no GL error to show for it.
+	var frameBuffer: FrameBuffer = undefined;
+	frameBuffer.init(true, c.GL_NEAREST, c.GL_REPEAT);
+	defer frameBuffer.deinit();
+	frameBuffer.updateSize(textureSize, textureSize, c.GL_RGBA16F);
+	frameBuffer.bind();
+	frameBuffer.clear(.{0, 0, 0, 0});
+
+	var faceData: main.ListManaged(main.renderer.chunk_meshing.FaceData) = .init(main.stackAllocator);
+	defer faceData.deinit();
+
+	const width: i32 = @intCast(buffer.width);
+	const depth: i32 = @intCast(buffer.depth);
+	const height: i32 = @intCast(buffer.height);
+
+	var x: i32 = 0;
+	while (x < width) : (x += 1) {
+		var y: i32 = 0;
+		while (y < depth) : (y += 1) {
+			var z: i32 = 0;
+			while (z < height) : (z += 1) {
+				const block = buffer.get(@intCast(x), @intCast(y), @intCast(z));
+				if (block.typ == 0) continue;
+				const model = main.blocks.meshes.model(block).model();
+				// Offset by 1 on every axis (matching generateBlockTexture()'s single-block
+				// convention of placing it at local (1,1,1)) so a boundary face's neighbor
+				// position (buffer coordinate -1 or extent) always stays within BlockPos's u5
+				// range - the buffer itself is capped to extent <= 30 per axis to make room.
+				const pos: main.chunk.BlockPos = .fromCoords(@intCast(x + 1), @intCast(y + 1), @intCast(z + 1));
+
+				model.appendInternalQuadsToList(&faceData, block, pos, false);
+				for (main.chunk.Neighbor.iterable) |neighbor| {
+					const nx = x + neighbor.relX();
+					const ny = y + neighbor.relY();
+					const nz = z + neighbor.relZ();
+					const other = if (nx >= 0 and nx < width and ny >= 0 and ny < depth and nz >= 0 and nz < height)
+						buffer.get(@intCast(nx), @intCast(ny), @intCast(nz))
+					else
+						main.blocks.Block{.typ = 0, .data = 0};
+					if (!canBeSeenThroughOtherBlock(block, other, neighbor)) continue;
+					const neighborPos: main.chunk.BlockPos = .fromCoords(@intCast(nx + 1), @intCast(ny + 1), @intCast(nz + 1));
+					model.appendNeighborFacingQuadsToList(&faceData, block, neighbor, neighborPos, false);
+				}
+			}
+		}
+	}
+
+	for (faceData.items) |*face| {
+		face.position.lightIndex = 0;
+	}
+	var allocation: SubAllocation = .{.start = 0, .len = 0};
+	block_texture.structureFaceBuffer.uploadData(faceData.items, &allocation);
+	defer block_texture.structureFaceBuffer.free(allocation);
+	var lightAllocation: SubAllocation = .{.start = 0, .len = 0};
+	block_texture.structureLightBuffer.uploadData(&.{0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff}, &lightAllocation);
+	defer block_texture.structureLightBuffer.free(lightAllocation);
+
+	{
+		var chunkAllocation: SubAllocation = .{.start = 0, .len = 0};
+		block_texture.structureChunkBuffer.uploadData(&.{.{
+			.position = .{0, 0, 0},
+			.min = undefined,
+			.max = undefined,
+			.voxelSize = 1,
+			.lightStart = lightAllocation.start,
+			.vertexStartOpaque = undefined,
+			.faceCountsByNormalOpaque = undefined,
+			.vertexStartTransparent = undefined,
+			.vertexCountTransparent = undefined,
+			.visibilityState = 0,
+			.oldVisibilityState = 0,
+		}}, &chunkAllocation);
+		defer block_texture.structureChunkBuffer.free(chunkAllocation);
+		// faceBuffers[0]/lightBuffers[0]/chunkBuffer's binding points are shared, persistent state
+		// the real world renderer expects to stay bound to it between frames (bindBuffers() only
+		// gets called again right before the next real chunk draw for faceBuffers/lightBuffers, and
+		// chunkBuffer isn't rebound anywhere outside init()/growth) - explicitly restore all three
+		// after using those same binding points for this one-off draw, rather than assuming
+		// something else will put them back.
+		defer {
+			main.renderer.chunk_meshing.bindBuffers(0);
+			main.renderer.chunk_meshing.chunkBuffer.ssbo.bind(main.renderer.chunk_meshing.chunkBuffer.binding);
+		}
+		main.renderer.chunk_meshing.bindShaderAndUniforms(.{1, 1, 1});
+		block_texture.structureFaceBuffer.ssbo.bind(block_texture.structureFaceBuffer.binding);
+		block_texture.structureLightBuffer.ssbo.bind(block_texture.structureLightBuffer.binding);
+		block_texture.structureChunkBuffer.ssbo.bind(block_texture.structureChunkBuffer.binding);
+
+		// Camera placement. Mat4f.perspective() here is Z-up/Y-forward: its third row is {0,1,0,0},
+		// so clip-space w (the depth used for near/far clipping) is view-space *y*, not z. Applying
+		// the 45/45 view rotation, the world-space direction that maps to +depth is
+		// (0.5, 0.5, -1/sqrt(2)). The vertex shader computes
+		//     position = worldPos - (playerPositionInteger + playerPositionFraction)
+		// so playerPositionFraction is the camera's world position: to look at the structure's
+		// center from distance `cameraDistance`, sit that far back along the view-forward axis.
+		//
+		// The previous offsets here (derived from generateBlockTexture's hardcoded x=y=-64,
+		// z=-91.131) put every structure at *negative* depth, i.e. behind the camera, so 100% of
+		// the geometry was clipped away - a real mesh, no GL errors, and a completely blank
+		// texture. generateBlockTexture has the same flaw; it just isn't exercised in practice
+		// (items.zig only reaches it for items with no custom image *and* an associated block).
+		//
+		// Distance is fixed at a value comfortably inside the [64, 256] near/far range and the
+		// structure is fit by widening the FOV instead - fitting by distance alone would push
+		// larger structures past the far plane.
+		const halfExtent = @as(Vec3f, @floatFromInt(extent))/@as(Vec3f, @splat(2));
+		const viewForward = Vec3f{0.5, 0.5, -std.math.sqrt1_2};
+		const cameraDistance: f32 = 160;
+		// +0.9 covers the half-diagonal of the outermost block itself, 1.15 leaves a small margin.
+		const boundingRadius = @sqrt(@reduce(.Add, halfExtent*halfExtent)) + 0.9;
+		const fov = 2*std.math.atan(boundingRadius*1.15/cameraDistance);
+		const center = halfExtent + @as(Vec3f, @splat(1));
+		block_texture.ubo.update(.{
+			.projectionMatrix = Mat4f.perspective(fov, 1, 64, 256).toGl(),
+			.viewMatrix = Mat4f.identity().mul(Mat4f.rotationX(std.math.pi/4.0)).mul(Mat4f.rotationZ(1.0*std.math.pi/4.0)).toGl(),
+			.playerPositionInteger = @splat(0),
+			.playerPositionFraction = center - viewForward*@as(Vec3f, @splat(cameraDistance)),
+		});
+		block_texture.ubo.bind();
+		defer block_texture.ubo.unbind();
+
+		c.glUniform1f(main.renderer.chunk_meshing.uniforms.contrast, 0.25);
+		c.glActiveTexture(c.GL_TEXTURE0);
+		main.blocks.meshes.blockTextureArray.bind();
+		c.glActiveTexture(c.GL_TEXTURE1);
+		main.blocks.meshes.emissionTextureArray.bind();
+		c.glActiveTexture(c.GL_TEXTURE2);
+		main.blocks.meshes.reflectivityAndAbsorptionTextureArray.bind();
+		block_texture.depthTexture.bindTo(5);
+		c.glDrawElementsInstancedBaseVertexBaseInstance(c.GL_TRIANGLES, @intCast(6*faceData.items.len), c.GL_UNSIGNED_INT, null, 1, allocation.start*4, chunkAllocation.start);
+	}
+
+	c.glDisable(c.GL_CULL_FACE);
+	var finalFrameBuffer: FrameBuffer = undefined;
+	finalFrameBuffer.init(false, c.GL_NEAREST, c.GL_REPEAT);
+	finalFrameBuffer.updateSize(textureSize, textureSize, c.GL_RGBA8);
+	finalFrameBuffer.bind();
+	const texture = Texture{.textureID = finalFrameBuffer.texture};
+	defer c.glDeleteFramebuffers(1, &finalFrameBuffer.frameBuffer);
+	block_texture.pipeline.bind(null);
+	c.glUniform1i(block_texture.uniforms.transparent, c.GL_FALSE);
 	frameBuffer.bindTexture(c.GL_TEXTURE3);
 
 	draw.rectVao.bind();

@@ -783,6 +783,7 @@ pub fn unloadAssets() void {
 
 	main.entity.deinitComponents();
 	sbb.reset();
+	main.server.terrain.placed_structures.reset();
 	blocks.reset();
 	items.reset();
 	migrations.reset();

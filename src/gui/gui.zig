@@ -33,7 +33,7 @@ pub var openWindows: ListManaged(*GuiWindow) = undefined;
 var selectedWindow: ?*GuiWindow = null;
 var modalWindow: ?*GuiWindow = null;
 pub var selectedTextInput: ?*TextInput = null;
-var hoveredAWindow: bool = false;
+pub var hoveredAWindow: bool = false;
 pub var reorderWindows: bool = false;
 pub var hideGui: bool = false;
 
@@ -546,6 +546,7 @@ pub fn mainButtonPressed(_: main.Window.Key.Modifiers) void {
 
 pub fn mainButtonReleased(_: main.Window.Key.Modifiers) void {
 	inventory.applyChanges(true);
+	structureDrag.applyChanges();
 	const oldWindow = selectedWindow;
 	selectedWindow = null;
 	for (openWindows.items) |window| {
@@ -638,6 +639,7 @@ pub fn updateAndRenderGui() void {
 			window.render(mousePos);
 		}
 		inventory.render(mousePos);
+		structureDrag.render(mousePos);
 	}
 	const oldScale = draw.setScale(scale);
 	defer draw.restoreScale(oldScale);
@@ -665,6 +667,57 @@ pub fn toggleGameMenu() void {
 		selectedWindow = null;
 	}
 }
+
+/// Drag state for placing a structure building block (SBB) from the editor content browser
+/// into the 3D world by dragging its entry out of the panel. Mirrors the `inventory` carried-item
+/// pattern below, but carries just a borrowed structure id string instead of a full item stack -
+/// there's nothing to distribute back into GUI slots, only a single "place it in the world" action.
+pub const structureDrag = struct {
+	/// Borrowed from main.server.terrain.sbb.list(), which lives for the process lifetime once a
+	/// world is loaded, so no allocation/copy is needed here.
+	var carried: ?[]const u8 = null;
+
+	pub fn arm(structureId: []const u8) void {
+		carried = structureId;
+	}
+
+	pub fn isDragging() bool {
+		return carried != null;
+	}
+
+	fn dropOntoWorld() void {
+		defer carried = null;
+		const id = carried orelse return;
+		if (main.game.world == null) return;
+		// Place adjacent to the hovered face (the empty voxel just before the hit block),
+		// not on top of/inside the block the cursor is actually pointing at.
+		if (main.renderer.MeshSelection.selectedBlockPos == null) return;
+		const blockPos = main.renderer.MeshSelection.posBeforeBlock;
+
+		var buf: [256]u8 = undefined;
+		const command = std.fmt.bufPrint(&buf, "placestructure {s} {} {} {}", .{id, blockPos[0], blockPos[1], blockPos[2]}) catch {
+			std.log.err("Structure id too long to place: {s}", .{id});
+			return;
+		};
+		main.sync.client.executeCommand(.{.chatCommand = .{.message = main.globalAllocator.dupe(u8, command)}});
+	}
+
+	/// Called from mainButtonReleased(): if nothing is being dragged this is a no-op. Otherwise,
+	/// releasing over a GUI panel cancels the drag (put-back), releasing over the 3D world places it.
+	fn applyChanges() void {
+		if (carried == null) return;
+		if (!hoveredAWindow and selectedWindow == null) {
+			dropOntoWorld();
+		} else {
+			carried = null;
+		}
+	}
+
+	fn render(mousePos: Vec2f) void {
+		const id = carried orelse return;
+		tooltip.renderFromText(id, mousePos);
+	}
+};
 
 pub const inventory = struct {
 	const ItemStack = main.items.ItemStack;

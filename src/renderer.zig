@@ -2144,7 +2144,10 @@ pub const MeshSelection = struct {
 		pipeline.deinit();
 	}
 
-	var posBeforeBlock: Vec3i = undefined;
+	/// The last empty voxel stepped through before hitting the block at selectedBlockPos - i.e.
+	/// the position adjacent to the hovered face, on the empty side. Only meaningful alongside a
+	/// non-null selectedBlockPos (both are set together, in the same select() call).
+	pub var posBeforeBlock: Vec3i = undefined;
 	var neighborOfSelection: chunk.Neighbor = undefined;
 	pub var selectedBlockPos: ?Vec3i = null;
 	pub var selectedEntity: ?main.entity.Entity = null;
@@ -2779,16 +2782,36 @@ pub const EditorGizmo = struct {
 	}
 
 	/// Whether the mouse ray hits the rotate-mode Z ring — a flat annulus lying in the XY plane
-	/// through the gizmo origin, radius visualAxisLength, half-thickness visualHalfWidth.
+	/// through the gizmo origin, radius visualAxisLength, half-thickness visualHalfWidth. Uses a
+	/// generous world-space radial tolerance, plus a screen-space fallback (distance from mouse
+	/// to the ring's on-screen projected circle) for when the ray-vs-plane hit is unreliable —
+	/// near edge-on viewing angles, or just because clicking an exact 3D ring precisely is much
+	/// harder than clicking a line/arrow, unlike hitTestAxes which already has this fallback.
 	fn hitTestRing(gizmoOrigin: Vec3d, rayOrigin: Vec3d, rayDir: Vec3d) bool {
-		if (@abs(rayDir[2]) < 1e-9) return false;
-		const t = (gizmoOrigin[2] - rayOrigin[2])/rayDir[2];
-		if (t < 0) return false;
-		const hit = rayOrigin + rayDir*@as(Vec3d, @splat(t));
-		const radial = vec.length(vec.xy(hit - gizmoOrigin));
-		const innerR: f64 = @floatCast(visualAxisLength - visualHalfWidth*3.0);
-		const outerR: f64 = @floatCast(visualAxisLength + visualHalfWidth*3.0);
-		return radial >= innerR and radial <= outerR;
+		if (@abs(rayDir[2]) >= 1e-9) {
+			const t = (gizmoOrigin[2] - rayOrigin[2])/rayDir[2];
+			if (t >= 0) {
+				const hit = rayOrigin + rayDir*@as(Vec3d, @splat(t));
+				const radial = vec.length(vec.xy(hit - gizmoOrigin));
+				const innerR: f64 = @floatCast(visualAxisLength - visualHalfWidth*6.0);
+				const outerR: f64 = @floatCast(visualAxisLength + visualHalfWidth*6.0);
+				if (radial >= innerR and radial <= outerR) return true;
+			}
+		}
+
+		// Screen-space fallback: sample points around the ring's world-space circle, project
+		// each to screen space, and check whether the mouse is close to the nearest sampled point.
+		const mouseScreenCoord = mouseScreenCoordForRenderTarget();
+		const ringSampleCount = 24;
+		var bestDist: f64 = std.math.inf(f64);
+		var i: usize = 0;
+		while (i < ringSampleCount) : (i += 1) {
+			const angle = (@as(f32, @floatFromInt(i))/@as(f32, @floatFromInt(ringSampleCount)))*std.math.tau;
+			const samplePoint = gizmoOrigin + Vec3d{@floatCast(@cos(angle)*visualAxisLength), @floatCast(@sin(angle)*visualAxisLength), 0} - rayOrigin;
+			const screenPoint = projectWorldPointToScreen(samplePoint) orelse continue;
+			bestDist = @min(bestDist, @as(f64, @floatCast(vec.length(mouseScreenCoord - screenPoint))));
+		}
+		return bestDist <= 26.0;
 	}
 
 	/// Called once per frame while in editor mode with the current camera-relative mouse ray,
@@ -2796,6 +2819,19 @@ pub const EditorGizmo = struct {
 	pub fn update(playerPos: Vec3d, mouseDirection: Vec3f, mouseScreenCoord: Vec2f) void {
 		hoveredAxis = null;
 		if (!game.Player.editorMode.load(.monotonic)) return;
+		if (mode == .rotate) {
+			// Rotate mode has no drag, just hover feedback on the ring — reuses hoveredAxis==2
+			// (the same slot/blue color the Z arrow's hover highlight already uses) since the
+			// fragment shader's hover/grab coloring is keyed off axisIndex, and the ring's
+			// vertex shader hardcodes axisIndex=2 for itself (see editor_gizmo_vertex.vert).
+			const gizmoOrigin = currentOrigin() orelse return;
+			updateVisualScale(gizmoOrigin, playerPos);
+			if (hitTestRing(gizmoOrigin, playerPos, @floatCast(mouseDirection))) {
+				hoveredAxis = 2;
+			}
+			return;
+		}
+		if (mode != .move) return;
 		const gizmoOrigin = currentOrigin() orelse return;
 		updateVisualScale(gizmoOrigin, playerPos);
 		const rayOrigin = playerPos;
@@ -3019,6 +3055,7 @@ pub const EditorGizmo = struct {
 	/// all directly-connected same-type blocks (see checkDoubleClick).
 	pub fn grabPress(mods: main.Window.Key.Modifiers) void {
 		if (!game.Player.editorMode.load(.monotonic)) return;
+		if (main.gui.hoveredAWindow) return;
 		if (checkDoubleClick(mods, MeshSelection.selectedBlockPos)) return;
 		if (mods.shift) {
 			if (MeshSelection.selectedBlockPos) |blockPos| {

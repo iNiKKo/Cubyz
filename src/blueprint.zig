@@ -126,7 +126,7 @@ pub const Blueprint = struct {
 
 					const maybeBlock = main.server.world.?.getBlock(worldX, worldY, worldZ);
 					if (maybeBlock) |block| {
-						if (mask != null and !mask.?.match(block)) {
+						if (mask != null and !mask.?.match(block, .{worldX, worldY, worldZ})) {
 							self.blocks.set(x, y, z, getVoidBlock());
 						} else {
 							self.blocks.set(x, y, z, block);
@@ -184,6 +184,30 @@ pub const Blueprint = struct {
 		const startY = pos[1];
 		const startZ = pos[2];
 
+		for (0..self.blocks.width) |x| {
+			const worldX = startX +% @as(i32, @intCast(x));
+
+			for (0..self.blocks.depth) |y| {
+				const worldY = startY +% @as(i32, @intCast(y));
+
+				for (0..self.blocks.height) |z| {
+					const worldZ = startZ +% @as(i32, @intCast(z));
+
+					const block = self.blocks.get(x, y, z);
+					if (block.typ != voidType or flags.preserveVoid) {
+						_ = main.server.world.?.updateBlock(worldX, worldY, worldZ, block);
+					}
+				}
+			}
+		}
+
+		// updateBlock() resolves neighbor-dependent connectivity (e.g. tree branches, see
+		// mods/cubyz/rotations/branch.zig) live as each voxel is written, in blueprint scan order.
+		// A block whose supporting neighbor hasn't been placed yet locks in "disconnected" and is
+		// never revisited once that neighbor arrives later in the same paste - it can end up fully
+		// disconnected and get treated as unsupported. Once every voxel is down, do a second pass
+		// re-applying the same blocks so connectivity resolves against final, complete neighbor
+		// state instead of paste-order-dependent partial state.
 		for (0..self.blocks.width) |x| {
 			const worldX = startX +% @as(i32, @intCast(x));
 
@@ -358,8 +382,12 @@ pub const Blueprint = struct {
 			for (0..self.blocks.depth) |y| {
 				for (0..self.blocks.height) |z| {
 					const current = self.blocks.get(x, y, z);
-					if (whitelist) |m| if (!m.match(current)) continue;
-					if (blacklist) |m| if (m.match(current)) continue;
+					// This operates on the blueprint's own local coordinates, not world positions,
+					// so a positionSet mask (which only makes sense for world-space selections)
+					// would never usefully match here regardless of what's passed.
+					const localPos: Vec3i = .{@intCast(x), @intCast(y), @intCast(z)};
+					if (whitelist) |m| if (!m.match(current, localPos)) continue;
+					if (blacklist) |m| if (m.match(current, localPos)) continue;
 					self.blocks.set(x, y, z, newBlocks.blocks.sample(&main.seed).block);
 				}
 			}
@@ -445,6 +473,10 @@ pub const Mask = struct {
 			blockType: u16,
 			blockTag: Tag,
 			blockProperty: Property,
+			/// Matches by absolute world position rather than block content - used to reselect a
+			/// previously-placed structure's exact (possibly non-rectangular) footprint. Never
+			/// produced by the string expression parser, only by Mask.fromPositionSet().
+			positionSet: std.AutoHashMapUnmanaged(Vec3i, void),
 
 			const Property = blk: {
 				var fieldNames: [@typeInfo(Block).@"struct".decls.len][]const u8 = undefined;
@@ -473,7 +505,7 @@ pub const Mask = struct {
 				};
 			}
 
-			fn match(self: Inner, block: Block) bool {
+			fn match(self: Inner, block: Block, pos: Vec3i) bool {
 				return switch (self) {
 					.block => |desired| block.typ == desired.typ and block.data == desired.data,
 					.blockType => |desired| block.typ == desired,
@@ -481,6 +513,7 @@ pub const Mask = struct {
 					.blockProperty => |blockProperty| switch (blockProperty) {
 						inline else => |prop| @field(Block, @tagName(prop))(block),
 					},
+					.positionSet => |set| set.contains(pos),
 				};
 			}
 		};
@@ -491,8 +524,8 @@ pub const Mask = struct {
 			return .{.inner = entry, .isInverse = isInverse};
 		}
 
-		pub fn match(self: Entry, block: Block) bool {
-			const isMatch = self.inner.match(block);
+		pub fn match(self: Entry, block: Block, pos: Vec3i) bool {
+			const isMatch = self.inner.match(block, pos);
 			if (self.isInverse) {
 				return !isMatch;
 			}
@@ -506,6 +539,20 @@ pub const Mask = struct {
 	pub fn fromBlockType(allocator: NeverFailingAllocator, blockType: u16) @This() {
 		var andStorage: AndList = .empty;
 		andStorage.append(allocator, .{.inner = .{.blockType = blockType}, .isInverse = false});
+		var result: @This() = .{.entries = .empty};
+		result.entries.append(allocator, andStorage);
+		return result;
+	}
+
+	/// Builds a mask matching an exact set of absolute world positions, independent of block
+	/// content - used to reselect a previously-placed structure's exact footprint.
+	pub fn fromPositionSet(allocator: NeverFailingAllocator, positions: []const Vec3i) @This() {
+		var set: std.AutoHashMapUnmanaged(Vec3i, void) = .empty;
+		set.ensureTotalCapacity(allocator.allocator, @intCast(positions.len)) catch unreachable;
+		for (positions) |pos| set.putAssumeCapacity(pos, {});
+
+		var andStorage: AndList = .empty;
+		andStorage.append(allocator, .{.inner = .{.positionSet = set}, .isInverse = false});
 		var result: @This() = .{.entries = .empty};
 		result.entries.append(allocator, andStorage);
 		return result;
@@ -540,6 +587,12 @@ pub const Mask = struct {
 
 	pub fn deinit(self: @This(), allocator: NeverFailingAllocator) void {
 		for (self.entries.items) |andStorage| {
+			for (andStorage.items) |entry| {
+				if (entry.inner == .positionSet) {
+					var set = entry.inner.positionSet;
+					set.deinit(allocator.allocator);
+				}
+			}
 			andStorage.deinit(allocator);
 		}
 		self.entries.deinit(allocator);
@@ -553,17 +606,21 @@ pub const Mask = struct {
 			defer orListCopy.appendAssumeCapacity(andListCopy);
 
 			for (andList.items) |entry| {
-				andListCopy.appendAssumeCapacity(entry);
+				var entryCopy = entry;
+				if (entry.inner == .positionSet) {
+					entryCopy.inner = .{.positionSet = entry.inner.positionSet.clone(allocator.allocator) catch unreachable};
+				}
+				andListCopy.appendAssumeCapacity(entryCopy);
 			}
 		}
 		return .{.entries = orListCopy};
 	}
 
-	pub fn match(self: @This(), block: Block) bool {
+	pub fn match(self: @This(), block: Block, pos: Vec3i) bool {
 		for (self.entries.items) |andedExpressions| {
 			const status = blk: {
 				for (andedExpressions.items) |expression| {
-					if (!expression.match(block)) break :blk false;
+					if (!expression.match(block, pos)) break :blk false;
 				}
 				break :blk true;
 			};
@@ -614,9 +671,9 @@ test "Mask match block type with any data" {
 	const mask = try Mask.initFromString(main.heap.testingAllocator, "addon:dummy");
 	defer mask.deinit(main.heap.testingAllocator);
 
-	try std.testing.expect(mask.match(.{.typ = 1, .data = 0}));
-	try std.testing.expect(mask.match(.{.typ = 1, .data = 1}));
-	try std.testing.expect(!mask.match(.{.typ = 2, .data = 0}));
+	try std.testing.expect(mask.match(.{.typ = 1, .data = 0}, .{0, 0, 0}));
+	try std.testing.expect(mask.match(.{.typ = 1, .data = 1}, .{0, 0, 0}));
+	try std.testing.expect(!mask.match(.{.typ = 2, .data = 0}, .{0, 0, 0}));
 }
 
 test "Mask empty negative case" {
@@ -661,9 +718,9 @@ test "Mask inverse match block type with any data" {
 	const mask = try Mask.initFromString(main.heap.testingAllocator, "!addon:dummy");
 	defer mask.deinit(main.heap.testingAllocator);
 
-	try std.testing.expect(!mask.match(.{.typ = 1, .data = 0}));
-	try std.testing.expect(!mask.match(.{.typ = 1, .data = 1}));
-	try std.testing.expect(mask.match(.{.typ = 2, .data = 0}));
+	try std.testing.expect(!mask.match(.{.typ = 1, .data = 0}, .{0, 0, 0}));
+	try std.testing.expect(!mask.match(.{.typ = 1, .data = 1}, .{0, 0, 0}));
+	try std.testing.expect(mask.match(.{.typ = 2, .data = 0}, .{0, 0, 0}));
 }
 
 test "Mask match block type with exact data" {
@@ -673,9 +730,9 @@ test "Mask match block type with exact data" {
 	const mask = try Mask.initFromString(main.heap.testingAllocator, "addon:dummy");
 	defer mask.deinit(main.heap.testingAllocator);
 
-	try std.testing.expect(!mask.match(.{.typ = 1, .data = 0}));
-	try std.testing.expect(mask.match(.{.typ = 1, .data = 1}));
-	try std.testing.expect(!mask.match(.{.typ = 2, .data = 1}));
+	try std.testing.expect(!mask.match(.{.typ = 1, .data = 0}, .{0, 0, 0}));
+	try std.testing.expect(mask.match(.{.typ = 1, .data = 1}, .{0, 0, 0}));
+	try std.testing.expect(!mask.match(.{.typ = 2, .data = 1}, .{0, 0, 0}));
 }
 
 test "Mask match type 0 or type 1 with exact data" {
@@ -685,10 +742,10 @@ test "Mask match type 0 or type 1 with exact data" {
 	const mask = try Mask.initFromString(main.heap.testingAllocator, "addon:foo|addon:bar");
 	defer mask.deinit(main.heap.testingAllocator);
 
-	try std.testing.expect(mask.match(.{.typ = 1, .data = 0}));
-	try std.testing.expect(mask.match(.{.typ = 2, .data = 0}));
-	try std.testing.expect(!mask.match(.{.typ = 1, .data = 1}));
-	try std.testing.expect(!mask.match(.{.typ = 2, .data = 1}));
+	try std.testing.expect(mask.match(.{.typ = 1, .data = 0}, .{0, 0, 0}));
+	try std.testing.expect(mask.match(.{.typ = 2, .data = 0}, .{0, 0, 0}));
+	try std.testing.expect(!mask.match(.{.typ = 1, .data = 1}, .{0, 0, 0}));
+	try std.testing.expect(!mask.match(.{.typ = 2, .data = 1}, .{0, 0, 0}));
 }
 
 pub fn registerVoidBlock(block: Block) void {

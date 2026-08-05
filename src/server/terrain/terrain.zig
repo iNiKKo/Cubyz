@@ -25,6 +25,10 @@ pub const StructureMap = @import("StructureMap.zig");
 
 pub const sbb = @import("sbb.zig");
 
+pub const placed_structures = @import("placed_structures.zig");
+
+pub const structure_preview = @import("structure_preview.zig");
+
 pub const sdf = @import("sdf.zig");
 
 pub const chunk_generators = @import("chunkgen/_list.zig");

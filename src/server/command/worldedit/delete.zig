@@ -40,7 +40,7 @@ pub fn execute(_: Args, source: Source) void {
 			while (z < selection.maxPos[2]) : (z += 1) {
 				if (user.worldEditData.mask) |mask| {
 					const block = main.server.world.?.getBlock(x, y, z) orelse continue;
-					if (!mask.match(block)) continue;
+					if (!mask.match(block, .{x, y, z})) continue;
 				}
 				_ = main.server.world.?.updateBlock(x, y, z, main.blocks.Block.air);
 			}
