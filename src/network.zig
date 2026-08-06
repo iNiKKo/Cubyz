@@ -1716,7 +1716,8 @@ pub const Connection = struct {
 			self.rttEstimate = (1 - alpha)*self.rttEstimate + alpha*averageRtt;
 			self.rttUncertainty = (1 - beta)*self.rttUncertainty + beta*largestDifference;
 			self.lastRttSampleTime = timestamp;
-			if (!self.hasRttEstimate) {
+			if (!self.hasRttEstimate) { // Kill the 1 second delay caused by the first packet
+				self.rttEstimate = averageRtt;
 				self.nextPacketTimestamp = timestamp;
 				self.hasRttEstimate = true;
 			}
