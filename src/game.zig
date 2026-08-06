@@ -1338,13 +1338,20 @@ pub fn update(deltaTime: f64) void {
 				const sinceLastFootstepSoundMillis = if (Player.lastFootstepSoundTime) |t| t.durationTo(main.timestamp()).toMilliseconds() else footstepSoundCooldownMillis + 1;
 				if (!wasOnGround and Player.onGround and !Player.isFlying.load(.monotonic) and sinceLastFootstepSoundMillis >= footstepSoundCooldownMillis) {
 					const landingVolume: f32 = std.math.clamp(@as(f32, @floatCast(velocityChange))/10.0, 0.15, 1.0);
-					const feetPos = Player.super.pos;
-					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
+					// Player.super.pos is the vertical CENTER of the bounding box, not the feet
+					// (outerBoundingBox is symmetric: .min = -extent, .max = extent) - subtracting
+					// outerBoundingBoxExtent[2] gets down to the bottom of the box before the extra
+					// 0.1 nudge into the ground below. Getting this wrong (previously just "pos[2] -
+					// 0.1") queried roughly chest-height instead of the ground, which is why blocks
+					// like cubyz:snow (a single-layer-thick block) were resolving to air/the wrong
+					// block above the actual snow and playing the fallback "generic" sound instead.
+					const bodyPos = Player.super.pos;
+					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(bodyPos[0])), @intFromFloat(@floor(bodyPos[1])), @intFromFloat(@floor(bodyPos[2] - Player.outerBoundingBoxExtent[2] - 0.1)));
 					const material = if (footBlock) |block| block.soundMaterial() else "generic";
 					const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
 					defer main.stackAllocator.free(soundId);
 					Player.lastFootstepSoundTime = main.timestamp();
-					main.audio.playSoundVariant(soundId, 5, feetPos, landingVolume, 16.0);
+					main.audio.playSoundVariant(soundId, main.audio.soundVariantCount("footstep", material), bodyPos, landingVolume, 16.0);
 				}
 			}
 			physics.calculateVerticalCollisionEyeMovement(deltaTime, &Player.eye, didCollide, Player.onGround, wasOnGround, prevPos, Player.super.pos, prevVel, Player.super.vel, motion, Player.steppingHeight()[2]);
@@ -1379,18 +1386,21 @@ pub fn update(deltaTime: f64) void {
 				const footstepSoundCooldownMillis = 200;
 				const sinceLastFootstepSoundMillis = if (Player.lastFootstepSoundTime) |t| t.durationTo(main.timestamp()).toMilliseconds() else footstepSoundCooldownMillis + 1;
 				if (sinceLastFootstepSoundMillis >= footstepSoundCooldownMillis) {
-					const feetPos = Player.super.pos;
 					// Sound varies with the block underfoot via Block.soundMaterial() (src/blocks.zig,
 					// derived from the block's existing .tags) e.g. "cubyz:footstep/stone" vs
-					// "cubyz:footstep/wood" - queries one block below the feet (standing *on* it, not in
-					// it). Falls back to the generic material id if there's no block there (e.g. over a
-					// liquid surface or an unloaded chunk edge).
-					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
+					// "cubyz:footstep/wood". Player.super.pos is the vertical CENTER of the bounding
+					// box, not the feet (outerBoundingBox is symmetric: .min = -extent, .max = extent),
+					// so this subtracts outerBoundingBoxExtent[2] to reach the bottom of the box before
+					// nudging 0.1 further down into the actual ground block. Falls back to the generic
+					// material id if there's no block there (e.g. over a liquid surface or an unloaded
+					// chunk edge).
+					const bodyPos = Player.super.pos;
+					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(bodyPos[0])), @intFromFloat(@floor(bodyPos[1])), @intFromFloat(@floor(bodyPos[2] - Player.outerBoundingBoxExtent[2] - 0.1)));
 					const material = if (footBlock) |block| block.soundMaterial() else "generic";
 					const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
 					defer main.stackAllocator.free(soundId);
 					Player.lastFootstepSoundTime = main.timestamp();
-					main.audio.playSoundVariant(soundId, 5, feetPos, 0.6, 12.0);
+					main.audio.playSoundVariant(soundId, main.audio.soundVariantCount("footstep", material), bodyPos, 0.6, 12.0);
 				}
 			}
 		} else {

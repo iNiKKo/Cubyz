@@ -1640,13 +1640,15 @@ pub const Command = struct {
 					@as(f64, @floatFromInt(self.pos[2])) + 0.5,
 				};
 				if (self.newBlock.typ == 0 and self.oldBlock.typ != 0) {
-					const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{self.oldBlock.soundMaterial()});
+					const material = self.oldBlock.soundMaterial();
+					const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{material});
 					defer main.stackAllocator.free(soundId);
-					main.audio.playSoundVariant(soundId, 5, soundPos, 1.0, 16.0);
+					main.audio.playSoundVariant(soundId, main.audio.soundVariantCount("block_break", material), soundPos, 1.0, 16.0);
 				} else if (self.oldBlock.typ == 0 and self.newBlock.typ != 0) {
-					const soundId = main.stackAllocator.print("cubyz:block_place/{s}", .{self.newBlock.soundMaterial()});
+					const material = self.newBlock.soundMaterial();
+					const soundId = main.stackAllocator.print("cubyz:block_place/{s}", .{material});
 					defer main.stackAllocator.free(soundId);
-					main.audio.playSoundVariant(soundId, 5, soundPos, 1.0, 16.0);
+					main.audio.playSoundVariant(soundId, main.audio.soundVariantCount("block_place", material), soundPos, 1.0, 16.0);
 				}
 			}
 

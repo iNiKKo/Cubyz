@@ -2651,14 +2651,15 @@ pub const MeshSelection = struct {
 						// UpdateBlock.run()) - without this, mining a multi-hit block like stone was
 						// completely silent for however long it took to break.
 						{
-							const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{block.soundMaterial()});
+							const material = block.soundMaterial();
+							const soundId = main.stackAllocator.print("cubyz:block_break/{s}", .{material});
 							defer main.stackAllocator.free(soundId);
 							const hitPos = Vec3d{
 								@as(f64, @floatFromInt(selectedPos[0])) + 0.5,
 								@as(f64, @floatFromInt(selectedPos[1])) + 0.5,
 								@as(f64, @floatFromInt(selectedPos[2])) + 0.5,
 							};
-							main.audio.playSoundVariant(soundId, 5, hitPos, 0.4, 16.0);
+							main.audio.playSoundVariant(soundId, main.audio.soundVariantCount("block_break", material), hitPos, 0.4, 16.0);
 						}
 						if (currentBlockProgress > 0.9999) break;
 						const swings = @ceil(block.blockHealth()/damage);

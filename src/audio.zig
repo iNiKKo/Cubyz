@@ -332,6 +332,20 @@ const knownSoundActions = [_][]const u8{"footstep", "block_break", "block_place"
 const knownSoundVariants = 5;
 const knownUiClickVariants = 5;
 
+/// How many "<action>/<material>_NNN" variants actually exist on disk - almost everything ships the
+/// full knownSoundVariants (5), but footstep/dirt and footstep/snow were trimmed to 3 (user found
+/// dirt_001/dirt_002 too high-pitched and snow_000/snow_001 too loud relative to the others) - the
+/// files were renumbered contiguously (0..2) rather than left with gaps, since playSoundVariant always
+/// assumes a contiguous [0, variantCount) range. Centralized here instead of hardcoding "5" at every
+/// call site so trimming a family's variant count in the future only needs one change, not one per
+/// trigger site (game.zig, sync.zig, renderer.zig) plus preloadAll below.
+pub fn soundVariantCount(action: []const u8, material: []const u8) u32 {
+	if (std.mem.eql(u8, action, "footstep") and (std.mem.eql(u8, material, "dirt") or std.mem.eql(u8, material, "snow"))) {
+		return 3;
+	}
+	return knownSoundVariants;
+}
+
 /// Eagerly schedules every sound effect this build ships (assets/cubyz/sounds/**) to load into
 /// soundCache, so the *first* real play of each one isn't a silent cache-miss (findSound returning
 /// null while the async load is still in flight) - previously the only way a sound got loaded was a
@@ -345,7 +359,7 @@ const knownUiClickVariants = 5;
 pub fn preloadAll() void {
 	for (knownSoundActions) |action| {
 		for (knownSoundMaterials) |material| {
-			for (0..knownSoundVariants) |variant| {
+			for (0..soundVariantCount(action, material)) |variant| {
 				const id = main.stackAllocator.print("cubyz:{s}/{s}_{:0>3}", .{action, material, variant});
 				defer main.stackAllocator.free(id);
 				_ = findSound(id);
