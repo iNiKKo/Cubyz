@@ -1,4 +1,5 @@
 .{
+	.tags = .{.diggable, .snow},
 	.drops = .{
 		.{.items = .{"cubyz:permafrost"}},
 	},

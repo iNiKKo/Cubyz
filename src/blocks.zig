@@ -509,6 +509,7 @@ pub const Block = packed struct(u32) {
 			.{.name = "log", .material = "wood"},
 			.{.name = "leaf", .material = "leaves"},
 			.{.name = "mushroom", .material = "mushroom"},
+			.{.name = "snow", .material = "snow"},
 			.{.name = "stone", .material = "stone"},
 			.{.name = "mineable", .material = "stone"},
 			.{.name = "diggable", .material = "dirt"},

@@ -371,6 +371,10 @@ pub fn main(args: std.process.Init.Minimal) void {
 
 	if (!headless) audio.init() catch std.log.err("Failed to initialize audio. Continuing the game without sounds.", .{});
 	defer if (!headless) audio.deinit();
+	// Eagerly loads every shipped SFX file in the background so the first real in-game trigger of
+	// each one (first footstep, first block break, ...) isn't a silent cache-miss - see
+	// audio.preloadAll's doc comment.
+	if (!headless) audio.preloadAll();
 
 	utils.initDynamicIntArrayStorage();
 	defer utils.deinitDynamicIntArrayStorage();

@@ -111,6 +111,14 @@ pub const Player = struct {
 	pub var jumpCoyote: f64 = 0;
 	/// Horizontal distance walked since the last footstep sound - see footstep triggering in update().
 	pub var footstepDistanceAccumulator: f64 = 0;
+	/// Timestamp (main.timestamp(), null until the first footstep/landing sound) of the last
+	/// footstep/landing sound. A smooth step-up onto a raised block
+	/// (see physics.calculateWallCollision's onGround.* = true) can be a real airborne->grounded
+	/// transition (jumping up onto something) at the same moment the footstep stride accumulator also
+	/// crosses its threshold from that same motion, firing both a landing thump and a regular footstep
+	/// back-to-back for what feels like one action. This shared cooldown lets whichever fires first
+	/// suppress the other briefly.
+	pub var lastFootstepSoundTime: ?std.Io.Timestamp = null;
 	pub const jumpCooldownConstant = 0.3;
 	pub const jumpCoyoteTimeConstant = 0.100;
 
@@ -1320,6 +1328,24 @@ pub fn update(deltaTime: f64) void {
 				if (damage > 0.01) {
 					main.sync.addHealth(-damage, .fall, .client, Player.id);
 				}
+				// Falling straight down never accumulates horizontal footstepDistanceAccumulator (see
+				// the footsteps block below), so a hard landing was completely silent - this plays a
+				// landing thump on the just-landed transition specifically (not on every ground
+				// contact - wasOnGround/Player.onGround distinguishes "was already standing" from
+				// "just arrived"), scaled by how hard the landing was via the same velocityChange fall
+				// damage already uses, and capped so light landings aren't jarringly loud.
+				const footstepSoundCooldownMillis = 200;
+				const sinceLastFootstepSoundMillis = if (Player.lastFootstepSoundTime) |t| t.durationTo(main.timestamp()).toMilliseconds() else footstepSoundCooldownMillis + 1;
+				if (!wasOnGround and Player.onGround and !Player.isFlying.load(.monotonic) and sinceLastFootstepSoundMillis >= footstepSoundCooldownMillis) {
+					const landingVolume: f32 = std.math.clamp(@as(f32, @floatCast(velocityChange))/10.0, 0.15, 1.0);
+					const feetPos = Player.super.pos;
+					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
+					const material = if (footBlock) |block| block.soundMaterial() else "generic";
+					const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
+					defer main.stackAllocator.free(soundId);
+					Player.lastFootstepSoundTime = main.timestamp();
+					main.audio.playSoundVariant(soundId, 5, feetPos, landingVolume, 16.0);
+				}
 			}
 			physics.calculateVerticalCollisionEyeMovement(deltaTime, &Player.eye, didCollide, Player.onGround, wasOnGround, prevPos, Player.super.pos, prevVel, Player.super.vel, motion, Player.steppingHeight()[2]);
 			physics.collision.touchBlocks(.client, &Player.super, Player.outerBoundingBox, deltaTime);
@@ -1346,17 +1372,26 @@ pub fn update(deltaTime: f64) void {
 			const strideLength = 1.6;
 			if (Player.footstepDistanceAccumulator >= strideLength) {
 				Player.footstepDistanceAccumulator = @mod(Player.footstepDistanceAccumulator, strideLength);
-				const feetPos = Player.super.pos;
-				// Sound varies with the block underfoot via Block.soundMaterial() (src/blocks.zig,
-				// derived from the block's existing .tags) e.g. "cubyz:footstep/stone" vs
-				// "cubyz:footstep/wood" - queries one block below the feet (standing *on* it, not in
-				// it). Falls back to the generic material id if there's no block there (e.g. over a
-				// liquid surface or an unloaded chunk edge).
-				const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
-				const material = if (footBlock) |block| block.soundMaterial() else "generic";
-				const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
-				defer main.stackAllocator.free(soundId);
-				main.audio.playSoundVariant(soundId, 5, feetPos, 0.6, 12.0);
+				// Shares a cooldown with the landing thump above - jumping onto/next to a raised
+				// block can be a real airborne->grounded transition (landing thump) at the same
+				// moment this stride accumulator also crosses its threshold from that same forward
+				// motion, which fired both sounds back-to-back for what feels like one action.
+				const footstepSoundCooldownMillis = 200;
+				const sinceLastFootstepSoundMillis = if (Player.lastFootstepSoundTime) |t| t.durationTo(main.timestamp()).toMilliseconds() else footstepSoundCooldownMillis + 1;
+				if (sinceLastFootstepSoundMillis >= footstepSoundCooldownMillis) {
+					const feetPos = Player.super.pos;
+					// Sound varies with the block underfoot via Block.soundMaterial() (src/blocks.zig,
+					// derived from the block's existing .tags) e.g. "cubyz:footstep/stone" vs
+					// "cubyz:footstep/wood" - queries one block below the feet (standing *on* it, not in
+					// it). Falls back to the generic material id if there's no block there (e.g. over a
+					// liquid surface or an unloaded chunk edge).
+					const footBlock = getBlockWithSide(.client, @intFromFloat(@floor(feetPos[0])), @intFromFloat(@floor(feetPos[1])), @intFromFloat(@floor(feetPos[2] - 0.1)));
+					const material = if (footBlock) |block| block.soundMaterial() else "generic";
+					const soundId = main.stackAllocator.print("cubyz:footstep/{s}", .{material});
+					defer main.stackAllocator.free(soundId);
+					Player.lastFootstepSoundTime = main.timestamp();
+					main.audio.playSoundVariant(soundId, 5, feetPos, 0.6, 12.0);
+				}
 			}
 		} else {
 			Player.footstepDistanceAccumulator = 0;

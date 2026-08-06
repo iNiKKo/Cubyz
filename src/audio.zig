@@ -327,6 +327,38 @@ fn startSoundInstance(buffer: []const f32, volume: f32, worldPos: ?main.vec.Vec3
 	// Pool exhausted - drop the new sound rather than cutting off one already playing.
 }
 
+const knownSoundMaterials = [_][]const u8{"wood", "stone", "dirt", "snow", "plant", "leaves", "mushroom", "generic"};
+const knownSoundActions = [_][]const u8{"footstep", "block_break", "block_place"};
+const knownSoundVariants = 5;
+const knownUiClickVariants = 5;
+
+/// Eagerly schedules every sound effect this build ships (assets/cubyz/sounds/**) to load into
+/// soundCache, so the *first* real play of each one isn't a silent cache-miss (findSound returning
+/// null while the async load is still in flight) - previously the only way a sound got loaded was a
+/// real gameplay trigger, so e.g. the first-ever stone footstep in a session played nothing. Call
+/// once at startup (see main.zig), not per-world - these are static asset-pack sounds, not
+/// world-specific data, and preloading them again on every world entry would just re-schedule loads
+/// for ids already sitting in the cache (harmless, since findSound short-circuits, but pointless).
+/// If you add a new sound material/action/variant count, update the lists above to match or the new
+/// files won't get this eager-load treatment (they'll still work, just fall back to the old
+/// silent-on-first-play behavior until something else triggers a load).
+pub fn preloadAll() void {
+	for (knownSoundActions) |action| {
+		for (knownSoundMaterials) |material| {
+			for (0..knownSoundVariants) |variant| {
+				const id = main.stackAllocator.print("cubyz:{s}/{s}_{:0>3}", .{action, material, variant});
+				defer main.stackAllocator.free(id);
+				_ = findSound(id);
+			}
+		}
+	}
+	for (0..knownUiClickVariants) |variant| {
+		const id = main.stackAllocator.print("cubyz:ui/click_{:0>3}", .{variant});
+		defer main.stackAllocator.free(id);
+		_ = findSound(id);
+	}
+}
+
 /// Plays a one-shot sound effect at a world position, attenuated by distance from the listener
 /// (the local player's eye position) down to silence at `maxDistance` blocks. `soundId` follows the
 /// same "addon:file_name" convention as music ids, loaded from assets/<addon>/sounds/<file_name>.ogg

@@ -1,0 +1,17 @@
+Detecting Zig compiler...
+Zig compiler is valid.
+Building Zig Cubyz () from source. This may take a few minutes...
+compile exe Cubyz Debug native 3 errors
+error: fatal linker error: unhandled relocation type R_X86_64_PC64 at offset 0x1c
+    note: in /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o:.sframe
+error: fatal linker error: unhandled relocation type R_X86_64_PC64 at offset 0x2c
+    note: in /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o:.sframe
+error: fatal linker error: unhandled relocation type R_X86_64_PC64 at offset 0x3c
+    note: in /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crt1.o:.sframe
+error: 3 compilation errors
+
+Build Summary: 5/8 steps succeeded (1 failed)
+install transitive failure
++- install Cubyz transitive failure
+   +- compile exe Cubyz Debug native 3 errors
+

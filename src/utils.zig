@@ -1620,27 +1620,26 @@ pub const TimeDifference = struct {
 	}
 };
 
+// Was previously std.Io.Mutex on non-Windows (delegated to lockUncancelable/unlock(main.io)), but
+// that lock-free userspace state machine was observed reaching an inconsistent state (a genuine
+// double-unlock, `state.swap(.unlocked, ...)` hitting the `.unlocked => unreachable` arm in
+// compiler/zig/lib/std/Io.zig) under real cross-thread contention - reproduced in two unrelated
+// places (ConnectionManager.finishCurrentReceive/broadcast, and ConnectionManager.addConnection
+// racing the network thread's startup). utils/Mutex.zig now wraps a real kernel-backed primitive on
+// every platform (SRWLOCK on Windows, pthread_mutex_t elsewhere - see its PosixImpl) instead.
 pub const Mutex = struct {
-	super: if (builtin.os.tag == .windows) @import("utils/Mutex.zig") else std.Io.Mutex = .init,
+	super: @import("utils/Mutex.zig") = .init,
 
 	pub fn tryLock(self: *Mutex) bool {
 		return self.super.tryLock();
 	}
 
 	pub fn lock(self: *Mutex) void {
-		if (builtin.os.tag == .windows) {
-			self.super.lock();
-		} else {
-			self.super.lockUncancelable(main.io);
-		}
+		self.super.lock();
 	}
 
 	pub fn unlock(self: *Mutex) void {
-		if (builtin.os.tag == .windows) {
-			self.super.unlock();
-		} else {
-			self.super.unlock(main.io);
-		}
+		self.super.unlock();
 	}
 
 	pub fn assertLocked(self: *const main.utils.Mutex) void {
