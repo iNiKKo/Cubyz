@@ -664,7 +664,6 @@ pub const ConnectionManager = struct {
 	}
 
 	pub fn addConnection(self: *ConnectionManager, conn: *Connection) error{AlreadyConnected}!void {
-		if (self.threadId) |threadId| std.debug.assert(threadId != std.Thread.getCurrentId());
 		self.mutex.lock();
 		defer self.mutex.unlock();
 		for (self.connections.items) |other| {
