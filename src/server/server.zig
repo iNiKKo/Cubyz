@@ -1370,6 +1370,7 @@ pub fn connect(user: *User) void {
 
 pub fn connectInternal(user: *User) void {
 	user.initPlayer();
+	if (!user.connected.load(.monotonic)) return;
 	main.network.protocols.handShake.sendServerPlayerData(user.conn);
 	user.conn.handShakeState.store(.complete, .monotonic);
 
@@ -1378,6 +1379,7 @@ pub fn connectInternal(user: *User) void {
 	for (heldLightUsers) |other| {
 		if (other.id != .noValue) main.network.protocols.heldLight.sendTo(user.conn, other.id, other.heldItem, other.heldLightTransform, other.heldToolRotationYZ, other.heldToolScale, other.heldMiningSwing);
 	}
+	if (!user.connected.load(.monotonic)) return;
 
 	const userList = getUserList(main.stackAllocator);
 	defer main.stackAllocator.free(userList);
@@ -1416,13 +1418,21 @@ pub fn connectInternal(user: *User) void {
 		if (user.connected.load(.monotonic)) main.network.protocols.entity.send(user.conn, data);
 	}
 	const initialList = getInitialEntityList(main.stackAllocator);
+	if (!user.connected.load(.monotonic)) {
+		main.stackAllocator.free(initialList);
+		return;
+	}
 	main.network.protocols.entity.send(user.conn, initialList);
 	main.stackAllocator.free(initialList);
-	sendMessage("{s}§#ffff00 joined", .{user.name});
 
 	userMutex.lock();
+	if (!user.connected.load(.monotonic)) {
+		userMutex.unlock();
+		return;
+	}
 	users.append(user);
 	userMutex.unlock();
+	sendMessage("{s}§#ffff00 joined", .{user.name});
 }
 
 pub fn messageFrom(msg: []const u8, source: *User) void {
