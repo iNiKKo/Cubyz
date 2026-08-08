@@ -977,6 +977,21 @@ const TAA = struct {
 		const readIndex = 1 - resolveIndex;
 		resolveIndex = readIndex;
 
+		// Transparent geometry is composited after the opaque depth buffer is written, so its
+		// pixels cannot be reprojected reliably from that depth. Do not reuse temporal history
+		// while the camera or player is moving; this prevents transparent quads from smearing
+		// into directional rectangles during view changes.
+		var playerMoved = false;
+		inline for (0..3) |i| {
+			if (@abs(playerPos[i] - lastPlayerPos[i]) > 0.0001) playerMoved = true;
+		}
+		var viewChanged = false;
+		for (invViewMatrix.rows, lastViewMatrix.rows) |currentRow, lastRow| {
+			inline for (0..4) |i| {
+				if (@abs(currentRow[i] - lastRow[i]) > 0.00001) viewChanged = true;
+			}
+		}
+
 		pipeline.bind(null);
 		currentBuffer.bindTexture(c.GL_TEXTURE3);
 		resolveBuffers[readIndex].bindTexture(c.GL_TEXTURE6);
@@ -993,7 +1008,7 @@ const TAA = struct {
 		const lastViewProj = lastProjectionMatrix.mul(lastViewMatrix);
 		c.glUniformMatrix4fv(uniforms.lastViewProjMatrix, 1, c.GL_TRUE, @ptrCast(&lastViewProj.transpose()));
 
-		c.glUniform1f(uniforms.historyBlendFactor, if (hasHistory) 0.9 else 0.0);
+		c.glUniform1f(uniforms.historyBlendFactor, if (hasHistory and !playerMoved and !viewChanged) 0.9 else 0.0);
 
 		graphics.draw.rectVao.bind();
 		c.glDrawArrays(c.GL_TRIANGLE_STRIP, 0, 4);

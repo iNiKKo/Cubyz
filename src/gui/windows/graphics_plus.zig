@@ -21,6 +21,82 @@ pub var window = GuiWindow{
 const padding: f32 = 16;
 
 const antiAliasingModes = [_][]const u8{"Off", "FXAA", "MSAA", "TAA"};
+const graphicsPlusPresets = [_][]const u8{"OFF", "BALANCED", "ULTRA"};
+var refreshAfterPresetChange = false;
+
+fn graphicsPlusPresetCallback(newValue: u16) void {
+	const preset: settings.GraphicsPlusPreset = @enumFromInt(newValue);
+	settings.graphicsPlusPreset = preset;
+
+	switch (preset) {
+		.off => {
+			settings.antiAliasingMode = .off;
+			settings.msaaSamples = 2;
+			settings.bloom = false;
+			settings.reflectionMode = .off;
+			settings.reflections = false;
+			settings.waterReflectionDistance = 32.0;
+			settings.shadows = false;
+			settings.ownPlayerShadow = false;
+			settings.shadowDarkness = 0.50;
+			settings.shadowDistance = 32.0;
+			settings.shadowRaySteps = 32;
+			settings.foliageShadows = false;
+			settings.foliageSway = false;
+			settings.clouds = false;
+			settings.cloudDistance = 64.0;
+			settings.godRays = false;
+			settings.godRayIntensity = 0.0;
+			settings.rain = false;
+			settings.weatherFog = false;
+		},
+		.balanced => {
+			settings.antiAliasingMode = .msaa;
+			settings.msaaSamples = 2;
+			settings.bloom = true;
+			settings.reflectionMode = .ssr;
+			settings.reflections = true;
+			settings.waterReflectionDistance = 600.0;
+			settings.shadows = true;
+			settings.ownPlayerShadow = true;
+			settings.shadowDarkness = 0.50;
+			settings.shadowDistance = 120.0;
+			settings.shadowRaySteps = 265;
+			settings.foliageShadows = false;
+			settings.foliageSway = true;
+			settings.clouds = true;
+			settings.cloudDistance = 1150.0;
+			settings.godRays = true;
+			settings.godRayIntensity = 1.0;
+			settings.rain = true;
+			settings.weatherFog = false;
+		},
+		.ultra => {
+			settings.antiAliasingMode = .taa;
+			settings.msaaSamples = 8;
+			settings.bloom = true;
+			settings.reflectionMode = .planar;
+			settings.reflections = true;
+			settings.waterReflectionDistance = 2048.0;
+			settings.shadows = true;
+			settings.ownPlayerShadow = true;
+			settings.shadowDarkness = 0.50;
+			settings.shadowDistance = 512.0;
+			settings.shadowRaySteps = 512;
+			settings.foliageShadows = true;
+			settings.foliageSway = true;
+			settings.clouds = true;
+			settings.cloudDistance = 2048.0;
+			settings.godRays = true;
+			settings.godRayIntensity = 2.0;
+			settings.rain = true;
+			settings.weatherFog = true;
+		},
+	}
+
+	settings.save();
+	refreshAfterPresetChange = true;
+}
 
 fn antiAliasingCallback(newValue: u16) void {
 	settings.antiAliasingMode = @enumFromInt(newValue);
@@ -143,6 +219,7 @@ fn shadowDarknessCallback(newValue: f32) void {
 
 pub fn onOpen() void {
 	const list = VerticalList.init(.{padding, 16 + padding}, 380, 16);
+	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffGraphics+ Preset: ", "{s}", &graphicsPlusPresets, @intFromEnum(settings.graphicsPlusPreset), &graphicsPlusPresetCallback));
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffAnti-Aliasing: ", "{s}", &antiAliasingModes, @intFromEnum(settings.antiAliasingMode), &antiAliasingCallback));
 	list.add(DiscreteSlider.init(.{0, 0}, 200, "#ffffffMSAA Samples: ", "{}x", &msaaSampleCounts, switch (settings.msaaSamples) {
 		2 => 0,
@@ -170,6 +247,14 @@ pub fn onOpen() void {
 	window.rootComponent = list.toComponent();
 	window.contentSize = window.rootComponent.?.pos() + window.rootComponent.?.size() + @as(Vec2f, @splat(padding));
 	gui.updateWindowPositions();
+}
+
+pub fn update() void {
+	if (refreshAfterPresetChange) {
+		refreshAfterPresetChange = false;
+		onClose();
+		onOpen();
+	}
 }
 
 pub fn onClose() void {

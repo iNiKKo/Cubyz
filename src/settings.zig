@@ -42,7 +42,10 @@ pub const UpscalerMode = enum(u8) { off, fsr1, fsr2 };
 pub var upscalerMode: UpscalerMode = .fsr1;
 
 pub const AntiAliasingMode = enum(u8) { off, fxaa, msaa, taa };
-pub var antiAliasingMode: AntiAliasingMode = .fxaa;
+pub var antiAliasingMode: AntiAliasingMode = .msaa;
+
+pub const GraphicsPlusPreset = enum(u8) { off, balanced, ultra };
+pub var graphicsPlusPreset: GraphicsPlusPreset = .balanced;
 
 pub var msaaSamples: u8 = 2;
 
@@ -58,7 +61,7 @@ pub var reflectionMode: ReflectionMode = .ssr;
 
 pub var foliageSway: bool = true;
 
-pub var waterReflectionDistance: f32 = 128.0;
+pub var waterReflectionDistance: f32 = 600.0;
 
 pub var shadows: bool = true;
 
@@ -66,23 +69,23 @@ pub var ownPlayerShadow: bool = true;
 
 pub var shadowDarkness: f32 = 0.50;
 
-pub var shadowDistance: f32 = 128.0;
+pub var shadowDistance: f32 = 120.0;
 
-pub var shadowRaySteps: i32 = 256;
+pub var shadowRaySteps: i32 = 265;
 
 pub var foliageShadows: bool = false;
 
 pub var clouds: bool = true;
 
-pub var cloudDistance: f32 = 512.0;
+pub var cloudDistance: f32 = 1150.0;
 
 pub var godRays: bool = true;
 
 pub var godRayIntensity: f32 = 1.0;
 
-pub var rain: bool = false;
+pub var rain: bool = true;
 
-pub var weatherFog: bool = true;
+pub var weatherFog: bool = false;
 
 pub var vsync: bool = true;
 
